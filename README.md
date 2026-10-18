@@ -18,8 +18,9 @@ src/ext/inpage.ts       window.kondor for web pages (kondor-js, MIT)
 src/ext/content.ts      relays page <-> extension messages
 src/ext/background.ts   answers provider calls; queues anything that needs a signature
 src/ext/approve.ts      the approval window: shows the request, takes the passphrase, signs, wipes
-extension/manifest.json Manifest V3
-scripts/                end-to-end test of the extension (devnet), CSP smoke test of the web app
+extension/manifest.json Manifest V3, plus the icons
+demo/index.html         a test dapp: uses window.kondor and nothing else
+scripts/                end-to-end test of the extension (devnet), CSP smoke test of the web app, icons
 test/                   vectors shared with the koinos-chain tests, signature formats, vault round trip
 ```
 
@@ -38,7 +39,15 @@ npm run build:ext   # browser extension in dist-extension/
 
 To use the extension: Chrome (or Brave, Edge) → `chrome://extensions` → Developer mode → "Load
 unpacked" → pick `dist-extension/`. The toolbar button opens the wallet; web pages get
-`window.kondor`.
+`window.kondor`. A test dapp lives at `/demo/` (http://localhost:5173/demo/ under `npm run dev`,
+`dist/demo/` in the build): connect, read the head block, sign a message, send KOIN, all through
+`window.kondor` with no library. Tester instructions: [docs/EXTENSION-TESTING.md](docs/EXTENSION-TESTING.md).
+
+```
+npm run e2e:ext     # the extension in headless Chromium against the devnet (see the script header)
+npm run smoke:web   # the built web app under its CSP on testnet and mainnet
+npm run icons       # re-render extension/icons and public/icons
+```
 
 Everything happens in the browser. There is no server and nothing leaves the page except JSON-RPC
 calls to the node you pick (mainnet, Harbinger testnet, or a local devnet).

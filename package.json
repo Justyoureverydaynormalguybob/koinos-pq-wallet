@@ -11,7 +11,8 @@
     "test": "vitest run",
     "build:ext": "tsc --noEmit && vite build -c vite.ext-pages.config.ts && vite build -c vite.ext-content.config.ts && vite build -c vite.ext-inpage.config.ts",
     "e2e:ext": "node --experimental-strip-types scripts/e2e-extension.mjs",
-    "smoke:web": "node --experimental-strip-types scripts/smoke-web.mjs"
+    "smoke:web": "node --experimental-strip-types scripts/smoke-web.mjs",
+    "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",

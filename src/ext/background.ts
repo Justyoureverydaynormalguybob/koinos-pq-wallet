@@ -21,8 +21,12 @@ interface Pending extends Req {
 const pending = new Map<string, Pending>();
 const PREF_NETWORK = "koinos-pq-wallet/network";
 
+// names dapps use with Kondor -> our network keys
+const NETWORK_ALIASES: Record<string, string> = { harbinger: "testnet", koinos: "mainnet", main: "mainnet" };
+
 function providerFor(network: unknown): Provider {
-  const n = typeof network === "string" && network ? network : "mainnet";
+  const raw = typeof network === "string" && network ? network : "mainnet";
+  const n = NETWORK_ALIASES[raw.toLowerCase()] ?? raw;
   const net = NETWORKS[n];
   if (net) return new Provider(net.rpc);
   if (/^https?:\/\//.test(n)) return new Provider([n]);

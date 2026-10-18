@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Koinos PQ Wallet: test dapp</title>
+    <style>
+      :root { --bg: #f8fafc; --ink: #0f172a; --card: #fff; --line: #e2e8f0; --muted: #64748b; --ok: #15803d; --bad: #b91c1c; --accent: #1d4ed8; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #0f172a; --ink: #e2e8f0; --card: #1e293b; --line: #334155; --muted: #94a3b8; --ok: #4ade80; --bad: #f87171; --accent: #60a5fa; } }
+      html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      main { max-width: 640px; margin: 0 auto; padding: 16px; }
+      section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 12px 0; min-width: 0; }
+      h1 { font-size: 1.4rem; margin: 8px 0; }
+      h2 { font-size: 1.05rem; margin: 0 0 8px; }
+      label { display: block; margin: 8px 0; font-size: 0.9rem; }
+      input, select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
+      button { padding: 8px 14px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      pre, code { font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; word-break: break-all; }
+      pre { background: var(--bg); border-radius: 8px; padding: 8px; margin: 8px 0 0; max-width: 100%; }
+      .muted { color: var(--muted); }
+      .ok { color: var(--ok); }
+      .bad { color: var(--bad); }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Test dapp for Koinos PQ Wallet</h1>
+      <p>
+        This page has no wallet code of its own. It uses <code>window.kondor</code>, the interface every Koinos dapp
+        uses, so what works here works on a real dapp. Nothing is signed or sent without your approval in the
+        wallet window.
+      </p>
+      <p id="status" class="muted">Looking for the wallet extension…</p>
+
+      <section>
+        <h2>1. Connect</h2>
+        <p class="muted">Asks the wallet for your account addresses. The wallet window opens and asks for your passphrase.</p>
+        <button id="connect" disabled>Connect wallet</button>
+        <pre id="accounts" hidden></pre>
+      </section>
+
+      <section>
+        <h2>2. Read the chain through the wallet</h2>
+        <label>Network
+          <select id="network">
+            <option value="mainnet">mainnet</option>
+            <option value="testnet">Harbinger testnet</option>
+          </select>
+        </label>
+        <p class="muted">Pick the same network the wallet is set to (wallet → Settings).</p>
+        <button id="head" disabled>Head block</button> <span id="headout"></span>
+      </section>
+
+      <section>
+        <h2>3. Sign a message</h2>
+        <p class="muted">Returns an ML-DSA-44 signature: 2,420 bytes from a pqwallet account, 3,733 from the native address.</p>
+        <button id="sign" disabled>Sign "hello from the test dapp"</button>
+        <pre id="signout" hidden></pre>
+      </section>
+
+      <section>
+        <h2>4. Send KOIN</h2>
+        <label>From <select id="from"></select></label>
+        <label>To <input id="to" placeholder="1… (an address you control)" autocomplete="off" /></label>
+        <label>Amount (KOIN) <input id="amount" value="0.1" inputmode="decimal" /></label>
+        <button id="send" disabled>Send</button>
+        <pre id="sendout" hidden></pre>
+      </section>
+    </main>
+
+    <script type="module">
+      const KOIN = { mainnet: "19GYjDBVXU7keLbYvMLazsGQn3GTWHjHkK", testnet: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju" };
+      const EXPLORER = { mainnet: "https://koinosblocks.com/tx/", testnet: "https://harbinger.koinosblocks.com/tx/" };
+      const TRANSFER = 0x27f576ca; // the token standard's transfer entry point
+      const $ = (id) => document.getElementById(id);
+      const net = () => $("network").value;
+      const err = (e) => (e && e.message) || String(e);
+      function show(el, text, cls = "") {
+        el.hidden = false;
+        el.textContent = text;
+        el.className = cls;
+      }
+
+      // ---- just enough encoding for a KOIN transfer, so this page needs no library ----
+      const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+      function base58Decode(s) {
+        const bytes = [0];
+        for (const ch of s) {
+          let carry = B58.indexOf(ch);
+          if (carry < 0) throw new Error("that is not a base58 address");
+          for (let j = 0; j < bytes.length; j++) {
+            carry += bytes[j] * 58;
+            bytes[j] = carry & 255;
+            carry >>= 8;
+          }
+          while (carry > 0) {
+            bytes.push(carry & 255);
+            carry >>= 8;
+          }
+        }
+        for (const ch of s) {
+          if (ch !== "1") break;
+          bytes.push(0);
+        }
+        return Uint8Array.from(bytes.reverse());
+      }
+      function address(s) {
+        const b = base58Decode(s.trim());
+        if (b.length !== 25) throw new Error(`"${s}" does not look like a Koinos address`);
+        return b;
+      }
+      function varint(n) {
+        const out = [];
+        let v = BigInt(n);
+        while (v >= 128n) {
+          out.push(Number(v & 127n) | 128);
+          v >>= 7n;
+        }
+        out.push(Number(v));
+        return out;
+      }
+      const bytesField = (no, b) => [(no << 3) | 2, ...varint(b.length), ...b];
+      const b64url = (b) => btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const b64urlLength = (s) => atob(s.replace(/-/g, "+").replace(/_/g, "/")).length;
+      const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+      function transferOp(network, from, to, koin) {
+        const [whole, frac = ""] = String(koin).trim().split(".");
+        if (!/^\d+$/.test(whole) || !/^\d{0,8}$/.test(frac)) throw new Error("amount: digits with up to 8 decimals");
+        const value = BigInt(whole) * 100000000n + BigInt((frac + "00000000").slice(0, 8));
+        if (value <= 0n) throw new Error("amount must be above zero");
+        const args = Uint8Array.from([...bytesField(1, address(from)), ...bytesField(2, address(to)), 3 << 3, ...varint(value)]);
+        return { call_contract: { contract_id: KOIN[network], entry_point: TRANSFER, args: b64url(args) } };
+      }
+
+      // ---- the wallet ----
+      let tries = 0;
+      const probe = setInterval(() => {
+        if (window.kondor) {
+          clearInterval(probe);
+          if (window.koinosPq) show($("status"), `Koinos PQ Wallet extension found (version ${window.koinosPq.version}).`, "ok");
+          else show($("status"), "A Kondor-compatible wallet was found, but the Koinos PQ Wallet did not announce itself. If Kondor is on, switch it off for this test and reload.", "bad");
+          $("connect").disabled = false;
+        } else if (++tries > 20) {
+          clearInterval(probe);
+          show($("status"), "No wallet extension found. Load the Koinos PQ Wallet extension, then reload this page.", "bad");
+        }
+      }, 150);
+
+      $("connect").onclick = async () => {
+        try {
+          const accounts = await window.kondor.getAccounts();
+          show($("accounts"), accounts.map((a) => `${a.name}\n${a.address}`).join("\n\n"), "ok");
+          const from = $("from");
+          from.innerHTML = "";
+          for (const a of accounts) {
+            const o = document.createElement("option");
+            o.value = a.address;
+            o.textContent = `${a.address}  (${a.name})`;
+            from.appendChild(o);
+          }
+          for (const id of ["head", "sign", "send"]) $(id).disabled = false;
+        } catch (e) {
+          show($("accounts"), "Error: " + err(e), "bad");
+        }
+      };
+
+      $("head").onclick = async () => {
+        $("headout").textContent = "…";
+        try {
+          const h = await window.kondor.getProvider(net()).getHeadInfo();
+          $("headout").textContent = `height ${h.head_topology.height}, read through the extension's background`;
+        } catch (e) {
+          $("headout").textContent = "Error: " + err(e);
+        }
+      };
+
+      $("sign").onclick = async () => {
+        try {
+          const sig = await window.kondor.getSigner($("from").value).signMessage("hello from the test dapp");
+          show($("signout"), `${sig.length} bytes\n${hex(sig).slice(0, 96)}…`, "ok");
+        } catch (e) {
+          show($("signout"), "Error: " + err(e), "bad");
+        }
+      };
+
+      $("send").onclick = async () => {
+        const out = $("sendout");
+        try {
+          const from = $("from").value, to = $("to").value;
+          const op = transferOp(net(), from, to, $("amount").value);
+          show(out, "Waiting for your approval in the wallet window…", "muted");
+          const { transaction, receipt } = await window.kondor.getSigner(from).sendTransaction({ operations: [op] });
+          const entry = b64urlLength(transaction.signatures[0]);
+          show(out, `Sent.\ntransaction ${transaction.id}\nmana used ${receipt.rc_used}\nsignature entry ${entry} bytes (${entry === 2420 ? "pqwallet account" : entry === 3733 ? "native ML-DSA-44" : "unexpected"})\n${EXPLORER[net()]}${transaction.id}`, "ok");
+        } catch (e) {
+          show(out, "Error: " + err(e), "bad");
+        }
+      };
+    </script>
+  </body>
+</html>
