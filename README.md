@@ -51,10 +51,14 @@ unpacked" → pick `dist-extension/`. The toolbar button opens the wallet; web p
 `window.kondor` with no library. Tester instructions: [docs/EXTENSION-TESTING.md](docs/EXTENSION-TESTING.md).
 
 ```
-npm run e2e:ext     # the extension in headless Chromium against the devnet (see the script header)
-npm run smoke:web   # the built web app under its CSP on testnet and mainnet
-npm run icons       # re-render extension/icons and public/icons
+npm run e2e:ext         # the extension against the devnet: 14 functional checks + 9 attacks that must fail
+npm run e2e:activation  # a brand-new wallet activates itself on the devnet, then sends
+npm run smoke:web       # the built site on Harbinger and mainnet: CSP, onboarding, an existing account
+npm run icons           # re-render extension/icons and public/icons
 ```
+
+Security: see [docs/SECURITY.md](docs/SECURITY.md) for the 2026-10-18 review, what it fixed and
+the known limits.
 
 Everything happens in the browser. There is no server and nothing leaves the page except JSON-RPC
 calls to the node you pick (mainnet, Harbinger testnet, or a local devnet).
@@ -77,27 +81,28 @@ How it is put together:
 - `content.js` relays those messages to the extension and the answers back. Provider calls
   (`provider:*`) are answered by the background straight away. `getAccounts` and `signer:*` are
   queued and a small window opens (`approve.html`).
-- The approval window shows the origin, the account, and a plain reading of each operation
-  (a KOIN transfer is shown as "Send 1 KOIN to …"; anything else as the contract and entry
-  point). It decrypts the vault with the passphrase **for that one request**, signs, wipes the key
-  material and closes. Nothing unlocked survives between requests, and the background holds no keys.
-- Results that are bytes (`signHash`) cross the extension boundary as base64url and are turned
-  back into a `Uint8Array` before the page sees them, as kondor-js expects.
+- The approval window rebuilds the transaction from validated fields and lets koilib recompute
+  its id, so what it shows is exactly what it signs. It shows the origin, the account, each
+  operation in plain words ("Send 1 KOIN to …" for a canonical transfer, the contract and entry
+  point otherwise), the network, who pays the mana and the mana limit. It decrypts the vault with
+  the passphrase **for that one request**, signs, wipes the key material and closes. Nothing
+  unlocked survives between requests, and the background holds no keys.
+- One approval window at a time, at most three waiting per site; closing the window rejects.
 
-Permissions: `storage`, `tabs`, `windows`; no host permissions. The content script runs on
-http/https pages only to inject `inpage.js` and relay messages; it reads nothing from the page.
-Extension pages run under `script-src 'self'`, no eval.
+Permissions: `storage` only; no host permissions. The content script runs on http/https pages only
+to inject `inpage.js` and relay messages; it reads nothing from the page. Extension pages run under
+`script-src 'self'`, no eval, no frames.
 
 What a dapp gets from a post-quantum account:
 
-- `getAccounts()`: the native address and every pqwallet account in the vault.
-- `getSigner(address).signTransaction / sendTransaction / signHash / signMessage`: works. A pqwallet
-  account's signature is accepted on mainnet today; the native address needs nodes running the
-  koinos-chain `ml-dsa-44` branch.
-- `signMessage` returns a signature no public key can be recovered from. Dapps that verify a
-  message by recovering a secp256k1 key will not accept it; they need the account's registered key.
-- Not supported: `invokeSystemCall` (kondor-js passes a serializer object, which cannot cross a
-  message boundary; use `provider.call`), block production (`prepareBlock`, `signBlock`).
+- `getAccounts()`: the wallet's accounts on the current network (the native address only on the devnet).
+- `getSigner(address).signTransaction / sendTransaction`: contract calls only, for the wallet's
+  network. Uploads, system operations and calls to one of the wallet's own accounts are refused.
+- `signMessage`: an ML-DSA-44 signature over the message under the `koinos/message/1` context,
+  never valid as a transaction signature. No public key can be recovered from it; verify it with
+  `verifyMessageEntry` from koinos-pq-core against the account's registered key.
+- Refused: `signHash` (a blind transaction signature). Not supported: `invokeSystemCall` (use
+  `provider.call`), block production.
 
 ## The rules the phone app must match
 
@@ -156,6 +161,15 @@ agrees with the node.
 - **CSP without eval** (`npm run smoke:web`): the built web app under `script-src 'self'` unlocks
   a throwaway vault on testnet and on mainnet and loads balance, mana and head block with no CSP
   violation and no page error, at 360px wide with no horizontal scroll.
+- **Security fixes, 0.3.0** (see `docs/SECURITY.md`): the extension test now replays nine attacks
+  (a forged transaction id, a message that is really a transaction, raw hash signing, markup in an
+  operation, a call to the account's own contract, an upload, another chain's transaction, a
+  transfer with duplicated fields, a flood of requests). All nine succeed against 0.2.1 and all are
+  stopped in 0.3.0; 23 of 23 checks pass.
+- **Hands-free activation** (`npm run e2e:activation`): a brand-new wallet on the devnet activated
+  its account with no clicks in 4 seconds, showed it as "Your account" and sent 1 KOIN from it with
+  a 2,420-byte signature. On Harbinger and mainnet an unfunded new wallet waits and submits
+  nothing, asking for 7.49 tKOIN and 65.82 KOIN respectively (smoke test, live prices).
 
 ## Mainnet (2026-10-18)
 
@@ -174,20 +188,21 @@ chain, because a step can succeed while the mempool still reports a hold.
 
 ## What it does today
 
-- Create a wallet (24 words, confirmation, passphrase) or import words / a CLI seed, optionally
-  with the address of a pqwallet account that already uses the key.
-- Shows the native post-quantum address with a QR code, KOIN balance, mana and head block, for
-  mainnet, Harbinger or a devnet (RPC configurable).
-- Sends KOIN from either kind of account, checks the signature locally before broadcasting, shows
-  the transaction id, waits for the block, links to the explorer.
-- History through the JSON-RPC gateway's account history service.
-- Settings: add/remove pqwallet accounts, show the words again (passphrase required), auto-lock
-  time, delete the wallet.
-- **Create a pqwallet account** on the current network, in the browser: shows the one-time
-  secp256k1 funding address (derived from the seed), waits for mana, uploads the bundled account
-  contract (hash-checked, call + transaction + upload authority locked to the contract from block
-  one), registers the ML-DSA-44 key with a proof of possession, checks the registered key is this
-  wallet's, and saves the account. Same steps as the CLI's `deploy --lock` and `register`.
+- Create a wallet (24 words, confirmation, passphrase) or import words / a CLI seed.
+- **Activates the account by itself.** A new wallet goes straight to "Activate your account": one
+  address (the seed's own account, so it is the same on every network) and the amount to send,
+  priced from the live resource market. Once the address holds enough mana the wallet installs the
+  bundled contract (hash-checked, call + transaction + upload authority locked to the contract from
+  block one), registers the ML-DSA-44 key with a proof of possession and checks the registered key
+  is this wallet's. Same steps as the CLI's `deploy --lock` and `register`. Interrupted activations
+  resume where they stopped.
+- **Finds the account again** from the 24 words on any network, with nothing stored.
+- Balance, mana and head block for mainnet, Harbinger or a devnet (RPC configurable); QR code.
+- Sends KOIN, checks the signature locally before broadcasting, shows the transaction id, waits for
+  the block, links to the explorer. History through the JSON-RPC gateway.
+- Settings: show the words again, auto-lock time, delete the wallet; under Advanced, accounts set
+  up with the command-line tool, the native post-quantum address, the devnet RPC. Changes to the
+  stored vault ask for the passphrase in the page, never in a browser prompt.
 - **As an extension**: all of the above from the toolbar, plus `window.kondor` for dapps.
 
 ## Kondor, and why this is not a fork of it
@@ -202,8 +217,10 @@ everyday secp256k1 accounts; this is an addition, not a replacement.
 
 ## Not yet
 
-- Icons and a store listing; Firefox (Manifest V3 there wants `background.scripts`).
+- A store listing; Firefox (Manifest V3 there wants `background.scripts`).
 - Per-site permissions (remembering which origins may call `getAccounts` without asking each time).
+- Activation in one transaction (install and register together), which would halve the wait and
+  close the minutes in which the bootstrap key still controls the account (see `docs/SECURITY.md`).
 - The phone app (Flutter) with the same rules and the vendored C verifier over FFI.
 
 MIT.

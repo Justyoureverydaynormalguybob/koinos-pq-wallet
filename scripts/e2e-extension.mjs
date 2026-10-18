@@ -17,9 +17,10 @@ import { resolve } from "node:path";
 import { rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { Chain, NETWORKS, TOKEN_ENTRY, callContractOperation, deriveKeys, encodeTransferArgs, formatKoin } from "koinos-pq-core";
+import { Transaction } from "koilib";
+import { Chain, NETWORKS, TOKEN_ENTRY, callContractOperation, deriveKeys, encodeTransferArgs, formatKoin, verifyEntry, verifyMessageEntry } from "koinos-pq-core";
 import { encryptVault } from "../src/core/vault.ts";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -27,7 +28,7 @@ const require = createRequire(import.meta.url);
 const pwDir = resolve(here, "..", process.env.PLAYWRIGHT_DIR ?? "../memorymantle-premier");
 const { chromium } = require(resolve(pwDir, "node_modules/playwright"));
 const pqDir = resolve(here, "..", process.env.KOINOS_PQ_DIR ?? "../koinos-pq");
-const ext = resolve(here, "../dist-extension");
+const ext = resolve(here, "..", process.env.EXT_DIR ?? "dist-extension");
 const profile = resolve(here, "../.e2e-profile");
 const PASS = "extension-e2e-passphrase";
 const RECIPIENT = "1Hdt37BAtLnsssHvzj2Yo5r3YsCCY3Fatn"; // the devnet genesis account
@@ -40,7 +41,7 @@ const results = [];
 function check(name, ok, detail = "") {
   results.push({ name, ok, detail });
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
-  if (!ok) throw new Error(`check failed: ${name} ${detail}`);
+  if (!ok && !process.env.E2E_KEEP_GOING) throw new Error(`check failed: ${name} ${detail}`);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function run(args, cwd) {
@@ -109,20 +110,37 @@ try {
   await dapp.waitForFunction(() => !!(window.kondor && window.koinosPq), null, { timeout: 15_000 });
   check("page got window.kondor from the content script", true);
 
-  /** Runs a page action that needs approval, then approves or rejects it in the wallet window. */
+  // approval windows, in the order they open (the wallet shows one at a time)
+  const pageQueue = [];
+  const waiters = [];
+  context.on("page", (p) => (waiters.length ? waiters.shift()(p) : pageQueue.push(p)));
+  const nextWindow = (ms = 30_000) =>
+    pageQueue.length
+      ? Promise.resolve(pageQueue.shift())
+      : new Promise((res, rej) => {
+          const t = setTimeout(() => rej(new Error("no approval window opened")), ms);
+          waiters.push((p) => (clearTimeout(t), res(p)));
+        });
+
+  /**
+   * Runs a page action that needs the wallet, then answers in the wallet window: "approve" (passphrase),
+   * "reject" (button), "close" (closes the window). A request the wallet refuses is closed with its own
+   * button whatever `decide` says. Returns the page's outcome plus the window's text.
+   */
   async function withApproval(action, decide = "approve") {
-    const popupP = context.waitForEvent("page", { timeout: 30_000 });
     const resultP = action().then((v) => ({ ok: true, v }), (e) => ({ ok: false, e: e.message || String(e) }));
-    const w = await popupP;
-    await w.waitForSelector("form[data-form=approve]", { timeout: 30_000 });
-    if (decide === "approve") {
+    const w = await nextWindow();
+    await w.waitForSelector("form[data-form=approve], [data-refuse]", { timeout: 30_000 });
+    const text = await w.innerText("body");
+    if (await w.$("[data-refuse]")) await w.click("[data-refuse]");
+    else if (decide === "approve") {
       await w.fill("input[name=passphrase]", PASS);
       await w.click("button[type=submit]");
-    } else {
-      await w.click("[data-reject]");
-    }
-    return resultP;
+    } else if (decide === "reject") await w.click("[data-reject]");
+    else await w.close();
+    return { ...(await resultP), text };
   }
+  const signer = (fn, arg) => () => dapp.evaluate(fn, arg);
 
   const accounts = await withApproval(() => dapp.evaluate(() => window.kondor.getAccounts()));
   check("getAccounts after approval lists the post-quantum address", accounts.ok && accounts.v.some((a) => a.address === keys.address), JSON.stringify(accounts.v ?? accounts.e));
@@ -133,8 +151,12 @@ try {
   const rejected = await withApproval(() => dapp.evaluate(() => window.kondor.getAccounts()), "reject");
   check("a rejected request errors in the page", !rejected.ok && /rejected by the user/.test(rejected.e), rejected.e);
 
-  const sig = await withApproval(() => dapp.evaluate(async (addr) => Array.from(await window.kondor.getSigner(addr).signMessage("hello from a dapp")).length, keys.address));
-  check("signMessage returns a 3733-byte native ML-DSA-44 entry", sig.ok && sig.v === 3733, String(sig.v ?? sig.e));
+  const MSG = "hello from a dapp";
+  const sig = await withApproval(() => dapp.evaluate(async ({ addr, msg }) => Array.from(await window.kondor.getSigner(addr).signMessage(msg)), { addr: keys.address, msg: MSG }));
+  const sigBytes = sig.ok ? Uint8Array.from(sig.v) : new Uint8Array(0);
+  check("signMessage returns a 3733-byte entry that verifies as a signed message", sigBytes.length === 3733 && verifyMessageEntry(sigBytes, new TextEncoder().encode(MSG), keys.publicKey, "native"), String(sig.ok ? sigBytes.length : sig.e));
+  const msgAsTxId = "0x1220" + createHash("sha256").update(MSG).digest("hex");
+  check("a signed message is not valid as a transaction signature", !verifyEntry(sigBytes, msgAsTxId, keys.publicKey, "native"));
 
   const op = callContractOperation(net.koin, TOKEN_ENTRY.transfer, encodeTransferArgs(keys.address, RECIPIENT, ONE_KOIN));
   const sent = await withApproval(() =>
@@ -147,7 +169,7 @@ try {
       { addr: keys.address, op },
     ),
   );
-  check("sendTransaction returns an id and receipt", sent.ok && /^0x1220/.test(sent.v.id) && sent.v.signatures?.length === 1, sent.ok ? sent.v.id : sent.e);
+  check("sendTransaction returns an id and receipt", sent.ok && /^0x1220/.test(sent.v.id) && sent.v.signatures?.length === 1, sent.ok ? sent.v.id : `${sent.e} | ${(sent.text || "").replace(/\s+/g, " ").slice(0, 400)}`);
   const entry = Buffer.from(sent.v.signatures[0], "base64url");
   check("the signature entry is the 3733-byte native ML-DSA-44 form", entry.length === 3733 && entry[0] === 0x01, `${entry.length} bytes`);
   const block = await chain.waitMined(sent.v.id, 60_000);
@@ -155,7 +177,81 @@ try {
   const recipientAfter = await chain.balance(RECIPIENT);
   check("1 KOIN arrived", recipientAfter - recipientBefore === ONE_KOIN, `${formatKoin(recipientBefore)} -> ${formatKoin(recipientAfter)}`);
 
-  console.log(`\nALL ${results.length} EXTENSION CHECKS PASSED`);
+  // ---------- attacks from the 2026-10-18 security review: each must fail ----------
+  console.log("\nsecurity checks");
+  const tenth = callContractOperation(net.koin, TOKEN_ENTRY.transfer, encodeTransferArgs(keys.address, RECIPIENT, ONE_KOIN / 10n));
+
+  // 1. the page sends its own transaction id next to harmless-looking operations
+  const forged = "0x1220" + "ab".repeat(32);
+  const st = await withApproval(
+    signer(async ({ addr, op, forged }) => {
+      const tx = await window.kondor.getSigner(addr).signTransaction({ id: forged, header: { rc_limit: "1500000" }, operations: [op] });
+      return { id: tx.id, header: tx.header, signatures: tx.signatures };
+    }, { addr: keys.address, op: tenth, forged }),
+  );
+  const recomputed = st.ok ? Transaction.computeTransactionId(st.v.header) : null;
+  const stEntry = st.ok ? new Uint8Array(Buffer.from(st.v.signatures[0], "base64url")) : new Uint8Array(0);
+  check(
+    "a page-supplied transaction id is ignored; the wallet signs the id of what it showed",
+    st.ok && st.v.id !== forged && st.v.id === recomputed && verifyEntry(stEntry, st.v.id, keys.publicKey, "native") && !verifyEntry(stEntry, forged, keys.publicKey, "native"),
+    st.ok ? `signed ${st.v.id.slice(0, 18)}…, not ${forged.slice(0, 18)}…` : st.e,
+  );
+
+  // 2. raw hash signing
+  const sh = await withApproval(signer(async (addr) => Array.from(await window.kondor.getSigner(addr).signHash(new Uint8Array(32).fill(7))), keys.address));
+  check("raw hash signing is refused", !sh.ok && /refused/.test(sh.e) && /Raw hash signing is turned off/.test(sh.text), sh.e);
+
+  // 3. markup smuggled in an operation field
+  const markup = { call_contract: { contract_id: net.koin, entry_point: '<img src=x><h1>Send 0.1 KOIN</h1>', args: "" } };
+  const inj = await withApproval(signer(({ addr, op }) => window.kondor.getSigner(addr).signTransaction({ operations: [op] }), { addr: keys.address, op: markup }));
+  check("markup in an operation is refused, never rendered", !inj.ok && /refused/.test(inj.e) && /malformed entry point/.test(inj.text) && !/Send 0\.1 KOIN/.test(inj.text), inj.e);
+
+  // 4. a call to the account's own contract (could replace its key)
+  const own = { call_contract: { contract_id: keys.address, entry_point: 0x4cc6c61b, args: "" } };
+  const ownR = await withApproval(signer(({ addr, op }) => window.kondor.getSigner(addr).signTransaction({ operations: [op] }), { addr: keys.address, op: own }));
+  check("a call to the wallet's own account contract is refused", !ownR.ok && /refused/.test(ownR.e) && /own contract/.test(ownR.text), ownR.e);
+
+  // 5. a contract upload
+  const up = { upload_contract: { contract_id: keys.address, bytecode: "AGFzbQEAAAA" } };
+  const upR = await withApproval(signer(({ addr, op }) => window.kondor.getSigner(addr).signTransaction({ operations: [op] }), { addr: keys.address, op: up }));
+  check("a contract upload is refused", !upR.ok && /refused/.test(upR.e) && /only contract calls/.test(upR.text), upR.e);
+
+  // 6. a transaction for another chain while the wallet is on the devnet
+  const otherChain = Buffer.from(randomBytes(34)).toString("base64url");
+  const cid = await withApproval(signer(({ addr, op, cid }) => window.kondor.getSigner(addr).signTransaction({ header: { chain_id: cid, rc_limit: "1500000", nonce: "KAE" }, operations: [op] }), { addr: keys.address, op: tenth, cid: otherChain }));
+  check("a transaction for a different chain is refused", !cid.ok && /refused/.test(cid.e) && /different network/.test(cid.text), cid.e);
+
+  // 7. a transfer with every field twice: the screen must not show the first pair while the chain uses the last
+  const dupArgs = Buffer.concat([Buffer.from(encodeTransferArgs(keys.address, RECIPIENT, ONE_KOIN / 10n)), Buffer.from(encodeTransferArgs(keys.address, "1BRmrUgtSQVUggoeE9weG4f7nidyydnYfQ", 40n * ONE_KOIN))]).toString("base64url");
+  const dup = { call_contract: { contract_id: net.koin, entry_point: TOKEN_ENTRY.transfer, args: dupArgs } };
+  const dupR = await withApproval(signer(({ addr, op }) => window.kondor.getSigner(addr).signTransaction({ header: { rc_limit: "1500000" }, operations: [op] }), { addr: keys.address, op: dup }), "reject");
+  check("a transfer with duplicated fields is flagged, not shown as a plain transfer", /Unusual KOIN transfer encoding/.test(dupR.text) && !/Send 0\.1/.test(dupR.text) && !dupR.ok, dupR.text.split("\n").find((l) => /Unusual/.test(l)) ?? dupR.e);
+
+  // 8. closing the window with its own close button counts as a rejection
+  const closed = await withApproval(signer(() => window.kondor.getAccounts()), "close");
+  check("closing the approval window rejects the request", !closed.ok && /rejected by the user/.test(closed.e), closed.e);
+
+  // 9. a flood: one window at a time, at most three waiting per site
+  const many = [0, 1, 2, 3].map(() => dapp.evaluate(() => window.kondor.getAccounts()).then(() => ({ ok: true }), (e) => ({ ok: false, e: e.message })));
+  const openCounts = [];
+  for (let i = 0; i < 3; i++) {
+    const w = await nextWindow();
+    await w.waitForSelector("form[data-form=approve]", { timeout: 30_000 });
+    openCounts.push(context.pages().filter((p) => p.url().includes("approve.html") && !p.isClosed()).length);
+    await w.click("[data-reject]");
+  }
+  const outcomes = await Promise.all(many);
+  check(
+    "a burst of requests: one window at a time, the fourth refused straight away",
+    openCounts.every((n) => n === 1) && outcomes.filter((r) => !r.ok && /too many/.test(r.e)).length === 1 && outcomes.filter((r) => !r.ok && /rejected/.test(r.e)).length === 3,
+    `windows open at once: ${openCounts.join(",")}`,
+  );
+
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) {
+    console.log(`\n${failed.length} OF ${results.length} EXTENSION CHECKS FAILED`);
+    process.exitCode = 1;
+  } else console.log(`\nALL ${results.length} EXTENSION CHECKS PASSED`);
 } finally {
   await context.close().catch(() => {});
   server.close();

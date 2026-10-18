@@ -6,7 +6,8 @@ server {
     include /etc/nginx/headers.conf;
 
     location = /health {
-        add_header Content-Type text/plain;
+        include /etc/nginx/headers.conf;
+        default_type text/plain;
         return 200 "ok\n";
     }
 

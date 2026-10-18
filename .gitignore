@@ -7,3 +7,4 @@ dist/
 coverage/
 dist-extension/
 .e2e-profile/
+.e2e-old-ext/

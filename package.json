@@ -1,6 +1,6 @@
 {
   "name": "koinos-pq-wallet",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "Post-quantum (ML-DSA-44) wallet for Koinos: web app and browser extension (window.kondor compatible) on one signing core",
   "type": "module",
@@ -12,13 +12,14 @@
     "build:ext": "tsc --noEmit && vite build -c vite.ext-pages.config.ts && vite build -c vite.ext-content.config.ts && vite build -c vite.ext-inpage.config.ts",
     "e2e:ext": "node --experimental-strip-types scripts/e2e-extension.mjs",
     "smoke:web": "node --experimental-strip-types scripts/smoke-web.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "e2e:activation": "node --experimental-strip-types scripts/e2e-activation.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
     "koilib": "^9.4.1",
-    "koinos-pq-core": "git+https://github.com/Justyoureverydaynormalguybob/koinos-pq-core.git#214d23e",
+    "koinos-pq-core": "git+https://github.com/Justyoureverydaynormalguybob/koinos-pq-core.git#889c63f",
     "kondor-js": "^1.3.0",
     "qrcode": "^1.5.4"
   },

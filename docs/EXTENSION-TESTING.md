@@ -31,10 +31,12 @@ you type your passphrase.
 
 The extension has its own storage. A wallet you made in the web app is not there automatically.
 
-1. Click the toolbar icon. Create a new wallet, or import your 24 words.
-2. Settings: pick the network (mainnet or Harbinger). If you already have a pqwallet account, add
-   its address there. The wallet also shows your native post-quantum address; on mainnet that one
-   cannot sign yet (it needs the node change), so use the pqwallet account for sends.
+1. Click the toolbar icon, pick the network at the top right (mainnet or Harbinger), then import
+   your 24 words, or create a new wallet.
+2. An account you already activated is found by itself. A new wallet goes to "Activate your
+   account": send it the amount shown and it activates itself (see `TESTER-GUIDE.md`). For an
+   activation, "Open in a tab" at the bottom of the popup is better: the popup closes when you click
+   away, and activation needs the page to stay open.
 3. Closing the popup locks the wallet. That is intended.
 
 ## Try it on the test page
@@ -48,8 +50,8 @@ http://localhost:5173/demo/).
 2. **Connect wallet.** A small window opens naming the page and asking for your passphrase. After
    it, the page lists your addresses. This is what a dapp's "connect" button does.
 3. **Head block.** Reads the chain through the extension; no window, nothing to approve.
-4. **Sign a message.** Opens the window again; you should get a signature of 2,420 bytes (pqwallet
-   account) or 3,733 bytes (native address).
+4. **Sign a message.** Opens the window again; you should get a signature of 2,420 bytes. It is
+   made under a separate "message" context, so it can never be used as a transaction signature.
 5. **Send KOIN.** Put in an address you control and a small amount. The window should read
    "Send 0.1 KOIN to 1…" in plain words, with the mana limit under it. Approve, and the page shows
    the transaction id and a link to the explorer. Try it once more and press **Reject**: the page
@@ -60,10 +62,15 @@ Then try a real dapp that supports Kondor. Start with connect only, then somethi
 ## What to look for
 
 - The approval window should always name the site that asked, and describe a KOIN transfer in
-  words, not bytes. If a transfer shows as "Call contract …" instead, the page is using a different
-  network from the wallet.
+  words, not bytes, with the network, who pays the mana and the mana limit underneath.
+- A transaction for a different network than the wallet's is refused, not shown.
 - A wrong passphrase should say so and let you try again, not fail the request.
-- Nothing should happen in the page before you approve.
+- Nothing should happen in the page before you approve. Closing the window counts as Reject.
+- Only one approval window at a time; a site that piles up requests gets refused.
+
+What the window refuses outright, by design (see `SECURITY.md`): raw hash signing, contract
+uploads and system operations, any call to one of your own wallet's accounts (that is how a key
+could be swapped), and transactions for another network.
 
 ## Report back
 
@@ -72,8 +79,10 @@ help. Post in the chat where you found this or open an issue on the repo.
 
 ## Known limits
 
-- `signMessage` gives a signature no public key can be recovered from. Dapps that check a signed
-  message by recovering a secp256k1 key will not accept it.
+- `signMessage` gives a signature no public key can be recovered from, made under the
+  `koinos/message/1` context. Dapps that check a signed message by recovering a secp256k1 key will
+  not accept it; they can verify it with `verifyMessageEntry` from koinos-pq-core.
+- `signHash` is refused (a signed hash is a signature over a transaction nobody can see).
 - `invokeSystemCall` through the provider is not supported (use `provider.call`). Block production
   is not possible from a post-quantum account yet.
 - No per-site permissions yet: every `getAccounts` call asks you.

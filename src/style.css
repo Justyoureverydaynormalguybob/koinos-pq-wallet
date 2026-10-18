@@ -148,3 +148,15 @@ body.popup #app { padding: 12px; min-height: 440px; max-height: 548px; overflow-
 body.popup .top { padding-bottom: 10px; }
 .popbar { margin: 0; padding: 4px 12px 8px; text-align: right; font-size: 13px; }
 .plain { padding-left: 18px; margin: 8px 0; }
+
+/* approval window */
+.warn-inline { color: var(--warn-ink); }
+ul.plain.small { font-size: 14px; }
+ul.plain.small li { padding: 5px 0; }
+label.check { display: flex; gap: 8px; align-items: flex-start; color: var(--warn-ink); font-size: 14px; }
+label.check input { width: auto; margin: 3px 0 0; }
+
+/* collapsible advanced sections */
+details.adv { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 12px; }
+details.adv summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+details.adv[open] summary { margin-bottom: 4px; }

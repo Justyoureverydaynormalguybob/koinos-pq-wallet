@@ -1,42 +1,115 @@
 // Service worker. Answers the kondor protocol on behalf of dapps:
-//   provider:*   -> a koilib Provider for the requested network, no user interaction
-//   getAccounts, signer:* -> queued, an approval window opens, the approval page answers
+//   provider:*             -> a koilib Provider for a known network, no user interaction
+//   getAccounts, signer:*  -> queued; one approval window at a time; the approval page answers
+//
 // Nothing secret lives here: keys are only ever decrypted inside the approval page, by passphrase.
+// Pending requests are kept in chrome.storage.session (survives the worker being put to sleep,
+// gone when the browser closes), keyed by an id this worker generates, never by the page's id.
 import { Provider } from "koilib";
 import { NETWORKS } from "koinos-pq-core";
 
-interface Req {
-  id: string;
+interface Pending {
+  key: string; // ours
+  pageId: string; // the page's request id, echoed back in the answer
   command: string;
-  to: "popup" | "background";
   args: Record<string, unknown> | null;
   origin: string;
-}
-interface Pending extends Req {
-  tabId: number | undefined;
-  windowId: number | undefined;
+  tabId?: number;
+  documentId?: string;
+  frameId?: number;
+  windowId?: number; // set once an approval window is open for it
   createdAt: number;
 }
 
-const pending = new Map<string, Pending>();
-const PREF_NETWORK = "koinos-pq-wallet/network";
-
-// names dapps use with Kondor -> our network keys
+const STORE_KEY = "pending";
+const EXPIRY_MS = 10 * 60_000;
+const MAX_PER_ORIGIN = 3;
+const APPROVAL_COMMANDS = new Set(["getAccounts", "signer:signHash", "signer:signMessage", "signer:signTransaction", "signer:sendTransaction", "signer:prepareTransaction"]);
 const NETWORK_ALIASES: Record<string, string> = { harbinger: "testnet", koinos: "mainnet", main: "mainnet" };
+const EXT_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
 
-function providerFor(network: unknown): Provider {
-  const raw = typeof network === "string" && network ? network : "mainnet";
-  const n = NETWORK_ALIASES[raw.toLowerCase()] ?? raw;
-  const net = NETWORKS[n];
-  if (net) return new Provider(net.rpc);
-  if (/^https?:\/\//.test(n)) return new Provider([n]);
-  throw new Error(`unknown network ${n}`);
+// ---- the pending store, serialised so concurrent messages cannot lose entries ----
+let chain: Promise<unknown> = Promise.resolve();
+function withStore<T>(fn: (all: Record<string, Pending>) => Promise<T> | T): Promise<T> {
+  const run = async () => {
+    const got = await chrome.storage.session.get(STORE_KEY);
+    const all = ((got[STORE_KEY] as Record<string, Pending> | undefined) ?? {}) as Record<string, Pending>;
+    const result = await fn(all);
+    await chrome.storage.session.set({ [STORE_KEY]: all });
+    return result;
+  };
+  const p = chain.then(run, run);
+  chain = p.catch(() => undefined);
+  return p;
 }
 
-async function handleProvider(req: Req): Promise<unknown> {
-  const a = req.args ?? {};
+// ---- answering the page ----
+function deliver(req: Pending, message: { id: string; result?: unknown; error?: string }) {
+  if (req.tabId === undefined) return;
+  // only the document that asked gets the answer; if it navigated away, nobody does
+  const target = req.documentId ? { documentId: req.documentId } : { frameId: req.frameId ?? 0 };
+  chrome.tabs.sendMessage(req.tabId, message, target).catch(() => {});
+}
+
+async function finish(key: string, outcome: { result?: unknown; error?: string }) {
+  const req = await withStore((all) => {
+    const r = all[key];
+    delete all[key];
+    return r;
+  });
+  if (!req) return;
+  deliver(req, outcome.error !== undefined ? { id: req.pageId, error: outcome.error } : { id: req.pageId, result: outcome.result ?? null });
+  if (req.windowId !== undefined) chrome.windows.remove(req.windowId).catch(() => {});
+  void pump();
+}
+
+/** Opens an approval window for the oldest waiting request if none is open. */
+async function pump() {
+  const next = await withStore((all) => {
+    const now = Date.now();
+    for (const [k, r] of Object.entries(all)) {
+      if (now - r.createdAt > EXPIRY_MS) {
+        delete all[k];
+        deliver(r, { id: r.pageId, error: "request expired" });
+        if (r.windowId !== undefined) chrome.windows.remove(r.windowId).catch(() => {});
+      }
+    }
+    if (Object.values(all).some((r) => r.windowId !== undefined)) return null;
+    const oldest = Object.values(all).sort((a, b) => a.createdAt - b.createdAt)[0];
+    if (!oldest) return null;
+    oldest.windowId = -1; // claimed; replaced by the real id below
+    return oldest.key;
+  });
+  if (!next) return;
+  try {
+    const w = await chrome.windows.create({ url: chrome.runtime.getURL(`approve.html?req=${encodeURIComponent(next)}`), type: "popup", width: 440, height: 780, focused: true });
+    await withStore((all) => {
+      if (all[next]) all[next]!.windowId = w?.id;
+    });
+    if (w?.id === undefined) await finish(next, { error: "could not open the approval window" });
+  } catch {
+    await finish(next, { error: "could not open the approval window" });
+  }
+}
+
+// the user closed the approval window with the window's own close button
+chrome.windows.onRemoved.addListener((windowId) => {
+  void withStore((all) => Object.values(all).find((r) => r.windowId === windowId)?.key ?? null).then((key) => {
+    if (key) void finish(key, { error: "rejected by the user" });
+  });
+});
+
+// ---- provider calls (read-only chain access, no approval) ----
+function providerFor(network: unknown): Provider {
+  const raw = typeof network === "string" && network ? network.toLowerCase() : "mainnet";
+  const net = NETWORKS[NETWORK_ALIASES[raw] ?? raw];
+  if (!net) throw new Error(`unknown network ${raw}; use mainnet, testnet (harbinger) or devnet`);
+  return new Provider(net.rpc);
+}
+
+async function handleProvider(command: string, a: Record<string, unknown>): Promise<unknown> {
   const p = providerFor(a.network);
-  switch (req.command) {
+  switch (command) {
     case "provider:call":
       return p.call(a.method as string, a.params as Record<string, unknown>);
     case "provider:getNonce":
@@ -69,86 +142,82 @@ async function handleProvider(req: Req): Promise<unknown> {
       return (p as unknown as { getForkHeads: () => Promise<unknown> }).getForkHeads();
     case "provider:getResourceLimits":
       return (p as unknown as { getResourceLimits: () => Promise<unknown> }).getResourceLimits();
+    case "provider:invokeGetContractMetadata":
+      return p.invokeGetContractMetadata(a.contractId as string);
     case "provider:invokeSystemCall":
       // kondor-js passes a koilib Serializer, which cannot cross a JSON message boundary
       throw new Error("invokeSystemCall is not supported by Koinos PQ Wallet; use provider.call");
-    case "provider:invokeGetContractMetadata":
-      return p.invokeGetContractMetadata(a.contractId as string);
     default:
-      throw new Error(`unsupported command ${req.command}`);
+      throw new Error(`unsupported command ${command}`);
   }
 }
 
-const APPROVAL_COMMANDS = new Set(["getAccounts", "signer:signHash", "signer:signMessage", "signer:signTransaction", "signer:sendTransaction", "signer:prepareTransaction"]);
-
-async function openApproval(req: Pending): Promise<void> {
-  const url = chrome.runtime.getURL(`approve.html?req=${encodeURIComponent(req.id)}`);
-  const w = await chrome.windows.create({ url, type: "popup", width: 440, height: 760, focused: true });
-  req.windowId = w?.id;
-}
-
-function finish(id: string, message: { id: string; result?: unknown; error?: string }) {
-  const req = pending.get(id);
-  pending.delete(id);
-  if (!req) return;
-  if (req.tabId !== undefined) chrome.tabs.sendMessage(req.tabId, message).catch(() => {});
-  if (req.windowId !== undefined) chrome.windows.remove(req.windowId).catch(() => {});
-}
-
-// drop approvals nobody answered within 10 minutes
-setInterval(() => {
-  const cutoff = Date.now() - 10 * 60_000;
-  for (const [id, req] of pending) if (req.createdAt < cutoff) finish(id, { id, error: "request expired" });
-}, 60_000);
-
+// ---- messages ----
 chrome.runtime.onMessage.addListener((msg: Record<string, unknown>, sender, sendResponse) => {
-  // --- messages from the approval page ---
-  if (msg.type === "pq:get") {
-    const req = pending.get(msg.id as string);
-    sendResponse(req ? { id: req.id, command: req.command, args: req.args, origin: req.origin, network: pref() } : null);
-    return false;
-  }
-  if (msg.type === "pq:resolve") {
-    const id = msg.id as string;
-    finish(id, msg.error ? { id, error: String(msg.error) } : { id, result: msg.result });
-    sendResponse(true);
-    return false;
-  }
-  if (msg.type === "pq:ping") {
-    sendResponse("pong");
-    return false;
+  // the approval window is an extension page in its own tab; content scripts carry the web page's origin
+  const fromApprovalPage = sender.id === chrome.runtime.id && sender.origin === EXT_ORIGIN && (sender.url ?? "").startsWith(`${EXT_ORIGIN}/approve.html`);
+
+  // --- from the approval page (and only from there) ---
+  if (msg.type === "pq:get" || msg.type === "pq:resolve") {
+    if (!fromApprovalPage || typeof msg.id !== "string") {
+      sendResponse(null);
+      return false;
+    }
+    const key = msg.id;
+    if (msg.type === "pq:get") {
+      void withStore((all) => all[key] ?? null).then((r) => sendResponse(r ? { id: r.key, command: r.command, args: r.args, origin: r.origin } : null));
+      return true;
+    }
+    void finish(key, msg.error !== undefined ? { error: String(msg.error) } : { result: msg.result }).then(() => sendResponse(true));
+    return true;
   }
 
-  // --- messages relayed from a page by content.ts ---
-  const req = msg as unknown as Req;
-  if (typeof req.id !== "string" || typeof req.command !== "string") return false;
-  if (req.command === "ping") {
-    sendResponse({ id: req.id, result: "pong" });
+  // --- relayed from a web page by content.ts ---
+  if (!sender.tab || sender.origin === EXT_ORIGIN) return false; // not a content script
+  const id = msg.id, command = msg.command, origin = msg.origin;
+  if (typeof id !== "string" || id.length > 128 || typeof command !== "string" || typeof origin !== "string") return false;
+  const args = msg.args && typeof msg.args === "object" && !Array.isArray(msg.args) ? (msg.args as Record<string, unknown>) : null;
+
+  if (command === "ping") {
+    sendResponse({ id, result: "pong" });
     return false;
   }
-  if (req.command.startsWith("provider:")) {
-    handleProvider(req)
-      .then((result) => sendResponse({ id: req.id, result: result ?? null }))
-      .catch((e) => sendResponse({ id: req.id, error: (e as Error).message || String(e) }));
-    return true; // async
+  if (command.startsWith("provider:")) {
+    handleProvider(command, args ?? {})
+      .then((result) => sendResponse({ id, result: result ?? null }))
+      .catch((e) => sendResponse({ id, error: (e as Error).message || "request failed" }));
+    return true;
   }
-  if (APPROVAL_COMMANDS.has(req.command)) {
-    const p: Pending = { ...req, tabId: sender.tab?.id, windowId: undefined, createdAt: Date.now() };
-    pending.set(req.id, p);
-    sendResponse({ id: req.id, deferred: true }); // the real answer arrives via chrome.tabs.sendMessage
-    void openApproval(p).catch((e) => finish(req.id, { id: req.id, error: `could not open the approval window: ${(e as Error).message}` }));
-    return false;
+  if (APPROVAL_COMMANDS.has(command)) {
+    const entry: Pending = {
+      key: crypto.randomUUID(),
+      pageId: id,
+      command,
+      args,
+      origin,
+      tabId: sender.tab.id,
+      documentId: (sender as { documentId?: string }).documentId,
+      frameId: sender.frameId,
+      createdAt: Date.now(),
+    };
+    void withStore((all) => {
+      const waiting = Object.values(all).filter((r) => r.origin === origin).length;
+      if (waiting >= MAX_PER_ORIGIN) return false;
+      all[entry.key] = entry;
+      return true;
+    }).then((accepted) => {
+      if (!accepted) {
+        sendResponse({ id, error: "too many requests waiting for approval from this site" });
+        return;
+      }
+      sendResponse({ id, deferred: true }); // the real answer arrives via chrome.tabs.sendMessage
+      void pump();
+    });
+    return true;
   }
-  sendResponse({ id: req.id, error: `unsupported command ${req.command}` });
+  sendResponse({ id, error: `unsupported command ${command}` });
   return false;
 });
 
-function pref(): string {
-  // the wallet pages store the chosen network in localStorage, which a service worker cannot read;
-  // the approval page reads it itself. This default only matters for provider calls without a network.
-  return "mainnet";
-}
-
-chrome.runtime.onInstalled.addListener(() => {
-  console.log(`Koinos PQ Wallet background ready (${PREF_NETWORK} is read by pages)`);
-});
+// the worker may have been asleep while a window was open: pick up where we left off
+void pump();
