@@ -6,19 +6,19 @@
     <meta name="color-scheme" content="light dark" />
     <title>Koinos PQ Wallet: test dapp</title>
     <style>
-      :root { --bg: #f8fafc; --ink: #0f172a; --card: #fff; --line: #e2e8f0; --muted: #64748b; --ok: #15803d; --bad: #b91c1c; --accent: #1d4ed8; }
-      @media (prefers-color-scheme: dark) { :root { --bg: #0f172a; --ink: #e2e8f0; --card: #1e293b; --line: #334155; --muted: #94a3b8; --ok: #4ade80; --bad: #f87171; --accent: #60a5fa; } }
-      html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      :root { color-scheme: dark; --bg: #0a0f1c; --ink: #e8edf5; --card: #111a2c; --card-2: #0d1424; --line: #1f2b42; --muted: #8d9ab0; --ok: #86efac; --bad: #fca5a5; --accent: #2dd4bf; --accent-ink: #052620; }
+      html, body { margin: 0; background: radial-gradient(900px 420px at 50% -120px, rgba(45, 212, 191, 0.14), transparent 70%), var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
       main { max-width: 640px; margin: 0 auto; padding: 16px; }
-      section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 12px 0; min-width: 0; }
-      h1 { font-size: 1.4rem; margin: 8px 0; }
-      h2 { font-size: 1.05rem; margin: 0 0 8px; }
-      label { display: block; margin: 8px 0; font-size: 0.9rem; }
-      input, select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
-      button { padding: 8px 14px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
-      button:disabled { opacity: 0.5; cursor: default; }
+      section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin: 12px 0; min-width: 0; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35); }
+      h1 { font-size: 1.4rem; margin: 8px 0; letter-spacing: -0.015em; }
+      h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
+      label { display: block; margin: 10px 0; font-size: 0.9rem; color: var(--muted); }
+      input, select { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 10px 12px; border: 1px solid #2c3b58; border-radius: 11px; background: var(--card-2); color: var(--ink); font: inherit; }
+      input:focus, select:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.12); }
+      button { padding: 10px 16px; border-radius: 11px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 700; cursor: pointer; }
+      button:disabled { opacity: 0.45; cursor: default; }
       pre, code { font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; word-break: break-all; }
-      pre { background: var(--bg); border-radius: 8px; padding: 8px; margin: 8px 0 0; max-width: 100%; }
+      pre { background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0 0; max-width: 100%; }
       .muted { color: var(--muted); }
       .ok { color: var(--ok); }
       .bad { color: var(--bad); }

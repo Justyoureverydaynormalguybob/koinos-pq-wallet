@@ -583,7 +583,7 @@ export class App {
     }[s.screen]();
     this.root.innerHTML = `
       <header class="top">
-        <div class="brand">Koinos PQ Wallet <span class="tag">ML-DSA-44</span></div>
+        <div class="brand"><span class="mark" aria-hidden="true">PQ</span>Koinos PQ Wallet <span class="tag">ML-DSA-44</span></div>
         ${s.keys ? `<div class="topright"><select name="network" aria-label="Network">${Object.keys(NETWORKS).map((n) => `<option value="${n}" ${n === s.networkName ? "selected" : ""}>${n}</option>`).join("")}</select><button class="ghost" data-action="lock">Lock</button></div>` : ""}
       </header>
       ${s.busy ? `<div class="busy" role="status">${esc(s.busy)}…</div>` : ""}
@@ -687,22 +687,23 @@ export class App {
     const s = this.s;
     return `
       ${this.accountPicker()}
-      <div class="addr"><div class="label">${esc(a?.label ?? "")}</div>
-        <code class="address">${esc(a?.address ?? "")}</code>
-        <button class="ghost" data-action="copy" data-copy="${esc(a?.address ?? "")}">Copy</button></div>
-      ${this.nativeWarning(a)}
-      <div class="stats">
-        <div><span class="label">KOIN</span><strong>${s.balance === null ? "…" : esc(formatKoin(s.balance))}</strong></div>
-        <div><span class="label">Mana</span><strong>${s.mana === null ? "…" : esc(formatKoin(s.mana, 2))}</strong></div>
-        <div><span class="label">Head block</span><strong>${s.head === null ? "…" : esc(s.head)}</strong></div>
+      <div class="hero">
+        <span class="label">${esc(a?.label ?? "")} · ${esc(this.network.name)}</span>
+        <div class="chip"><code>${esc(a?.address ?? "")}</code><button class="mini" data-action="copy" data-copy="${esc(a?.address ?? "")}">Copy</button></div>
+        ${this.nativeWarning(a)}
+        <div class="stats">
+          <div class="stat main"><span class="label">Balance</span><strong>${s.balance === null ? "…" : esc(formatKoin(s.balance))}<span class="unit">KOIN</span></strong></div>
+          <div class="stat"><span class="label">Mana</span><strong>${s.mana === null ? "…" : esc(formatKoin(s.mana, 2))}</strong></div>
+          <div class="stat"><span class="label">Head block</span><strong>${s.head === null ? "…" : esc(s.head)}</strong></div>
+        </div>
       </div>
-      <div class="row">
+      <div class="tiles">
         <button class="primary" data-action="send">Send</button>
         <button data-action="receive">Receive</button>
         <button data-action="history">History</button>
         <button data-action="settings">Settings</button>
-        <button class="ghost" data-action="refresh">Refresh</button>
-      </div>`;
+      </div>
+      <div class="row"><button class="ghost mini" data-action="refresh">Refresh</button></div>`;
   }
 
   private vSend() {
