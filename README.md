@@ -68,8 +68,13 @@ agrees with the node.
   signed in the browser with the 2,420-byte pqwallet signature, was accepted (rc used 5,868,293)
   and mined in block 12; balances 98.5 and 1.5 afterwards. A second run on the same seed took the
   idempotent path ("upload already done, registration already done").
-- Not yet done from this browser: the same on Harbinger. It needs about 6.6 tKOIN of mana on the
-  one-time funding address; the flow is otherwise identical.
+- Harbinger, by a person in the browser (2026-10-18): account `1LQYsdpGuA3nwU5G1jANCnMWs3yYWfHwkQ`
+  created from the setup screen (upload rc 506,697,901; registration rc 34,855,788; the contract
+  reports `key_registered: true`), then a 20 tKOIN send from it to `1FqXVbjZnMo2cUNj56LNCrc8R22RWDmq1t`
+  signed only with the 2,420-byte pqwallet signature, mined (rc 39,287,060). The first attempt
+  surfaced three fixes now in the code: the setup form was being wiped by the mana poll, the
+  registration must wait out the mempool's hold on the upload's budget, and funding the native
+  address by mistake needed a louder warning and a button in the right place.
 
 ## What it does today
 
