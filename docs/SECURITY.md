@@ -37,13 +37,28 @@ automated test that fails against the previous release (0.2.1) and passes now. T
 
 ## Known limits (by design, or for a later contract version)
 
+Two of these concern the contract. After weighing them on 2026-10-18, neither justifies changing
+the contract that guards live accounts: neither can move funds, and the second cannot be fully
+fixed inside a contract at all.
+
 - **Allow-list scope.** `set_allowed_caller` trusts a contract for every contract and entry point
-  that asks the account, keeps working through other contracts, and survives a key rotation. The
-  wallet never sets it and the extension refuses to; only the command-line tool can. A future
-  contract version should scope it and clear it on rotation.
-- **Signature padding.** The contract tries every 2,420-byte entry in a transaction, each a full
-  verify (about 6M ticks), and more than six entries overflow its buffer. A relayer could pad a
-  pending transaction where this account is not the payer. A future version should cap or cache.
+  that asks the account, keeps working through other contracts, and survives a key rotation. It
+  can only ever *refuse*: an allow-listed contract still needs a transaction signed by the
+  account's current key (`Pqwallet.ts`, `authorize`: the allow-list returns false or falls through
+  to the signature check). So at worst it is less strict than intended, never weaker than a
+  normal Koinos account, where any contract reached by a signed transaction can act for it. The
+  wallet never sets it and the extension refuses to; only the command-line tool can.
+- **Signature padding.** Signatures are not covered by the transaction id, and the contract tries
+  every 2,420-byte entry, each a full ML-DSA check (about 6M ticks in interpreted WebAssembly);
+  more than six overflow its buffer and fail closed. No funds are at risk. Two costs remain:
+  a block producer could pad a pending transaction in which this account signs but does not pay,
+  so it reverts; and anyone can send nodes transactions naming such an account as payer with
+  junk signatures, making them run checks that are never charged because the transaction is
+  rejected. A contract cap could cut the second from six checks to one per transaction, at the
+  price of breaking transactions with more than one post-quantum signer, but never to zero: one
+  check in interpreted WebAssembly is the floor for any authority contract. The real fix is the
+  proposed node change, where the node verifies ML-DSA-44 natively at about the cost of today's
+  secp256k1 recovery.
 - **Re-upload by the key holder** can switch the authority flags off, which would hand the account
   back to the quantum-vulnerable bootstrap key. Only the holder of the ML-DSA key can do it; the
   wallet never does and the extension refuses uploads.
