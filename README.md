@@ -16,6 +16,9 @@ src/ui/app.ts       the screens, no framework
 test/               vectors shared with the koinos-chain tests, signature formats, vault round trip
 ```
 
+Want to try it? Read [docs/TESTER-GUIDE.md](docs/TESTER-GUIDE.md) first: what it costs, what to back up,
+and the steps for a mainnet account.
+
 ## Run it
 
 ```
