@@ -1,9 +1,6 @@
 // The whole UI: a small state machine rendering HTML strings into #app, no framework.
 import QRCode from "qrcode";
-import { Chain, NETWORKS, formatKoin, parseKoin, isAddress, short, type HistoryItem, type Network } from "../core/chain";
-import { deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput, seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys } from "../core/keys";
-import type { AccountMode } from "../core/sign";
-import { bootstrapAddress, estimateSetupCosts, setupPqwalletAccount, type SetupCosts, type SetupResult, type SetupStatus } from "../core/setup";
+import { Chain, NETWORKS, formatKoin, parseKoin, isAddress, short, type HistoryItem, type Network, deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput, seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys, type AccountMode, bootstrapAddress, estimateSetupCosts, setupPqwalletAccount, type SetupCosts, type SetupResult, type SetupStatus } from "koinos-pq-core";
 import { decryptVault, encryptVault, localVaultStore, MIN_PASSPHRASE_LENGTH, type AccountRecord, type EncryptedVault, type VaultData } from "../core/vault";
 
 type Screen = "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "sent" | "receive" | "history" | "settings" | "export" | "setup";

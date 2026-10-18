@@ -5,7 +5,7 @@
 //
 // WebCrypto only, no custom crypto. The decrypted seed lives in memory while unlocked and is wiped on lock.
 import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
-import type { AccountMode } from "./sign";
+import type { AccountMode } from "koinos-pq-core";
 
 export interface AccountRecord {
   label: string;

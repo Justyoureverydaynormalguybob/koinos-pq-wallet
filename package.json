@@ -11,10 +11,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "koinos-pq-core": "github:Justyoureverydaynormalguybob/koinos-pq-core#c594b62",
+    "koilib": "^9.4.1",
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
-    "@scure/bip39": "^2.0.0",
-    "koilib": "^9.4.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {

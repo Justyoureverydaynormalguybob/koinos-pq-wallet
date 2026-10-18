@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { utf8ToBytes } from "@noble/hashes/utils.js";
-import { addressOf, bootstrapSigner, bytesToHex, deriveKeys, isMnemonic, mnemonicToSeed, newMnemonic, parseSeedInput, seedToMnemonic, SEED_BYTES } from "../src/core/keys";
+import { addressOf, bootstrapSigner, bytesToHex, deriveKeys, isMnemonic, mnemonicToSeed, newMnemonic, parseSeedInput, seedToMnemonic, SEED_BYTES } from "koinos-pq-core";
 
 // The same deterministic keys koinos-chain's tests/include/koinos/tests/mldsa_vectors.hpp was generated from
 // (koinos-pq cli/gen-native-vectors.mjs): seed = sha256(label). The node derives these addresses too.

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
-import { deriveKeys } from "../src/core/keys";
-import { CONTEXT_NATIVE, CONTEXT_PQWALLET, NATIVE_ENTRY_BYTES, NATIVE_TAG, signTxId, txIdBytes, verifyEntry } from "../src/core/sign";
+import { deriveKeys } from "koinos-pq-core";
+import { CONTEXT_NATIVE, CONTEXT_PQWALLET, NATIVE_ENTRY_BYTES, NATIVE_TAG, signTxId, txIdBytes, verifyEntry } from "koinos-pq-core";
 
 const keys = deriveKeys(sha256(utf8ToBytes("koinos-pq native vector key A")));
 const txId = "0x1220" + bytesToHex(sha256(utf8ToBytes("koinos-pq native vector tx 1")));

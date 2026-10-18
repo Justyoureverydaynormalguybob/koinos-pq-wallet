@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { utils } from "koilib";
-import { deriveKeys } from "../src/core/keys";
-import { CONTEXT_POP, CONTEXT_PQWALLET, proofOfPossession } from "../src/core/sign";
-import { bootstrapAddress, setupCostsFromPrices } from "../src/core/setup";
-import { PQWALLET_WASM_SHA256 } from "../src/contract/provenance";
-import abi from "../src/contract/pqwallet.abi.json";
+import { deriveKeys } from "koinos-pq-core";
+import { CONTEXT_POP, CONTEXT_PQWALLET, proofOfPossession } from "koinos-pq-core";
+import { bootstrapAddress, setupCostsFromPrices } from "koinos-pq-core";
+import { PQWALLET_WASM_SHA256, loadPqwalletBytecode } from "koinos-pq-core";
+import { pqwalletAbi as abi } from "koinos-pq-core";
 
 const keys = deriveKeys(sha256(utf8ToBytes("koinos-pq native vector key A")));
 
@@ -30,9 +29,9 @@ describe("pqwallet account setup", () => {
     expect(utils.isChecksumAddress(bootstrapAddress(keys))).toBe(true);
   });
 
-  it("bundled contract matches its recorded hash and the ABI is koilib-shaped", () => {
-    const wasm = readFileSync(new URL("../src/contract/pqwallet.wasm", import.meta.url));
-    expect(bytesToHex(sha256(new Uint8Array(wasm)))).toBe(PQWALLET_WASM_SHA256);
+  it("bundled contract matches its recorded hash and the ABI is koilib-shaped", async () => {
+    const wasm = await loadPqwalletBytecode();
+    expect(bytesToHex(sha256(wasm))).toBe(PQWALLET_WASM_SHA256);
     const methods = (abi as { methods: Record<string, { entry_point?: number; read_only?: boolean }> }).methods;
     expect(methods.set_public_key?.entry_point).toBe(0x4cc6c61b);
     expect(methods.get_info?.read_only).toBe(true);
