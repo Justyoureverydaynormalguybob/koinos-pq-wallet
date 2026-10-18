@@ -4,6 +4,10 @@ server {
     root /usr/share/nginx/html;
     index index.html;
     include /etc/nginx/headers.conf;
+    # Behind Railway and Cloudflare, nginx only sees its own http://host:$PORT. An absolute redirect
+    # (e.g. /demo -> /demo/) would send browsers to http://wallet.koinosproof.com:8080/demo/, so keep
+    # redirects relative and let the browser resolve them against the address it actually used.
+    absolute_redirect off;
 
     location = /health {
         include /etc/nginx/headers.conf;
