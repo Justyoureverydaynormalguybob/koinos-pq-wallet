@@ -38,20 +38,21 @@ post-quantum-signed transfer is transaction
 
 ## You need
 
-- Node.js 20 or newer (https://nodejs.org), git, and a current browser.
+- A current browser on a computer.
 - Some KOIN in Kondor (about 70 to be comfortable).
 
 ## Steps
 
-1. **Get the wallet running.**
+1. **Open the wallet:** https://wallet.koinosproof.com. Nothing leaves the page except calls to the
+   Koinos node; the site is static files and keeps nothing of yours. If you would rather run it
+   yourself (Node.js 20 or newer and git):
    ```
    git clone https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet
    cd koinos-pq-wallet
    npm install
    npm run dev
    ```
-   Open http://localhost:5173 in your browser. Nothing leaves the page except calls to the Koinos
-   node; there is no server of ours.
+   and open http://localhost:5173.
 
 2. **Create a wallet.** "Create a new wallet". Write the 24 words down, in order, on paper.
    Confirm the three words it asks for. Choose a passphrase of at least 10 characters.

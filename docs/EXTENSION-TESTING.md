@@ -12,7 +12,9 @@ you type your passphrase.
 ## You need
 
 - Chrome, Brave or Edge on a computer (not a phone).
-- The extension zip, `koinos-pq-wallet-extension-<version>.zip`, or the repo built with `npm run build:ext`.
+- The extension zip, `koinos-pq-wallet-extension-<version>.zip`, from
+  https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/releases (or the repo built with
+  `npm run build:ext`).
 - A post-quantum account with some KOIN (mainnet) or tKOIN (Harbinger). If you do not have one,
   the wallet's setup screen creates one; see `TESTER-GUIDE.md` for what that costs.
 - If you have Kondor installed, **switch it off** for the test (`chrome://extensions`, the toggle on
@@ -38,8 +40,8 @@ The extension has its own storage. A wallet you made in the web app is not there
 ## Try it on the test page
 
 The test page is a plain web page with no wallet code of its own, so it shows exactly what a real
-dapp sees. It is at `/demo/` on the hosted wallet, or locally with `npm run dev` at
-http://localhost:5173/demo/.
+dapp sees. It is at https://wallet.koinosproof.com/demo/ (or locally with `npm run dev` at
+http://localhost:5173/demo/).
 
 1. The page should say "Koinos PQ Wallet extension found". If it says no wallet was found, reload
    the page once after loading the extension.

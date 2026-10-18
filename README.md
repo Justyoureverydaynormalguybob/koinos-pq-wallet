@@ -24,8 +24,12 @@ scripts/                end-to-end test of the extension (devnet), CSP smoke tes
 test/                   vectors shared with the koinos-chain tests, signature formats, vault round trip
 ```
 
+**Live:** https://wallet.koinosproof.com (the web wallet), https://wallet.koinosproof.com/demo/ (the
+test dapp for the extension), https://wallet.koinosproof.com/version.json (what is deployed).
+
 Want to try it? Read [docs/TESTER-GUIDE.md](docs/TESTER-GUIDE.md) first: what it costs, what to back up,
-and the steps for a mainnet account.
+and the steps for a mainnet account. For the extension: [docs/EXTENSION-TESTING.md](docs/EXTENSION-TESTING.md),
+with the zip on the [releases page](https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/releases).
 
 ## Run it
 
@@ -51,6 +55,10 @@ npm run icons       # re-render extension/icons and public/icons
 
 Everything happens in the browser. There is no server and nothing leaves the page except JSON-RPC
 calls to the node you pick (mainnet, Harbinger testnet, or a local devnet).
+
+Hosting: the `Dockerfile` builds the site and serves it with nginx. It runs on Railway (project
+`koinosproof`, service `wallet`) and deploys with `railway up` from this folder; DNS for
+wallet.koinosproof.com is on Cloudflare.
 
 ## The browser extension
 
