@@ -5,7 +5,10 @@ instead of secp256k1. This repo is the browser app and the browser extension, bo
 [koinos-pq-core](https://github.com/Justyoureverydaynormalguybob/koinos-pq-core), the signing rules
 the phone app will mirror.
 
-Status: working on mainnet, Harbinger and the devnet; not audited. Companion to
+Status: a showcase, purely for testing. It works on mainnet, Harbinger and the devnet, and it is
+not audited. The point is to show Koinos can have post-quantum accounts now, years ahead of any real
+quantum threat, with no change to the chain. The code is MIT: the Koinos Foundation and any Koinos
+developer are welcome to use it, share it or build on it. Companion to
 [koinos-pq](https://github.com/Justyoureverydaynormalguybob/koinos-pq) (the account contract, the
 native node change, the measurements).
 
