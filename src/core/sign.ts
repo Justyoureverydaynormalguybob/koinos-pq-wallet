@@ -16,7 +16,18 @@ import { PK_BYTES, SIG_BYTES, type PqKeys } from "./keys";
 export type AccountMode = "native" | "pqwallet";
 
 export const CONTEXT_PQWALLET = utf8ToBytes("koinos/pqwallet/1");
+export const CONTEXT_POP = utf8ToBytes("koinos/pqwallet/1/pop");
 export const CONTEXT_NATIVE = utf8ToBytes("koinos/tx/1");
+
+/**
+ * Proof of possession for registering the key on a pqwallet account: the ML-DSA key signs the
+ * account's 25 address bytes under its own context, so a public key can only be registered by
+ * whoever holds the matching secret key, and the proof cannot be reused as a transaction signature.
+ */
+export function proofOfPossession(accountAddressBytes: Uint8Array, keys: PqKeys): Uint8Array {
+  if (accountAddressBytes.length !== 25) throw new Error("account address must be 25 bytes");
+  return ml_dsa44.sign(accountAddressBytes, keys.secretKey, { context: CONTEXT_POP });
+}
 export const NATIVE_TAG = 0x01;
 export const NATIVE_ENTRY_BYTES = 1 + PK_BYTES + SIG_BYTES; // 3733
 

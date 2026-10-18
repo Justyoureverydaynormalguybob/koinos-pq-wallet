@@ -62,8 +62,14 @@ agrees with the node.
   1 KOIN; the node accepted the 3,733-byte entry (rc used 537,122), block 8 mined it
   (compute 519,646, network 3,980 bytes), and the recipient's balance moved.
   Transaction `0x1220ca1d283f34b40a6784d03b3d4e407fbc5c2a0be1382e6372f84c7d9e3dffb5be`.
-- Not yet done from this browser: a pqwallet-route send on Harbinger (needs the seed of a funded
-  pqwallet account; the CLI run in koinos-pq `docs/testnet-run.txt` covers that route).
+- Account creation, end to end on the devnet from a fresh seed: the setup screen uploaded the
+  contract (block 9), registered the key with its proof of possession (block 10) and reported
+  "Account ready" after 4 seconds; 100 KOIN minted to the account; then a 1.5 KOIN send from it,
+  signed in the browser with the 2,420-byte pqwallet signature, was accepted (rc used 5,868,293)
+  and mined in block 12; balances 98.5 and 1.5 afterwards. A second run on the same seed took the
+  idempotent path ("upload already done, registration already done").
+- Not yet done from this browser: the same on Harbinger. It needs about 6.6 tKOIN of mana on the
+  one-time funding address; the flow is otherwise identical.
 
 ## What it does today
 
@@ -76,6 +82,11 @@ agrees with the node.
 - History from the public REST service where one exists.
 - Settings: add/remove pqwallet accounts, show the words again (passphrase required), auto-lock
   time, delete the wallet.
+- **Create a pqwallet account** on the current network, in the browser: shows the one-time
+  secp256k1 funding address (derived from the seed), waits for mana, uploads the bundled account
+  contract (hash-checked, call + transaction + upload authority locked to the contract from block
+  one), registers the ML-DSA-44 key with a proof of possession, checks the registered key is this
+  wallet's, and saves the account. Same steps as the CLI's `deploy --lock` and `register`.
 
 ## Not yet
 
@@ -84,7 +95,6 @@ agrees with the node.
   code and escapes everything it renders, which keeps the exposure small, but the clean fix is
   precompiled protobuf code (koilib's static modules or a hand-written serializer for the few
   messages a transfer needs).
-- Creating a pqwallet account from inside the wallet (upload + register); use the koinos-pq CLI.
 - Dapp connection (a Kondor-style provider).
 - The phone app (Flutter) with the same rules and the vendored C verifier over FFI.
 

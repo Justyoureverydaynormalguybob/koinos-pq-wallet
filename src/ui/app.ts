@@ -3,9 +3,19 @@ import QRCode from "qrcode";
 import { Chain, NETWORKS, formatKoin, parseKoin, isAddress, short, type HistoryItem, type Network } from "../core/chain";
 import { deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput, seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys } from "../core/keys";
 import type { AccountMode } from "../core/sign";
+import { bootstrapAddress, setupCosts, setupPqwalletAccount, type SetupResult, type SetupStatus } from "../core/setup";
 import { decryptVault, encryptVault, localVaultStore, MIN_PASSPHRASE_LENGTH, type AccountRecord, type EncryptedVault, type VaultData } from "../core/vault";
 
-type Screen = "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "sent" | "receive" | "history" | "settings" | "export";
+type Screen = "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "sent" | "receive" | "history" | "settings" | "export" | "setup";
+
+interface SetupState {
+  account: string;
+  mana: bigint | null;
+  status: SetupStatus | null;
+  result: SetupResult | null;
+  running: boolean;
+  timer: number | undefined;
+}
 
 interface Account extends AccountRecord {
   index: number;
@@ -32,6 +42,7 @@ interface State {
   sent: { txId: string; bytes: number; rcUsed: string; block: string | null; waiting: boolean } | null;
   exportWords: string | null;
   autolockMinutes: number;
+  setup: SetupState | null;
 }
 
 const PREF_NETWORK = "koinos-pq-wallet/network";
@@ -87,6 +98,7 @@ export class App {
       sent: null,
       exportWords: null,
       autolockMinutes: Number(pref.get(PREF_AUTOLOCK) ?? 10) || 10,
+      setup: null,
     };
     if (!NETWORKS[this.s.networkName]) this.s.networkName = "testnet";
     root.addEventListener("click", (e) => this.onClick(e));
@@ -136,6 +148,7 @@ export class App {
     this.s.balance = this.s.mana = null;
     this.s.history = null;
     this.s.sent = null;
+    this.endSetup();
     this.s.enc = localVaultStore.load();
     this.s.screen = this.s.enc ? "unlock" : "welcome";
     this.s.notice = notice ?? null;
@@ -199,6 +212,51 @@ export class App {
     const enc = await encryptVault(this.s.vault, pass);
     if (!localVaultStore.save(enc)) throw new Error("could not write to local storage");
     this.s.enc = enc;
+  }
+
+  // ---------- pqwallet account setup ----------
+  private startSetup() {
+    if (!this.s.keys) return;
+    this.endSetup();
+    const account = bootstrapAddress(this.s.keys);
+    this.s.setup = { account, mana: null, status: null, result: null, running: false, timer: undefined };
+    const poll = async () => {
+      const st = this.s.setup;
+      if (!st || st.running || st.result) return;
+      try {
+        st.mana = await this.chain().mana(st.account);
+      } catch {
+        st.mana = null;
+      }
+      if (this.s.screen === "setup") this.render();
+    };
+    void poll();
+    this.s.setup.timer = window.setInterval(() => void poll(), 6000);
+    this.go("setup");
+  }
+  private endSetup() {
+    if (this.s.setup?.timer) window.clearInterval(this.s.setup.timer);
+    this.s.setup = null;
+  }
+  private async runSetup(passphrase: string) {
+    const st = this.s.setup;
+    if (!st || !this.s.keys || !this.s.enc || !this.s.vault) throw new Error("locked");
+    await decryptVault(this.s.enc, passphrase); // confirm the passphrase before doing anything on chain
+    st.running = true;
+    const chain = this.chain();
+    const result = await setupPqwalletAccount(chain, this.s.keys, (status) => {
+      st.status = status;
+      this.render();
+    });
+    st.result = result;
+    if (!this.s.vault.accounts.some((a) => a.address === result.account)) {
+      this.s.vault.accounts.push({ label: `pqwallet account (${this.network.name})`, mode: "pqwallet", address: result.account });
+      const enc = await encryptVault(this.s.vault, passphrase);
+      if (!localVaultStore.save(enc)) throw new Error("the account is set up on chain but could not be saved in this browser; add it under Settings");
+      this.s.enc = enc;
+    }
+    this.s.accountIndex = this.accounts().findIndex((a) => a.address === result.account);
+    st.running = false;
   }
 
   // ---------- events ----------
@@ -313,6 +371,20 @@ export class App {
         this.go("export");
         break;
       }
+      case "setup":
+        this.startSetup();
+        break;
+      case "setup-cancel":
+        this.endSetup();
+        this.go("settings");
+        break;
+      case "setup-done":
+        this.endSetup();
+        void this.run("Loading", async () => {
+          this.s.screen = "home";
+          await this.refresh();
+        });
+        break;
       default:
         break;
     }
@@ -431,6 +503,15 @@ export class App {
         this.render();
         break;
       }
+      case "setup": {
+        if (!(form.querySelector("input[name=agree]") as HTMLInputElement | null)?.checked) {
+          this.s.error = "Tick the box to confirm you understand what will be uploaded.";
+          this.render();
+          return;
+        }
+        void this.run("Setting up the account", () => this.runSetup(field("passphrase")));
+        break;
+      }
       case "devnet-rpc": {
         pref.set(PREF_DEVNET_RPC, field("rpc").trim() || "http://127.0.0.1:8080/");
         this.s.notice = "Devnet RPC saved.";
@@ -459,6 +540,7 @@ export class App {
       history: () => this.vHistory(),
       settings: () => this.vSettings(),
       export: () => this.vExport(),
+      setup: () => this.vSetup(),
     }[s.screen]();
     this.root.innerHTML = `
       <header class="top">
@@ -475,6 +557,8 @@ export class App {
       const a = this.account();
       if (a) void QRCode.toCanvas(canvas, a.address, { width: 220, margin: 1 });
     }
+    const setupCanvas = this.root.querySelector<HTMLCanvasElement>("canvas#qr-setup");
+    if (setupCanvas && this.s.setup) void QRCode.toCanvas(setupCanvas, this.s.setup.account, { width: 180, margin: 1 });
     this.root.querySelector<HTMLElement>("[autofocus]")?.focus();
   }
 
@@ -631,6 +715,9 @@ export class App {
       <form data-form="add-account" class="inline">
         <input name="address" placeholder="1…" autocomplete="off" required><input name="label" placeholder="label (optional)" autocomplete="off"><button type="submit">Add</button>
       </form>
+      <h2>New pqwallet account on ${esc(this.network.name)}</h2>
+      <p class="muted">Turns this wallet's key into an account that works on ${esc(this.network.name)} today: fund a one-time address, the wallet uploads the account contract and registers the key, then the account answers only to this wallet.</p>
+      <div class="row"><button class="primary" data-action="setup">Create a pqwallet account</button></div>
       <h2>Backup</h2>
       <p class="muted">Show the 24 words again (asks for the passphrase).</p>
       <div class="row"><button data-action="export">Show recovery words</button></div>
@@ -640,6 +727,45 @@ export class App {
       <form data-form="devnet-rpc" class="inline"><input name="rpc" value="${esc(pref.get(PREF_DEVNET_RPC) ?? "http://127.0.0.1:8080/")}"><button type="submit">Save</button></form>
       <h2>Danger</h2>
       <div class="row"><button class="danger" data-action="delete-wallet">Delete wallet from this browser</button><button class="ghost" data-action="back-home">Back</button></div>`;
+  }
+
+  private vSetup() {
+    const st = this.s.setup;
+    if (!st) return `<p>Nothing to set up.</p>`;
+    const costs = setupCosts(this.network.name);
+    const needKoin = formatKoin(costs.requiredMana, 2);
+    const funded = st.mana !== null && st.mana >= costs.requiredMana;
+    const unit = this.network.name === "mainnet" ? "KOIN" : "tKOIN";
+    if (st.result) {
+      const r = st.result;
+      const link = (id: string | null) => (id && this.network.explorerTx ? `<a href="${esc(this.network.explorerTx(id))}" target="_blank" rel="noopener noreferrer">${esc(short(id))}</a>` : id ? `<code>${esc(short(id))}</code>` : "already done");
+      return `
+        <h1>Account ready</h1>
+        <p><code class="address">${esc(r.account)}</code></p>
+        <p>Upload ${link(r.uploadTx)}, registration ${link(r.registerTx)}. From now on only this wallet's ML-DSA-44 key can move it. The one-time secp256k1 key has no power over it any more.</p>
+        <p class="muted">Send ${unit} to this address and spend it from the account picker on the home screen.</p>
+        <div class="row"><button class="primary" data-action="setup-done">Go to the account</button></div>`;
+    }
+    if (st.running) {
+      return `
+        <h1>Setting up</h1>
+        <p><code class="address">${esc(st.account)}</code></p>
+        <p>${esc(st.status?.message ?? "Starting")}${st.status?.txId ? ` <code>${esc(short(st.status.txId))}</code>` : ""}</p>
+        <p class="muted">Two transactions, each waiting for a block. Keep this page open.${this.network.autoBlocks ? "" : " On the devnet, produce blocks with devnet/produce-block.mjs."}</p>`;
+    }
+    return `
+      <h1>Create a pqwallet account on ${esc(this.network.name)}</h1>
+      <p>Step 1. Send at least <strong>${esc(needKoin)} ${unit}</strong> to this one-time address. It pays the upload with its mana; the ${unit} stays yours in the new account.</p>
+      <canvas id="qr-setup" width="180" height="180" aria-label="QR code of the funding address"></canvas>
+      <code class="address">${esc(st.account)}</code>
+      <div class="row"><button data-action="copy" data-copy="${esc(st.account)}">Copy address</button></div>
+      <p class="${funded ? "notice" : "muted"}">Mana now: ${st.mana === null ? "checking…" : esc(formatKoin(st.mana, 2))} ${funded ? "(enough)" : `(needs ${esc(needKoin)})`}</p>
+      <p>Step 2. The wallet uploads the account contract to that address with every kind of authority locked to the contract from the first block, then registers this wallet's post-quantum key with a proof of possession. Both are signed here, in this page.</p>
+      <form data-form="setup">
+        <label><input type="checkbox" name="agree" style="width:auto;margin-right:8px"> I understand this uploads a contract to the address above on ${esc(this.network.name)} and that the account will then answer only to this wallet's 24 words.</label>
+        <label>Passphrase (to save the new account in this browser)<input name="passphrase" type="password" required></label>
+        <div class="row"><button class="primary" type="submit" ${funded ? "" : "disabled"}>Upload and register</button><button class="ghost" type="button" data-action="setup-cancel">Cancel</button></div>
+      </form>`;
   }
 
   private vExport() {
