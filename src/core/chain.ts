@@ -19,7 +19,9 @@ export const NETWORKS: Record<string, Network> = {
     name: "mainnet",
     rpc: ["https://api.koinos.io/jsonrpc"],
     rest: "https://api.koinos.io/v1",
-    koin: "15DJN4a8SgrbGhhGksSBASiSYjGnMU8dGL",
+    // KOIN moved to this contract; the original 15DJN4a8SgrbGhhGksSBASiSYjGnMU8dGL still answers name/symbol but
+    // every state read on it fails with "user code cannot access system space" (checked 2026-10-18).
+    koin: "19GYjDBVXU7keLbYvMLazsGQn3GTWHjHkK",
     explorerTx: (id) => `https://koinosblocks.com/tx/${id}`,
     autoBlocks: true,
   },
@@ -142,14 +144,50 @@ export class Chain {
     return String(r);
   }
 
+  /**
+   * Account history through the JSON-RPC gateway (account_history.get_account_history). The REST
+   * /v1/account/{a}/history carries the same data but sends no CORS headers, so a browser cannot read it.
+   */
   async history(address: string, limit = 20): Promise<HistoryItem[]> {
-    if (!this.net.rest) throw new Error("this network has no history service");
-    const url = `${this.net.rest}/account/${encodeURIComponent(address)}/history?limit=${limit}&ascending=false&irreversible=false&decode_operations=true&decode_events=true`;
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`history: HTTP ${r.status}`);
-    const rows = (await r.json()) as Array<Record<string, unknown>>;
-    return rows.map((row) => summarizeHistory(row, address));
+    const r = (await this.provider.call("account_history.get_account_history", { address, limit, ascending: false, irreversible: false })) as {
+      values?: Array<Record<string, unknown>>;
+    };
+    return (r.values ?? []).map((row) => summarizeHistory(row, address));
   }
+}
+
+// token transfer_event { bytes from = 1; bytes to = 2; uint64 value = 3 }, base64url on the JSON-RPC
+function decodeTransferEvent(data: string): { from?: string; to?: string; value?: string } {
+  const b = utils.decodeBase64url(data);
+  const out: { from?: string; to?: string; value?: string } = {};
+  let i = 0;
+  const varint = (): bigint => {
+    let v = 0n, s = 0n;
+    for (;;) {
+      const c = b[i++];
+      if (c === undefined) throw new Error("truncated event");
+      v |= BigInt(c & 0x7f) << s;
+      s += 7n;
+      if (c < 0x80) return v;
+    }
+  };
+  while (i < b.length) {
+    const tag = varint();
+    const field = Number(tag >> 3n), wire = Number(tag & 7n);
+    if (wire === 2) {
+      const len = Number(varint());
+      const bytes = b.subarray(i, i + len);
+      i += len;
+      if (field === 1) out.from = utils.encodeBase58(bytes);
+      if (field === 2) out.to = utils.encodeBase58(bytes);
+    } else if (wire === 0) {
+      const v = varint();
+      if (field === 3) out.value = v.toString();
+    } else {
+      break;
+    }
+  }
+  return out;
 }
 
 function summarizeHistory(row: Record<string, unknown>, me: string): HistoryItem {
@@ -160,13 +198,18 @@ function summarizeHistory(row: Record<string, unknown>, me: string): HistoryItem
   const events = trx?.receipt?.events ?? [];
   let summary = block ? "block produced" : "transaction";
   for (const ev of events) {
-    if (typeof ev.name === "string" && /(^|\.)transfer_event$/.test(ev.name)) { // mainnet "koinos.contracts.token.transfer_event", Harbinger "token.transfer_event"
-      const d = (ev.data ?? {}) as { from?: string; to?: string; value?: string };
-      const amount = d.value ? formatKoin(BigInt(d.value)) : "?";
-      if (d.to === me) summary = `received ${amount} from ${short(d.from)}`;
-      else if (d.from === me) summary = `sent ${amount} to ${short(d.to)}`;
-      break;
+    if (typeof ev.name !== "string" || !/(^|.)transfer_event$/.test(ev.name)) continue; // mainnet and Harbinger name it differently
+    let d: { from?: string; to?: string; value?: string } = {};
+    try {
+      d = typeof ev.data === "string" ? decodeTransferEvent(ev.data) : ((ev.data ?? {}) as typeof d);
+    } catch {
+      continue;
     }
+    const amount = d.value ? formatKoin(BigInt(d.value)) : "?";
+    if (d.to === me) summary = `received ${amount} from ${short(d.from)}`;
+    else if (d.from === me) summary = `sent ${amount} to ${short(d.to)}`;
+    else continue;
+    break;
   }
   if (trx?.receipt?.reverted) summary += " (reverted)";
   return { seq, txId, blockHeight: block?.header?.height ?? null, summary };

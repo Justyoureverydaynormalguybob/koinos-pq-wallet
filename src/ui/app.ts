@@ -702,7 +702,7 @@ export class App {
       <div class="row">
         <button class="primary" data-action="send">Send</button>
         <button data-action="receive">Receive</button>
-        <button data-action="history" ${this.network.rest ? "" : "disabled title='no history service on this network'"}>History</button>
+        <button data-action="history">History</button>
         <button data-action="settings">Settings</button>
         <button class="ghost" data-action="refresh">Refresh</button>
       </div>`;
