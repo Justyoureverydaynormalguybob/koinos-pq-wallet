@@ -1,0 +1,11 @@
+{
+  "name": "Koinos PQ Wallet",
+  "short_name": "PQ Wallet",
+  "description": "Post-quantum (ML-DSA-44) wallet for Koinos",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": []
+}

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.koinos.io https://testnet.koinosfoundation.org https://*.koinos.io https://*.koinosfoundation.org http://127.0.0.1:* http://localhost:* ws://localhost:* ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <title>Koinos PQ Wallet</title>
+  </head>
+  <body>
+    <noscript>This wallet runs entirely in your browser and needs JavaScript.</noscript>
+    <main id="app" aria-live="polite"></main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
