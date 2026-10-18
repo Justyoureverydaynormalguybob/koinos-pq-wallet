@@ -5,3 +5,5 @@ dist/
 *.local
 .vault-*
 coverage/
+dist-extension/
+.e2e-profile/

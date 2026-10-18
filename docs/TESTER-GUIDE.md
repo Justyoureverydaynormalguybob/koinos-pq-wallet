@@ -107,3 +107,12 @@ found this.
 - Why it is not slower: https://github.com/Justyoureverydaynormalguybob/koinos-pq/blob/master/docs/THROUGHPUT.md
 - The native version (the node verifies ML-DSA itself, no contract, cheaper): a koinos-chain branch
   with tests and a devnet run, waiting on review before a pull request.
+
+## Using it with dapps (browser extension)
+
+The same wallet also builds as a browser extension that gives web pages `window.kondor`, the
+interface Koinos dapps already use for Kondor. A dapp asks for a signature, a small wallet window
+opens, you read what is being signed, type your passphrase, and your post-quantum account signs.
+There is no store listing yet: build it with `npm run build:ext` and load `dist-extension/` through
+`chrome://extensions` (Developer mode, "Load unpacked"). The extension keeps its own wallet, so
+import your 24 words into it and add your pqwallet account address in Settings.

@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Koinos PQ Wallet",
+  "version": "0.2.0",
+  "description": "Post-quantum (ML-DSA-44) accounts for Koinos. Speaks the same window.kondor interface dapps already use.",
+  "permissions": ["storage", "windows", "tabs"],
+  "host_permissions": [],
+  "action": {
+    "default_title": "Koinos PQ Wallet",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inpage.js"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'"
+  }
+}

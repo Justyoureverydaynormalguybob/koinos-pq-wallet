@@ -82,3 +82,10 @@ ul.hist li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; p
 ul.hist small, ul.plain small { color: var(--muted); }
 .foot { text-align: center; color: var(--muted); font-size: 12px; padding: 16px 0; }
 img, video, canvas { max-width: 100%; }
+
+/* extension popup (popup.html): Chrome sizes the popup to the document, up to 800x600 */
+body.popup { width: 400px; }
+body.popup #app { padding: 12px; min-height: 440px; max-height: 548px; overflow-y: auto; }
+body.popup .top { padding-bottom: 8px; }
+.popbar { margin: 0; padding: 4px 12px 8px; text-align: right; font-size: 13px; }
+.plain { padding-left: 18px; margin: 8px 0; }

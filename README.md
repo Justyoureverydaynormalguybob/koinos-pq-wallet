@@ -1,19 +1,26 @@
 # koinos-pq-wallet
 
 A post-quantum wallet for Koinos. The account is controlled by an **ML-DSA-44** key (NIST FIPS 204)
-instead of secp256k1. This repo is the browser app plus the signing rules the phone app will mirror.
+instead of secp256k1. This repo is the browser app and the browser extension, both built on
+[koinos-pq-core](https://github.com/Justyoureverydaynormalguybob/koinos-pq-core), the signing rules
+the phone app will mirror.
 
-Status: first working version, testnet first, not audited. Companion to
+Status: working on mainnet, Harbinger and the devnet; not audited. Companion to
 [koinos-pq](https://github.com/Justyoureverydaynormalguybob/koinos-pq) (the account contract, the
 native node change, the measurements).
 
 ```
-src/core/keys.ts    24 words <-> 32-byte seed -> ML-DSA-44 key -> address      (the spec, keep it exact)
-src/core/sign.ts    the two signature formats: pqwallet (contract route) and native (koinos-chain branch)
-src/core/vault.ts   encrypted at rest: PBKDF2-SHA256 (600k) + AES-256-GCM, WebCrypto only
-src/core/chain.ts   balances, mana, build + sign + send a KOIN transfer, history
-src/ui/app.ts       the screens, no framework
-test/               vectors shared with the koinos-chain tests, signature formats, vault round trip
+koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
+                        account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)
+src/core/vault.ts       encrypted at rest: PBKDF2-SHA256 (600k) + AES-256-GCM, WebCrypto only
+src/ui/app.ts           the screens, no framework (web app and extension popup alike)
+src/ext/inpage.ts       window.kondor for web pages (kondor-js, MIT)
+src/ext/content.ts      relays page <-> extension messages
+src/ext/background.ts   answers provider calls; queues anything that needs a signature
+src/ext/approve.ts      the approval window: shows the request, takes the passphrase, signs, wipes
+extension/manifest.json Manifest V3
+scripts/                end-to-end test of the extension (devnet), CSP smoke test of the web app
+test/                   vectors shared with the koinos-chain tests, signature formats, vault round trip
 ```
 
 Want to try it? Read [docs/TESTER-GUIDE.md](docs/TESTER-GUIDE.md) first: what it costs, what to back up,
@@ -23,13 +30,54 @@ and the steps for a mainnet account.
 
 ```
 npm install
-npm test          # key vectors, signature formats, vault
-npm run dev       # http://localhost:5173
-npm run build     # static site in dist/, serve from anywhere
+npm test            # key vectors, signature formats, vault
+npm run dev         # web app at http://localhost:5173
+npm run build       # web app as a static site in dist/, serve from anywhere
+npm run build:ext   # browser extension in dist-extension/
 ```
+
+To use the extension: Chrome (or Brave, Edge) → `chrome://extensions` → Developer mode → "Load
+unpacked" → pick `dist-extension/`. The toolbar button opens the wallet; web pages get
+`window.kondor`.
 
 Everything happens in the browser. There is no server and nothing leaves the page except JSON-RPC
 calls to the node you pick (mainnet, Harbinger testnet, or a local devnet).
+
+## The browser extension
+
+Koinos dapps talk to a wallet through `window.kondor` (`getAccounts`, `getSigner(address)`,
+`getProvider(network)`), the interface of the Kondor extension, published as kondor-js under MIT.
+This extension provides the same object, so **existing dapps work with post-quantum accounts without
+a code change**: the dapp asks for a signature, the wallet window opens, you read what is being
+signed, type the passphrase, and the account signs with ML-DSA-44.
+
+How it is put together:
+
+- `inpage.js` runs in the page and is nothing but kondor-js: it posts messages to the window.
+- `content.js` relays those messages to the extension and the answers back. Provider calls
+  (`provider:*`) are answered by the background straight away. `getAccounts` and `signer:*` are
+  queued and a small window opens (`approve.html`).
+- The approval window shows the origin, the account, and a plain reading of each operation
+  (a KOIN transfer is shown as "Send 1 KOIN to …"; anything else as the contract and entry
+  point). It decrypts the vault with the passphrase **for that one request**, signs, wipes the key
+  material and closes. Nothing unlocked survives between requests, and the background holds no keys.
+- Results that are bytes (`signHash`) cross the extension boundary as base64url and are turned
+  back into a `Uint8Array` before the page sees them, as kondor-js expects.
+
+Permissions: `storage`, `tabs`, `windows`; no host permissions. The content script runs on
+http/https pages only to inject `inpage.js` and relay messages; it reads nothing from the page.
+Extension pages run under `script-src 'self'`, no eval.
+
+What a dapp gets from a post-quantum account:
+
+- `getAccounts()`: the native address and every pqwallet account in the vault.
+- `getSigner(address).signTransaction / sendTransaction / signHash / signMessage`: works. A pqwallet
+  account's signature is accepted on mainnet today; the native address needs nodes running the
+  koinos-chain `ml-dsa-44` branch.
+- `signMessage` returns a signature no public key can be recovered from. Dapps that verify a
+  message by recovering a secp256k1 key will not accept it; they need the account's registered key.
+- Not supported: `invokeSystemCall` (kondor-js passes a serializer object, which cannot cross a
+  message boundary; use `provider.call`), block production (`prepareBlock`, `signBlock`).
 
 ## The rules the phone app must match
 
@@ -78,6 +126,16 @@ agrees with the node.
   surfaced three fixes now in the code: the setup form was being wiped by the mana poll, the
   registration must wait out the mempool's hold on the upload's budget, and funding the native
   address by mistake needed a louder warning and a button in the right place.
+- **The extension, end to end on the devnet** (`npm run e2e:ext`, headless Chromium with the
+  extension loaded, 13 checks): a plain web page with no wallet library of its own called
+  `window.kondor.getAccounts()` (approved in the wallet window), read the head block through
+  `getProvider("devnet")`, had a request rejected and saw the error, got a 3,733-byte
+  `signMessage` result, and sent 1 KOIN with `getSigner(address).sendTransaction(...)`. The
+  wallet window showed "Send 1 KOIN to 1Hdt…", signed after the passphrase, the entry was the
+  3,733-byte native form, block 11 mined it (rc used 540,441) and the KOIN arrived.
+- **CSP without eval** (`npm run smoke:web`): the built web app under `script-src 'self'` unlocks
+  a throwaway vault on testnet and on mainnet and loads balance, mana and head block with no CSP
+  violation and no page error, at 360px wide with no horizontal scroll.
 
 ## Mainnet (2026-10-18)
 
@@ -102,7 +160,7 @@ chain, because a step can succeed while the mempool still reports a hold.
   mainnet, Harbinger or a devnet (RPC configurable).
 - Sends KOIN from either kind of account, checks the signature locally before broadcasting, shows
   the transaction id, waits for the block, links to the explorer.
-- History from the public REST service where one exists.
+- History through the JSON-RPC gateway's account history service.
 - Settings: add/remove pqwallet accounts, show the words again (passphrase required), auto-lock
   time, delete the wallet.
 - **Create a pqwallet account** on the current network, in the browser: shows the one-time
@@ -110,15 +168,17 @@ chain, because a step can succeed while the mempool still reports a hold.
   contract (hash-checked, call + transaction + upload authority locked to the contract from block
   one), registers the ML-DSA-44 key with a proof of possession, checks the registered key is this
   wallet's, and saves the account. Same steps as the CLI's `deploy --lock` and `register`.
+- **As an extension**: all of the above from the toolbar, plus `window.kondor` for dapps.
+
+## Why not fork Kondor
+
+Kondor 2 (the one on the Chrome Web Store) is not open source; the public joticajulian/kondor repo is
+the superseded 1.x. What is open is the protocol, kondor-js, so this extension speaks it instead.
 
 ## Not yet
 
-- A Content Security Policy without `'unsafe-eval'`: koilib's protobuf layer compiles encoders
-  with `new Function`, so the page allows eval for its own scripts. The page loads no third-party
-  code and escapes everything it renders, which keeps the exposure small, but the clean fix is
-  precompiled protobuf code (koilib's static modules or a hand-written serializer for the few
-  messages a transfer needs).
-- Dapp connection (a Kondor-style provider).
+- Icons and a store listing; Firefox (Manifest V3 there wants `background.scripts`).
+- Per-site permissions (remembering which origins may call `getAccounts` without asking each time).
 - The phone app (Flutter) with the same rules and the vendored C verifier over FFI.
 
 MIT.
