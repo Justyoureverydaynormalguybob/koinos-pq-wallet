@@ -73,6 +73,25 @@ export async function registeredPublicKey(chain: Chain, account: string): Promis
   return pk ? utils.decodeBase64url(pk) : null;
 }
 
+/**
+ * The mempool keeps a transaction's whole rc_limit on hold until its block is irreversible (about
+ * three minutes on mainnet and Harbinger) and the chain refuses a new transaction that would exceed
+ * mana minus that hold with "insufficient pending account resources". After the upload this is
+ * normal, so wait it out instead of failing.
+ */
+async function withManaHoldRetry<T>(fn: () => Promise<T>, onWait: (attempt: number) => void, tries = 36, delayMs = 10_000): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = (e as Error).message || String(e);
+      if (!/insufficient pending account resources/.test(msg) || attempt >= tries) throw e;
+      onWait(attempt);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 export async function setupPqwalletAccount(chain: Chain, keys: PqKeys, onStatus: (s: SetupStatus) => void): Promise<SetupResult> {
   const signer = bootstrapSigner(keys.seed);
   signer.provider = chain.provider;
@@ -90,13 +109,17 @@ export async function setupPqwalletAccount(chain: Chain, keys: PqKeys, onStatus:
     onStatus({ step: "uploading", message: "Uploading the account contract, locked from the start" });
     const bytecode = await loadPqwalletBytecode();
     const c = new Contract({ id: account, abi: pqwalletAbi, provider: chain.provider, signer, bytecode });
-    const { transaction } = await c.deploy({
-      abi: JSON.stringify(pqwalletAbi),
-      authorizesCallContract: true,
-      authorizesTransactionApplication: true,
-      authorizesUploadContract: true,
-      rcLimit: costs.deployRc.toString(),
-    });
+    const { transaction } = await withManaHoldRetry(
+      () =>
+        c.deploy({
+          abi: JSON.stringify(pqwalletAbi),
+          authorizesCallContract: true,
+          authorizesTransactionApplication: true,
+          authorizesUploadContract: true,
+          rcLimit: costs.deployRc.toString(),
+        }),
+      (n) => onStatus({ step: "uploading", message: `Waiting for the network to release an earlier mana hold (try ${n}, up to a few minutes)` }),
+    );
     uploadTx = transaction!.id!;
     onStatus({ step: "uploading", message: "Upload submitted, waiting for a block", txId: uploadTx });
     await chain.waitMined(uploadTx);
@@ -115,7 +138,10 @@ export async function setupPqwalletAccount(chain: Chain, keys: PqKeys, onStatus:
     const tx: Record<string, unknown> = { header: { payer: account, rc_limit: costs.registerRc.toString() }, operations: [operation], signatures: [] };
     await Transaction.prepareTransaction(tx as never, chain.provider, account);
     const signed = await signer.signTransaction(tx as never); // bootstrap signature: the contract's legacy fallback, valid only before a key is registered
-    await chain.provider.sendTransaction(signed);
+    await withManaHoldRetry(
+      () => chain.provider.sendTransaction(signed),
+      (n) => onStatus({ step: "registering", message: `Upload done. Waiting for the network to release the upload's mana hold before registering (try ${n}, up to a few minutes)` }),
+    );
     registerTx = (signed as { id: string }).id;
     onStatus({ step: "registering", message: "Registration submitted, waiting for a block", txId: registerTx });
     await chain.waitMined(registerTx);

@@ -228,11 +228,28 @@ export class App {
       } catch {
         st.mana = null;
       }
-      if (this.s.screen === "setup") this.render();
+      if (this.s.screen !== "setup" || this.s.setup !== st) return;
+      // Update in place: a full render would wipe the tick box and the passphrase being typed.
+      const manaEl = this.root.querySelector<HTMLElement>("#setup-mana");
+      const btn = this.root.querySelector<HTMLButtonElement>("#setup-go");
+      if (manaEl && btn) {
+        const costs = setupCosts(this.network.name);
+        const funded = st.mana !== null && st.mana >= costs.requiredMana;
+        manaEl.className = funded ? "notice" : "muted";
+        manaEl.textContent = this.manaLine(st.mana, costs.requiredMana);
+        btn.disabled = !funded;
+      } else {
+        this.render();
+      }
     };
     void poll();
     this.s.setup.timer = window.setInterval(() => void poll(), 6000);
     this.go("setup");
+  }
+  private manaLine(mana: bigint | null, required: bigint): string {
+    const need = formatKoin(required, 2);
+    if (mana === null) return `Mana now: checking… (needs ${need})`;
+    return `Mana now: ${formatKoin(mana, 2)} ${mana >= required ? "(enough)" : `(needs ${need})`}`;
   }
   private endSetup() {
     if (this.s.setup?.timer) window.clearInterval(this.s.setup.timer);
@@ -638,7 +655,9 @@ export class App {
 
   private nativeWarning(a: Account | null) {
     if (!a || a.mode !== "native" || this.network.name === "devnet") return "";
-    return `<p class="warn">This is a native post-quantum address. Today's ${esc(this.network.name)} nodes do not verify ML-DSA-44 yet; sends from it will be refused until the ml-dsa-44 change is adopted. Use a pqwallet account for ${esc(this.network.name)}.</p>`;
+    const hasPq = this.accounts().some((x) => x.mode === "pqwallet");
+    return `<p class="warn">This is a native post-quantum address. Today's ${esc(this.network.name)} nodes do not verify ML-DSA-44 yet: it can receive, but nothing sent here can be spent until the ml-dsa-44 change is adopted. ${hasPq ? `Pick your pqwallet account above to send on ${esc(this.network.name)}.` : `To spend on ${esc(this.network.name)}, create a pqwallet account and fund <em>that</em> address instead.`}</p>
+    ${hasPq ? "" : `<div class="row" style="margin-top:8px"><button class="primary" data-action="setup">Create a pqwallet account for ${esc(this.network.name)}</button></div>`}`;
   }
 
   private vHome() {
@@ -692,6 +711,7 @@ export class App {
     const a = this.account();
     return `
       <h1>Receive</h1>
+      ${this.nativeWarning(a)}
       <canvas id="qr" width="220" height="220" aria-label="QR code of the address"></canvas>
       <code class="address">${esc(a?.address ?? "")}</code>
       <div class="row"><button data-action="copy" data-copy="${esc(a?.address ?? "")}">Copy address</button><button class="ghost" data-action="back-home">Back</button></div>`;
@@ -759,12 +779,12 @@ export class App {
       <canvas id="qr-setup" width="180" height="180" aria-label="QR code of the funding address"></canvas>
       <code class="address">${esc(st.account)}</code>
       <div class="row"><button data-action="copy" data-copy="${esc(st.account)}">Copy address</button></div>
-      <p class="${funded ? "notice" : "muted"}">Mana now: ${st.mana === null ? "checking…" : esc(formatKoin(st.mana, 2))} ${funded ? "(enough)" : `(needs ${esc(needKoin)})`}</p>
+      <p id="setup-mana" class="${funded ? "notice" : "muted"}">${esc(this.manaLine(st.mana, costs.requiredMana))}</p>
       <p>Step 2. The wallet uploads the account contract to that address with every kind of authority locked to the contract from the first block, then registers this wallet's post-quantum key with a proof of possession. Both are signed here, in this page.</p>
       <form data-form="setup">
         <label><input type="checkbox" name="agree" style="width:auto;margin-right:8px"> I understand this uploads a contract to the address above on ${esc(this.network.name)} and that the account will then answer only to this wallet's 24 words.</label>
         <label>Passphrase (to save the new account in this browser)<input name="passphrase" type="password" required></label>
-        <div class="row"><button class="primary" type="submit" ${funded ? "" : "disabled"}>Upload and register</button><button class="ghost" type="button" data-action="setup-cancel">Cancel</button></div>
+        <div class="row"><button id="setup-go" class="primary" type="submit" ${funded ? "" : "disabled"}>Upload and register</button><button class="ghost" type="button" data-action="setup-cancel">Cancel</button></div>
       </form>`;
   }
 

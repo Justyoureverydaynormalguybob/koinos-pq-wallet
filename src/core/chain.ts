@@ -160,7 +160,7 @@ function summarizeHistory(row: Record<string, unknown>, me: string): HistoryItem
   const events = trx?.receipt?.events ?? [];
   let summary = block ? "block produced" : "transaction";
   for (const ev of events) {
-    if (ev.name === "koinos.contracts.token.transfer_event") {
+    if (typeof ev.name === "string" && /(^|\.)transfer_event$/.test(ev.name)) { // mainnet "koinos.contracts.token.transfer_event", Harbinger "token.transfer_event"
       const d = (ev.data ?? {}) as { from?: string; to?: string; value?: string };
       const amount = d.value ? formatKoin(BigInt(d.value)) : "?";
       if (d.to === me) summary = `received ${amount} from ${short(d.from)}`;
