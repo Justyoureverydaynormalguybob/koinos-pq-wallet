@@ -130,20 +130,24 @@ export async function setupPqwalletAccount(chain: Chain, keys: PqKeys, onStatus:
     onStatus({ step: "uploading", message: "Uploading the account contract, locked from the start" });
     const bytecode = await loadPqwalletBytecode();
     const c = new Contract({ id: account, abi: pqwalletAbi, provider: chain.provider, signer, bytecode });
-    const { transaction } = await withManaHoldRetry(
-      () =>
-        c.deploy({
+    const deployed = await withManaHoldRetry(
+      async () => {
+        if ((await pqwalletInfo(chain, account)).deployed) return null; // an earlier attempt landed meanwhile
+        return c.deploy({
           abi: JSON.stringify(pqwalletAbi),
           authorizesCallContract: true,
           authorizesTransactionApplication: true,
           authorizesUploadContract: true,
           rcLimit: costs.deployRc.toString(),
-        }),
+        });
+      },
       (n) => onStatus({ step: "uploading", message: `Waiting for the network to release an earlier mana hold (try ${n}, up to a few minutes)` }),
     );
-    uploadTx = transaction!.id!;
-    onStatus({ step: "uploading", message: "Upload submitted, waiting for a block", txId: uploadTx });
-    await chain.waitMined(uploadTx);
+    if (deployed) {
+      uploadTx = deployed.transaction!.id!;
+      onStatus({ step: "uploading", message: "Upload submitted, waiting for a block", txId: uploadTx });
+      await chain.waitMined(uploadTx);
+    }
     info = await pqwalletInfo(chain, account);
     if (!info.deployed) throw new Error("the contract was mined but cannot be read back; stop here and check the account");
   }
@@ -159,13 +163,23 @@ export async function setupPqwalletAccount(chain: Chain, keys: PqKeys, onStatus:
     const tx: Record<string, unknown> = { header: { payer: account, rc_limit: costs.registerRc.toString() }, operations: [operation], signatures: [] };
     await Transaction.prepareTransaction(tx as never, chain.provider, account);
     const signed = await signer.signTransaction(tx as never); // bootstrap signature: the contract's legacy fallback, valid only before a key is registered
+    let alreadyRegistered = false;
     await withManaHoldRetry(
-      () => chain.provider.sendTransaction(signed),
+      async () => {
+        // an earlier attempt may have gone through while the mempool was still reporting a hold
+        if ((await pqwalletInfo(chain, account)).keyRegistered) {
+          alreadyRegistered = true;
+          return;
+        }
+        await chain.provider.sendTransaction(signed);
+      },
       (n) => onStatus({ step: "registering", message: `Upload done. Waiting for the network to release the upload's mana hold before registering (try ${n}, up to a few minutes)` }),
     );
-    registerTx = (signed as { id: string }).id;
-    onStatus({ step: "registering", message: "Registration submitted, waiting for a block", txId: registerTx });
-    await chain.waitMined(registerTx);
+    if (!alreadyRegistered) {
+      registerTx = (signed as { id: string }).id;
+      onStatus({ step: "registering", message: "Registration submitted, waiting for a block", txId: registerTx });
+      await chain.waitMined(registerTx);
+    }
     info = await pqwalletInfo(chain, account);
     if (!info.keyRegistered) throw new Error("registration was mined but the contract reports no key; stop here and check the account");
   }
