@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-extension
+.e2e-profile
+.git
+*.zip
+*.local
+.env
+.env.local
+coverage

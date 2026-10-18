@@ -1,0 +1,26 @@
+server {
+    listen ${PORT};
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+    include /etc/nginx/headers.conf;
+
+    location = /health {
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # hashed build assets: cache for a year
+    location /assets/ {
+        include /etc/nginx/headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # pages and the version file: always revalidate, so a new deploy shows up on the next load
+    location / {
+        include /etc/nginx/headers.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri $uri/ =404;
+    }
+}
