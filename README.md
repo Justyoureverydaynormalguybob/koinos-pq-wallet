@@ -54,6 +54,17 @@ Test vectors: `test/keys.test.ts` derives the same two addresses as
 `koinos-chain/tests/include/koinos/tests/mldsa_vectors.hpp`, so a port that passes the same vectors
 agrees with the node.
 
+## Proven so far (2026-10-18)
+
+- Headless browser at phone width: create (24 words, confirmation, passphrase), lock and unlock,
+  QR, import of the chain test vector gives the expected address, balances and mana from Harbinger.
+- Native route, end to end: imported the devnet post-quantum account, picked the devnet, sent
+  1 KOIN; the node accepted the 3,733-byte entry (rc used 537,122), block 8 mined it
+  (compute 519,646, network 3,980 bytes), and the recipient's balance moved.
+  Transaction `0x1220ca1d283f34b40a6784d03b3d4e407fbc5c2a0be1382e6372f84c7d9e3dffb5be`.
+- Not yet done from this browser: a pqwallet-route send on Harbinger (needs the seed of a funded
+  pqwallet account; the CLI run in koinos-pq `docs/testnet-run.txt` covers that route).
+
 ## What it does today
 
 - Create a wallet (24 words, confirmation, passphrase) or import words / a CLI seed, optionally
