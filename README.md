@@ -187,10 +187,15 @@ chain, because a step can succeed while the mempool still reports a hold.
   wallet's, and saves the account. Same steps as the CLI's `deploy --lock` and `register`.
 - **As an extension**: all of the above from the toolbar, plus `window.kondor` for dapps.
 
-## Why not fork Kondor
+## Kondor, and why this is not a fork of it
 
-Kondor 2 (the one on the Chrome Web Store) is not open source; the public joticajulian/kondor repo is
-the superseded 1.x. What is open is the protocol, kondor-js, so this extension speaks it instead.
+The dapp side of this extension is `window.kondor`, the interface Julián González (joticajulian)
+created for the Kondor wallet and published as [kondor-js](https://github.com/joticajulian/kondor-js)
+under MIT. Kondor 2 (the one on the Chrome Web Store) is not open source and the public 1.x repo is
+superseded, so there was nothing to fork; what is open is the protocol, and this extension speaks it.
+Because of that clean, open interface, every dapp written for Kondor works with a post-quantum
+account without changing a line. Credit to Kondor's creators for that. Kondor remains the wallet for
+everyday secp256k1 accounts; this is an addition, not a replacement.
 
 ## Not yet
 
