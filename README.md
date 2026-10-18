@@ -76,6 +76,21 @@ agrees with the node.
   registration must wait out the mempool's hold on the upload's budget, and funding the native
   address by mistake needed a louder warning and a button in the right place.
 
+## Mainnet (2026-10-18)
+
+Account `1LQYsdpGuA3nwU5G1jANCnMWs3yYWfHwkQ`, created from the setup screen on mainnet: upload mined with
+4,488,437,429 rc used (44.9 KOIN of mana, budget 60.2), registration with 290,236,322 rc used (2.9 KOIN),
+contract reports `key_registered: true`. Then a 1 KOIN transfer to `1sXttKzfrzH8amTpfRHX8SXT7kynjNpMX`,
+signed in the browser with one 2,420-byte ML-DSA-44 signature and nothing else:
+transaction `0x12206b839a6fa5c9ac9a0a90ba4fc7a2cd3fb2786bc4927f3d59ab448a45d3726244`, block 40,318,335,
+mana used 316,332,332 (3.16 KOIN), compute 6,071,053 ticks, 2,668 bytes, succeeded. As far as we know the
+first transfer on Koinos mainnet authorised by a post-quantum signature.
+
+Lessons from that run, all fixed in the code: mainnet KOIN lives at `19GYjDBVXU7keLbYvMLazsGQn3GTWHjHkK`
+(the address in most examples is the superseded contract and refuses state reads); the REST history
+endpoint has no CORS, so history goes through the JSON-RPC gateway; and a retry loop must re-read the
+chain, because a step can succeed while the mempool still reports a hold.
+
 ## What it does today
 
 - Create a wallet (24 words, confirmation, passphrase) or import words / a CLI seed, optionally
