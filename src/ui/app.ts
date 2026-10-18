@@ -3,13 +3,15 @@ import QRCode from "qrcode";
 import { Chain, NETWORKS, formatKoin, parseKoin, isAddress, short, type HistoryItem, type Network } from "../core/chain";
 import { deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput, seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys } from "../core/keys";
 import type { AccountMode } from "../core/sign";
-import { bootstrapAddress, setupCosts, setupPqwalletAccount, type SetupResult, type SetupStatus } from "../core/setup";
+import { bootstrapAddress, estimateSetupCosts, setupPqwalletAccount, type SetupCosts, type SetupResult, type SetupStatus } from "../core/setup";
 import { decryptVault, encryptVault, localVaultStore, MIN_PASSPHRASE_LENGTH, type AccountRecord, type EncryptedVault, type VaultData } from "../core/vault";
 
 type Screen = "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "sent" | "receive" | "history" | "settings" | "export" | "setup";
 
 interface SetupState {
   account: string;
+  /** live-priced budgets, null until the node has answered */
+  costs: SetupCosts | null;
   mana: bigint | null;
   status: SetupStatus | null;
   result: SetupResult | null;
@@ -179,10 +181,18 @@ export class App {
     const a = this.account();
     if (!a) return;
     const chain = this.chain();
-    const [balance, mana, head] = await Promise.all([chain.balance(a.address), chain.mana(a.address), chain.headHeight()]);
-    this.s.balance = balance;
-    this.s.mana = mana;
-    this.s.head = head;
+    const [balance, mana, head] = await Promise.allSettled([chain.balance(a.address), chain.mana(a.address), chain.headHeight()]);
+    this.s.mana = mana.status === "fulfilled" ? mana.value : null;
+    this.s.head = head.status === "fulfilled" ? head.value : null;
+    if (balance.status === "fulfilled") {
+      this.s.balance = balance.value;
+    } else {
+      // A failed balance read must not take the whole screen down (seen on mainnet 2026-10-18: the public
+      // nodes answered "user code cannot access system space" to every KOIN balance_of while mana still read).
+      this.s.balance = null;
+      this.s.notice = `Balance unavailable from this ${this.network.name} node right now (${(balance.reason as Error).message?.slice(0, 120) ?? "error"}). Mana and head block are live.`;
+    }
+    if (mana.status === "rejected" && head.status === "rejected") throw new Error(`cannot reach the ${this.network.name} node: ${(head.reason as Error).message}`);
   }
   private async finishSetup(passphrase: string) {
     const seed = this.s.pendingSeed;
@@ -219,7 +229,22 @@ export class App {
     if (!this.s.keys) return;
     this.endSetup();
     const account = bootstrapAddress(this.s.keys);
-    this.s.setup = { account, mana: null, status: null, result: null, running: false, timer: undefined };
+    const st0: SetupState = { account, costs: null, mana: null, status: null, result: null, running: false, timer: undefined };
+    this.s.setup = st0;
+    // price the two transactions from the live resource market first; the button stays off until then
+    void estimateSetupCosts(this.chain())
+      .then((costs) => {
+        if (this.s.setup === st0) {
+          st0.costs = costs;
+          if (this.s.screen === "setup" && !st0.running) this.render();
+        }
+      })
+      .catch((e) => {
+        if (this.s.setup === st0) {
+          this.s.error = `Could not price the setup from the ${this.network.name} node: ${(e as Error).message}`;
+          if (this.s.screen === "setup") this.render();
+        }
+      });
     const poll = async () => {
       const st = this.s.setup;
       if (!st || st.running || st.result) return;
@@ -232,8 +257,8 @@ export class App {
       // Update in place: a full render would wipe the tick box and the passphrase being typed.
       const manaEl = this.root.querySelector<HTMLElement>("#setup-mana");
       const btn = this.root.querySelector<HTMLButtonElement>("#setup-go");
-      if (manaEl && btn) {
-        const costs = setupCosts(this.network.name);
+      if (manaEl && btn && st.costs) {
+        const costs = st.costs;
         const funded = st.mana !== null && st.mana >= costs.requiredMana;
         manaEl.className = funded ? "notice" : "muted";
         manaEl.textContent = this.manaLine(st.mana, costs.requiredMana);
@@ -752,9 +777,10 @@ export class App {
   private vSetup() {
     const st = this.s.setup;
     if (!st) return `<p>Nothing to set up.</p>`;
-    const costs = setupCosts(this.network.name);
-    const needKoin = formatKoin(costs.requiredMana, 2);
-    const funded = st.mana !== null && st.mana >= costs.requiredMana;
+    const costs = st.costs ?? { deployRc: 0n, registerRc: 0n, requiredMana: 0n };
+    const priced = st.costs !== null;
+    const needKoin = priced ? formatKoin(costs.requiredMana, 2) : "…";
+    const funded = priced && st.mana !== null && st.mana >= costs.requiredMana;
     const unit = this.network.name === "mainnet" ? "KOIN" : "tKOIN";
     if (st.result) {
       const r = st.result;
@@ -775,11 +801,11 @@ export class App {
     }
     return `
       <h1>Create a pqwallet account on ${esc(this.network.name)}</h1>
-      <p>Step 1. Send at least <strong>${esc(needKoin)} ${unit}</strong> to this one-time address. It pays the upload with its mana; the ${unit} stays yours in the new account.</p>
+      <p>Step 1. Send at least <strong>${esc(needKoin)} ${unit}</strong> to this one-time address${priced ? "" : " (pricing the upload from the live resource market…)"}. The upload is paid with the address's <em>mana</em>, which regenerates over five days; the ${unit} itself stays yours in the new account. Mainnet prices are many times Harbinger's, so the figure differs per network.</p>
       <canvas id="qr-setup" width="180" height="180" aria-label="QR code of the funding address"></canvas>
       <code class="address">${esc(st.account)}</code>
       <div class="row"><button data-action="copy" data-copy="${esc(st.account)}">Copy address</button></div>
-      <p id="setup-mana" class="${funded ? "notice" : "muted"}">${esc(this.manaLine(st.mana, costs.requiredMana))}</p>
+      <p id="setup-mana" class="${funded ? "notice" : "muted"}">${priced ? esc(this.manaLine(st.mana, costs.requiredMana)) : "Pricing the setup from the node…"}</p>
       <p>Step 2. The wallet uploads the account contract to that address with every kind of authority locked to the contract from the first block, then registers this wallet's post-quantum key with a proof of possession. Both are signed here, in this page.</p>
       <form data-form="setup">
         <label><input type="checkbox" name="agree" style="width:auto;margin-right:8px"> I understand this uploads a contract to the address above on ${esc(this.network.name)} and that the account will then answer only to this wallet's 24 words.</label>

@@ -34,16 +34,37 @@ export interface SetupCosts {
 
 const ONE_KOIN = 100_000_000n;
 
+export interface ResourcePrices {
+  /** rc per byte of state written */
+  disk: bigint;
+  /** rc per byte of transaction */
+  network: bigint;
+  /** rc per compute tick */
+  compute: bigint;
+}
+
 /**
- * rc limits with headroom. Upload: 470 M on Harbinger. Register: the contract verifies the proof of
- * possession in interpreted WASM (about 6 M ticks, like a pqwallet transfer at 6.1 M), which is about
- * 40 M rc on Harbinger. The devnet charges 1 rc per tick and caps every account at 10 M, and its mempool
- * keeps each transaction's rc_limit reserved until the block is irreversible, so both must fit under 10 M.
+ * What the two transactions use, from the Harbinger run (upload: 62,266 B bytecode + 3 KB ABI stored
+ * and carried; register: the 1,312 B key stored, a 4 KB transaction, about 6.5 M ticks to verify the
+ * proof of possession in interpreted WASM). Priced from the live resource market with a 25% margin:
+ * the model gives 5.45 / 0.54 tKOIN where Harbinger charged 5.07 / 0.35.
  */
-export function setupCosts(networkName: string): SetupCosts {
-  if (networkName === "devnet") return { deployRc: 1_500_000n, registerRc: 8_000_000n, requiredMana: 9_500_000n };
-  const deployRc = 6n * ONE_KOIN, registerRc = 60_000_000n;
+const UPLOAD_USAGE = { disk: 66_000n, network: 66_500n, compute: 2_500_000n };
+const REGISTER_USAGE = { disk: 1_600n, network: 4_000n, compute: 6_500_000n };
+
+export function setupCostsFromPrices(p: ResourcePrices): SetupCosts {
+  const price = (u: { disk: bigint; network: bigint; compute: bigint }) => ((u.disk * p.disk + u.network * p.network + u.compute * p.compute) * 125n) / 100n;
+  const deployRc = price(UPLOAD_USAGE), registerRc = price(REGISTER_USAGE);
   return { deployRc, registerRc, requiredMana: deployRc + registerRc };
+}
+
+/** Live prices from the node's resource market (chain.get_resource_limits). */
+export async function estimateSetupCosts(chain: Chain): Promise<SetupCosts> {
+  const r = (await chain.provider.call("chain.get_resource_limits", {})) as { resource_limit_data?: Record<string, string> };
+  const l = r.resource_limit_data ?? {};
+  const prices: ResourcePrices = { disk: BigInt(l.disk_storage_cost ?? "0"), network: BigInt(l.network_bandwidth_cost ?? "0"), compute: BigInt(l.compute_bandwidth_cost ?? "0") };
+  if (prices.disk <= 0n || prices.network <= 0n || prices.compute <= 0n) throw new Error("could not read resource prices from the node");
+  return setupCostsFromPrices(prices);
 }
 
 export function bootstrapAddress(keys: PqKeys): string {
@@ -96,7 +117,7 @@ export async function setupPqwalletAccount(chain: Chain, keys: PqKeys, onStatus:
   const signer = bootstrapSigner(keys.seed);
   signer.provider = chain.provider;
   const account = signer.getAddress();
-  const costs = setupCosts(chain.net.name);
+  const costs = await estimateSetupCosts(chain);
   let uploadTx: string | null = null;
   let registerTx: string | null = null;
 
