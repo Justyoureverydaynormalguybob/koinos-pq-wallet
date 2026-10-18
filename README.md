@@ -167,9 +167,13 @@ agrees with the node.
   transfer with duplicated fields, a flood of requests). All nine succeed against 0.2.1 and all are
   stopped in 0.3.0; 23 of 23 checks pass.
 - **Hands-free activation** (`npm run e2e:activation`): a brand-new wallet on the devnet activated
-  its account with no clicks in 4 seconds, showed it as "Your account" and sent 1 KOIN from it with
-  a 2,420-byte signature. On Harbinger and mainnet an unfunded new wallet waits and submits
-  nothing, asking for 7.49 tKOIN and 65.82 KOIN respectively (smoke test, live prices).
+  its account with no clicks, showed it as "Your account" and sent 1 KOIN from it with a 2,420-byte
+  signature. On Harbinger and mainnet an unfunded new wallet waits and submits nothing, asking for
+  7.49 tKOIN and 65.82 KOIN respectively (smoke test, live prices).
+- **Activation in one transaction, 0.3.1**: the install and the key registration travel together,
+  so there is no moment when the contract is installed but the throwaway key still rules the
+  account. On the devnet it took 1 second; the chain shows one transaction carrying both
+  operations, the account's nonce at 1, and the throwaway key refused afterwards.
 
 ## Mainnet (2026-10-18)
 
@@ -191,7 +195,7 @@ chain, because a step can succeed while the mempool still reports a hold.
 - Create a wallet (24 words, confirmation, passphrase) or import words / a CLI seed.
 - **Activates the account by itself.** A new wallet goes straight to "Activate your account": one
   address (the seed's own account, so it is the same on every network) and the amount to send,
-  priced from the live resource market. Once the address holds enough mana the wallet installs the
+  priced from the live resource market. Once the address holds enough mana the wallet, in one transaction, installs the
   bundled contract (hash-checked, call + transaction + upload authority locked to the contract from
   block one), registers the ML-DSA-44 key with a proof of possession and checks the registered key
   is this wallet's. Same steps as the CLI's `deploy --lock` and `register`. Interrupted activations
@@ -219,8 +223,6 @@ everyday secp256k1 accounts; this is an addition, not a replacement.
 
 - A store listing; Firefox (Manifest V3 there wants `background.scripts`).
 - Per-site permissions (remembering which origins may call `getAccounts` without asking each time).
-- Activation in one transaction (install and register together), which would halve the wait and
-  close the minutes in which the bootstrap key still controls the account (see `docs/SECURITY.md`).
 - The phone app (Flutter) with the same rules and the vendored C verifier over FFI.
 
 MIT.

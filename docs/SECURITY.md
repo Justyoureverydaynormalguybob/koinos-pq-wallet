@@ -3,7 +3,8 @@
 Three independent reviews before opening the wallet to testers: the browser extension, the wallet
 core and web app, and the account contract (koinos-pq). This is not a third-party audit. Everything
 below marked fixed is in wallet 0.3.0 and koinos-pq-core 889c63f, and each attack is replayed by an
-automated test that fails against the previous release (0.2.1) and passes now.
+automated test that fails against the previous release (0.2.1) and passes now. The activation window
+(last row of the table) was closed afterwards, in wallet 0.3.1 and koinos-pq-core 0b2a251.
 
 ## The short version
 
@@ -32,6 +33,7 @@ automated test that fails against the previous release (0.2.1) and passes now.
 | Web app: re-saving settings took the passphrase through an unmasked browser prompt; "Show the words again" made new words; no auto-lock while the words were on screen; one unescaped field (low) | A passphrase form; the same words; auto-lock covers the creation screens; escaped |
 | Amounts above 2^64−1 would wrap on the chain (info) | Refused |
 | Site headers: no CSP header, `/health` without the security headers (info) | CSP header with `frame-ancestors 'none'`; headers on every path |
+| Activation took two transactions. Between them (one block on a quiet network, a few minutes on mainnet because of the mempool's mana hold) the contract was installed while the bootstrap key, whose public key the first transaction revealed, still controlled the account (low) | One transaction installs the contract and registers the key: both land in the same block or neither does. Checked on the devnet: one transaction carrying both operations, the account's nonce at 1, the bootstrap key refused afterwards (`npm run devnet:activation` in koinos-pq-core) |
 
 ## Known limits (by design, or for a later contract version)
 
@@ -45,10 +47,6 @@ automated test that fails against the previous release (0.2.1) and passes now.
 - **Re-upload by the key holder** can switch the authority flags off, which would hand the account
   back to the quantum-vulnerable bootstrap key. Only the holder of the ML-DSA key can do it; the
   wallet never does and the extension refuses uploads.
-- **Activation window.** Between installing the contract and registering the key (one block apart
-  on a quiet network, a few minutes on mainnet because of the mempool's mana hold), the bootstrap
-  key still controls the account and its public key is on chain. A quantum attacker would need to
-  break it in those minutes. Doing both in one transaction would close this; planned.
 - **Vault strength** is PBKDF2-SHA256 at 600,000 iterations with a 10-character minimum, the
   strongest WebCrypto offers. A weak passphrase on a copied browser profile can be guessed offline.
 - **Strings cannot be wiped.** The seed's hex form and the passphrase live as JavaScript strings

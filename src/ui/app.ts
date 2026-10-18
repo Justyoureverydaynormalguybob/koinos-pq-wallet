@@ -899,7 +899,7 @@ export class App {
       return `
         <h1>Account ready</h1>
         <p><code class="address">${esc(r.account)}</code></p>
-        <p>Contract installed ${link(r.uploadTx)}, key registered ${link(r.registerTx)}. From now on only this wallet's post-quantum key can move this account.</p>
+        <p>${r.uploadTx && r.uploadTx === r.registerTx ? `Contract installed and key registered in one transaction, ${link(r.uploadTx)}.` : `Contract installed ${link(r.uploadTx)}, key registered ${link(r.registerTx)}.`} From now on only this wallet's post-quantum key can move this account.</p>
         <div class="row"><button class="primary" data-action="setup-done">Go to the account</button></div>`;
     }
     if (st.running) {
@@ -907,7 +907,7 @@ export class App {
         <h1>Activating your account</h1>
         <p><code class="address">${esc(st.account)}</code></p>
         <p>${esc(st.status?.message ?? "Starting")}${st.status?.txId ? ` <code>${esc(short(st.status.txId))}</code>` : ""}</p>
-        <p class="muted">Two transactions, each waiting for a block; a few minutes on mainnet. Keep this page open.${this.network.autoBlocks ? "" : " On the devnet, produce blocks with devnet/produce-block.mjs."}</p>`;
+        <p class="muted">One transaction, waiting for its block; usually under a minute. Keep this page open.${this.network.autoBlocks ? "" : " On the devnet, produce blocks with devnet/produce-block.mjs."}</p>`;
     }
     const need = this.needed(st);
     const funded = need !== null && st.mana !== null && st.mana >= need;
@@ -919,7 +919,7 @@ export class App {
       <div class="row"><button data-action="copy" data-copy="${esc(st.account)}">Copy address</button></div>
       <p id="setup-mana" class="${funded ? "notice" : "muted"}">${need !== null ? esc(this.manaLine(st.mana, need)) : "Pricing the activation from the node…"}</p>
       ${st.failed ? `<p class="error">Activation stopped: ${esc(st.failed)}</p><div class="row"><button class="primary" data-action="setup-retry">Try again</button></div>` : ""}
-      <p class="muted">As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, in two transactions signed here in this page. From then on only your 24 words can move the account. The ${unit} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.</p>
+      <p class="muted">As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here in this page. From then on only your 24 words can move the account. The ${unit} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.</p>
       <div class="row"><button class="ghost" data-action="setup-cancel">Settings</button></div>`;
   }
 

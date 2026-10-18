@@ -1,6 +1,6 @@
 # Make yourself a post-quantum Koinos account (mainnet tester guide)
 
-*Updated 2026-10-18 for wallet 0.3.0. Plain steps, about 10 minutes. Read "Before you start" first; it's the part that matters.*
+*Updated 2026-10-18 for wallet 0.3.1. Plain steps, about 10 minutes. Read "Before you start" first; it's the part that matters.*
 
 ## What you end up with
 
@@ -62,9 +62,7 @@ post-quantum-signed transfer is transaction
 
 5. **Send KOIN to it from Kondor**, at least the amount shown. Then wait with the tab open. Within
    a few seconds the wallet sees the mana and **activates the account by itself**: it installs the
-   contract and registers your key, two transactions, each waiting for a block. If it says it is
-   waiting for the network to release the install's mana hold, that is normal: the network keeps
-   that budget on hold for about three minutes after the install. Total: one to four minutes.
+   contract and registers your key together, in one transaction. Usually under a minute.
 
 6. **"Account ready".** Click **Go to the account**. The home screen shows "Your account" with its
    KOIN balance. You're done. The account answers only to your 24 words from here on.

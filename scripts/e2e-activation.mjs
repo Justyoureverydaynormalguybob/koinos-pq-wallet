@@ -81,8 +81,11 @@ try {
   await page.waitForFunction(() => /Account ready/.test(document.querySelector("h1")?.textContent ?? ""), null, { timeout: 240_000 });
   check("the wallet activated the account by itself, no clicks", true, `${Math.round((Date.now() - t0) / 1000)} s`);
 
+  const ready = (await page.innerText(".card")).replace(/\s+/g, " ");
+  check("the ready screen reports a single activation transaction", /in one transaction/.test(ready), ready.slice(0, 160));
   const found = await detectAccount(chain, keys);
-  check("on chain: contract installed with this wallet's key registered", found === account);
+  const nonce = Number(await chain.provider.getNonce(account));
+  check("on chain: contract installed, this wallet's key registered, in one transaction (nonce 1)", found === account && nonce === 1, `nonce ${nonce}`);
 
   await page.click('[data-action="setup-done"]');
   await page.waitForFunction(() => /Your account/.test(document.querySelector(".hero .label")?.textContent ?? ""), null, { timeout: 30_000 });
