@@ -43,6 +43,19 @@ Want to try it? Read [docs/TESTER-GUIDE.md](docs/TESTER-GUIDE.md) first: what it
 and the steps for a mainnet account. For the extension: [docs/EXTENSION-TESTING.md](docs/EXTENSION-TESTING.md),
 with the zip on the [releases page](https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/releases).
 
+## Android and iOS
+
+The same wallet packaged as native apps with Capacitor (`capacitor.config.ts`, `android/`, `ios/`): no
+second code base, so the vault, signing, duress mode and recipient checks are the reviewed web code
+byte for byte, running in the system WebView against the same nodes. Every push builds them in CI
+(`.github/workflows/mobile.yml`): a release APK signed with the project key (artifact `android-apk`,
+with its sha256) and an unsigned iOS app (artifact `ios-app-unsigned`; installing on an iPhone needs an
+Apple developer account to sign it). Locally: `npm run build && npx cap sync`, then open `android/` in
+Android Studio or `ios/App/App.xcworkspace` in Xcode. The Android signing key lives outside the repo;
+its SHA-256 fingerprint is `DC:7D:CE:C9:60:76:30:58:F8:5B:FE:1A:DD:87:6B:72:46:39:18:E8:67:0A:21:96:F6:4A:A9:3A:24:66:63:FF`.
+Android keeps the encrypted vault in the app's WebView storage; uninstalling the app deletes it, so the
+24 words remain the only backup.
+
 ## Run it
 
 ```

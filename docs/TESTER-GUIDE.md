@@ -121,3 +121,10 @@ your 24 words into it and it finds your account.
 - **Watch an address** (Settings) to keep an eye on an account without its key.
 - The tab now locks 60 s after you switch away from it, and the clipboard clears 60 s after you copy an
   address. Both can be turned off in Settings → Locking and clipboard.
+
+## Android app
+
+Download `koinos-pq-wallet-<version>.apk` from the latest `mobile` workflow run (Actions tab, artifact
+`android-apk`), check its sha256 against the `.sha256` file next to it, and install it (Android asks you
+to allow installs from this source). It is the web wallet in an app: same screens, same rules. The
+vault lives inside the app; uninstalling deletes it, and the 24 words are the only way back.
