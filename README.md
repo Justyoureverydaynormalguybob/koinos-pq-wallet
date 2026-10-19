@@ -43,6 +43,11 @@ Want to try it? Read [docs/TESTER-GUIDE.md](docs/TESTER-GUIDE.md) first: what it
 and the steps for a mainnet account. For the extension: [docs/EXTENSION-TESTING.md](docs/EXTENSION-TESTING.md),
 with the zip on the [releases page](https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/releases).
 
+## Where this is going
+
+`docs/PLAN-NATIVE-WALLET.md`: the researched plan to take this to Konio parity and beyond (Capacitor 8,
+tokens, QR, biometrics, in-app dapp browser, NFTs, languages), with the standards, plugins and sources.
+
 ## Android and iOS
 
 The same wallet packaged as native apps with Capacitor (`capacitor.config.ts`, `android/`, `ios/`): no
