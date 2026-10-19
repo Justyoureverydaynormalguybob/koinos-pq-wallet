@@ -128,3 +128,10 @@ Download `koinos-pq-wallet-<version>.apk` from the latest `mobile` workflow run 
 `android-apk`), check its sha256 against the `.sha256` file next to it, and install it (Android asks you
 to allow installs from this source). It is the web wallet in an app: same screens, same rules. The
 vault lives inside the app; uninstalling deletes it, and the 24 words are the only way back.
+
+## If activation says "registered to a different post-quantum key"
+
+Update to 0.4.1 or later (web: reload; Android: install the new APK). Wallets made with 0.3.0 to 0.4.0
+and activated in the same session all used one shared address by mistake (see `docs/SECURITY.md`,
+incident 2026-10-19). After updating, create or import again: your account address will be your own.
+If you were the first to register on the shared address, your wallet now shows it automatically.

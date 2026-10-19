@@ -124,3 +124,37 @@ Tests: `test/vault.test.ts` (slots, padding, filler, decoy targeting, legacy upg
 screens in jsdom: create, duress setup and both unlocks, watch-only, recipient challenges,
 lock-on-hide, clipboard wipe. The browser end-to-end suites (`e2e:ext`, `smoke:web`) still need a
 real browser and were not run from the phone session that wrote this.
+
+
+## Incident 2026-10-19: in-session wallets all derived the same account address (fixed in 0.4.1)
+
+**What happened.** From 0.3.0 (2026-10-18, 21:43) to 0.4.0, `finishSetup` wiped the seed buffer right
+after `deriveKeys(seed)`, and `deriveKeys` (koinos-pq-core) kept a reference to that same buffer in
+`keys.seed`. Any wallet that was created or imported and then activated *in the same session* derived
+its account address with `bootstrapSigner(keys.seed)` from 32 zero bytes. That address is the same for
+everyone: `14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR`. After a lock and unlock the seed was re-read from the
+vault and the address was correct, which is why the first mainnet account (`1LQYsd…`, created before
+0.3.0) and later unlocks were fine while a fresh create-and-activate was not.
+
+**Effect.** One wallet registered its ML-DSA-44 key on that shared address on mainnet (contract
+installed and key registered on 2026-10-18, funded with 61 KOIN, one transfer made). Every later
+wallet that activated in-session reached the same address and was correctly refused: "registered to a
+different post-quantum key". No funds were lost and nobody but the first registrant can spend from
+that address, because the contract answers only to the registered key. Had a second person *funded*
+the address before noticing, they would have paid into the first registrant's account; the chain
+history shows only the one funding transaction.
+
+**Fix.** koinos-pq-core `83fc6ac`: `deriveKeys` returns its own copy of the seed. Wallet 0.4.1: the
+buffer is wiped only when the keys do not share it, `detectAccount` also looks at the legacy address
+and claims it when its registered key is this wallet's (so the first registrant's wallet shows the
+account and its 61 KOIN again automatically), and a jsdom regression test asserts the address shown
+after creation is the seed's own and not the zero-seed one.
+
+**What the first registrant should do.** Unlock the wallet whose Settings → Advanced "Native
+post-quantum address" reads `18JGRZQ9HgQZrf4n7xUZKh6EiCZw4oL8et` in 0.4.1 or later; the account appears
+as "Your account". Its 24 words are the only backup, as always.
+
+**Lesson.** A test compared the address the UI showed with the one derived independently from the
+stored seed only after the bug; it should have existed from the first activation flow. The devnet
+end-to-end run did not catch it because the zero-seed account is perfectly functional: it only
+collides.

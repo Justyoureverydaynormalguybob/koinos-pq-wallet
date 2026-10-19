@@ -1,5 +1,12 @@
 // Accounts a wallet can show, and the subset it can sign for; shared by the web app and the extension.
 import { bootstrapAddress, pqwalletInfo, registeredPublicKey, type Chain, type PqKeys } from "koinos-pq-core";
+
+/**
+ * Wallets built before 2026-10-19 derived their account address from a wiped (all-zero) seed when the
+ * account was activated in the session that created the wallet, so they all used this address. The
+ * contract there belongs to whichever key registered first; a wallet whose key that is must still find it.
+ */
+export const LEGACY_COLLISION_ADDRESS = "14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR";
 import type { WalletMode } from "./vault";
 
 /**
@@ -26,11 +33,13 @@ export const canSign = (a: { mode: WalletMode }): boolean => a.mode !== "watch";
  */
 export async function detectAccount(chain: Chain, keys: PqKeys): Promise<string | null> {
   await chain.headHeight();
-  const address = bootstrapAddress(keys);
-  const info = await pqwalletInfo(chain, address);
-  if (!info.deployed || !info.keyRegistered) return null;
-  const pk = await registeredPublicKey(chain, address);
-  return pk && pk.length === keys.publicKey.length && pk.every((b, i) => b === keys.publicKey[i]) ? address : null;
+  for (const address of [bootstrapAddress(keys), LEGACY_COLLISION_ADDRESS]) {
+    const info = await pqwalletInfo(chain, address);
+    if (!info.deployed || !info.keyRegistered) continue;
+    const pk = await registeredPublicKey(chain, address);
+    if (pk && pk.length === keys.publicKey.length && pk.every((b, i) => b === keys.publicKey[i])) return address;
+  }
+  return null;
 }
 
 /**

@@ -9,6 +9,8 @@ if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { va
 vi.mock("qrcode", () => ({ default: { toCanvas: async () => undefined } }));
 const { App } = await import("../src/ui/app");
 const { localVaultStore, openVault, toFile, PBKDF2_ITERATIONS } = await import("../src/core/vault");
+const { bootstrapAddress, deriveKeys, hexToBytes } = await import("koinos-pq-core");
+const ZERO_SEED_ADDRESS = "14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR";
 
 const MAIN = "main passphrase 1234";
 const DURESS = "duress passphrase 5678";
@@ -90,6 +92,19 @@ describe("wallet app (jsdom)", () => {
     expect(text(root)).toMatch(/wrong passphrase/);
     await submit(root, "unlock", { passphrase: MAIN });
     expect(h1(root)).not.toBe("Unlock");
+  }, 60_000);
+
+  it("regression: the account address offered right after creation is the seed's own, not the all-zero seed's", async () => {
+    localStorage.clear();
+    const { root } = mount();
+    await createWallet(root);
+    // offline, the app lands on the activation screen, which shows the account address it will activate
+    const shown = root.querySelector("code.address")?.textContent?.trim();
+    const stored = localVaultStore.load()!;
+    const opened = await openVault(await toFile(stored), MAIN);
+    const expected = bootstrapAddress(deriveKeys(hexToBytes(opened.data.seedHex)));
+    expect(shown).toBe(expected);
+    expect(shown).not.toBe(ZERO_SEED_ADDRESS);
   }, 60_000);
 
   it("duress: a second passphrase opens a different wallet; the main slot is untouched; the decoy shows no trace", async () => {

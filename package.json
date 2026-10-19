@@ -1,6 +1,6 @@
 {
   "name": "koinos-pq-wallet",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Post-quantum (ML-DSA-44) wallet for Koinos: web app and browser extension (window.kondor compatible) on one signing core",
   "type": "module",
@@ -24,7 +24,7 @@
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
     "koilib": "^9.4.1",
-    "koinos-pq-core": "git+https://github.com/Justyoureverydaynormalguybob/koinos-pq-core.git#0b2a251",
+    "koinos-pq-core": "github:Justyoureverydaynormalguybob/koinos-pq-core#83fc6ac",
     "kondor-js": "^1.3.0",
     "qrcode": "^1.5.4"
   },

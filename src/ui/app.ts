@@ -316,7 +316,10 @@ export class App {
     this.s.vault = vault;
     this.s.keys = deriveKeys(seed);
     this.s.book = new AddressBook(addressBookNamespace(seed));
-    wipe(seed);
+    // Wipe our buffer only if the keys hold their own copy (koinos-pq-core >= 2026-10-19). Before that fix the
+    // keys shared it, and wiping zeroed keys.seed: every in-session wallet then derived the account address
+    // of an all-zero seed and collided on 14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR.
+    if (this.s.keys.seed !== seed) wipe(seed);
     this.s.pendingSeed = null;
     this.s.pendingMnemonic = null;
     this.s.pendingAccounts = [];
