@@ -8,3 +8,14 @@ coverage/
 dist-extension/
 .e2e-profile/
 .e2e-old-ext/
+android/app/build/
+android/.gradle/
+android/build/
+android/app/release/
+android/local.properties
+ios/App/Pods/
+ios/App/App/public/
+ios/App/build/
+android/app/src/main/assets/public/
+*.keystore
+signing.env

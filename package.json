@@ -16,6 +16,11 @@
     "e2e:activation": "node --experimental-strip-types scripts/e2e-activation.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^6.2.2",
+    "@capacitor/app": "^6.0.3",
+    "@capacitor/cli": "^6.2.2",
+    "@capacitor/core": "^6.2.2",
+    "@capacitor/ios": "^6.2.2",
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
     "koilib": "^9.4.1",

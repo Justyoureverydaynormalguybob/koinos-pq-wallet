@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Koinos PQ Wallet</string>
+    <string name="title_activity_main">Koinos PQ Wallet</string>
+    <string name="package_name">ie.rawbyte.koinospq</string>
+    <string name="custom_url_scheme">ie.rawbyte.koinospq</string>
+</resources>
