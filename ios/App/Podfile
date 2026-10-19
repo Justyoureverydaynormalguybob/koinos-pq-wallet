@@ -15,6 +15,7 @@ def capacitor_pods
   pod 'AparajitaCapacitorSecureStorage', :path => '../../node_modules/@aparajita/capacitor-secure-storage'
   pod 'CapacitorApp', :path => '../../node_modules/@capacitor/app'
   pod 'CapacitorBarcodeScanner', :path => '../../node_modules/@capacitor/barcode-scanner'
+  pod 'PqBrowser', :path => '../../plugins/pq-browser'
 end
 
 target 'App' do

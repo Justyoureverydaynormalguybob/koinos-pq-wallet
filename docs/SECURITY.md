@@ -189,3 +189,53 @@ with root on an unlocked device can read it and the blob, which is the same trus
 data. Biometrics are a convenience over the passphrase, not a second factor; the passphrase remains the
 thing to protect. The jsdom tests drive the real screens with a fake keystore and prompt; the plugins
 themselves are exercised only on a device.
+
+
+## Added 2026-10-19 (wallet 0.9.0): the in-app dapp browser (native shells)
+
+**Shape.** `plugins/pq-browser` is the wallet's own Capacitor plugin: a second WebView (Android
+`WebView`, iOS `WKWebView` with a non-persistent data store) laid over the app's between the url bar
+and the tab bar. It injects one script at document start (`src/ui/dapp-bridge.ts`: a relay, then the
+extension's inpage bundle, so the page gets exactly the `window.kondor` the extension provides) and
+carries JSON both ways: the page posts through a native bridge object (`PqBridge`), the app answers
+through `window.__pqDeliver`. Only http(s) pages load; other schemes are dropped; there are no popups.
+No third-party code sits in that path.
+
+**The protocol host** (`src/ui/dapp-host.ts`) plays the extension background's part: `provider:*`
+answered from a koilib Provider with no keys; approval commands queued (three per origin, ten-minute
+expiry), one sheet at a time. Validation, description and signing are `src/core/approval.ts` and
+`src/ui/approval-view.ts`, the same code the extension window runs, so the refusals are identical:
+uploads and system operations, calls to any of the wallet's own accounts, raw hash signing, a
+transaction for another network, a non-canonical transfer encoding. A request's origin must equal the
+origin of the page shown; anything else is answered with an error and never reaches the sheet.
+
+**Permission memory.** Once the user lets a site see the accounts (getAccounts), that origin is
+remembered per wallet (seed namespace, like contacts) and not asked again; Settings and the Dapps tab
+list the sites and forget them. Nothing about signing is ever remembered.
+
+**No passphrase on the in-app sheet.** The app is already unlocked when a page asks; the tap on
+Approve is the consent, as it is for the wallet's own Send. The extension window keeps its passphrase
+field because it holds no keys until then.
+
+**Limits.** On Android the bridge object is visible to every frame of the page, so a cross-origin
+iframe inside a dapp could post a request that is attributed to the page's origin; the user still
+reads and approves every request on its own terms, which is the same position the top page is in. On
+iOS only the main frame's messages are accepted. The page view is hidden while the sheet is up, so a
+page cannot draw over the approval. Pages cannot reach the app's WebView, its storage or the vault:
+they run at their own origins. The plugin is exercised only on a device; the jsdom tests drive the
+screens and the protocol with a fake of it.
+
+
+## Added 2026-10-19 (wallet 0.10.0): collectibles (KCS-5)
+
+`src/core/nfts.ts` encodes the KCS-5 messages it needs with the same protobuf-lite the KOIN transfer
+uses (checked against koilib's serializer fed the standard's definitions) and sends a token through
+`Chain.sendCall`, the one signing path: one `call_contract` operation, built, signed, verified locally,
+submitted; the recipient checks (first-time, look-alike) run before it exactly as for KOIN.
+
+What the wallet fetches from outside the chain: a token's metadata and picture. Only an `ipfs://` link
+(through ipfs.io) or an https link on ipfs.io, cloudflare-ipfs.com, dweb.link or arweave.net is
+followed; anything else is shown without a picture. Metadata bigger than 200 kB is dropped. The CSP
+of the web app, the site headers and the extension list exactly those hosts for images and fetches;
+nothing else can be loaded. There is no curated collection list yet: the lists the plan compared were
+unlicensed, so collections are added by address and kept per wallet, like tokens.

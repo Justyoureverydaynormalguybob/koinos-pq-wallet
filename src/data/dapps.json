@@ -1,0 +1,41 @@
+{
+  "checked": "2026-10-19",
+  "dapps": [
+    {
+      "id": "pq-demo",
+      "icon": null,
+      "name": "Test dapp",
+      "summary": "Connect, read the head block, sign a message, send KOIN",
+      "description": "The wallet's own test page. It has no wallet code of its own and uses window.kondor for everything, exactly as a Koinos dapp would.",
+      "url": "https://wallet.koinosproof.com/demo/",
+      "tags": ["test"]
+    },
+    {
+      "id": "koindx",
+      "icon": null,
+      "name": "KoinDX",
+      "summary": "Swap and pool tokens on Koinos",
+      "description": "The decentralised exchange on Koinos.",
+      "url": "https://app.koindx.com/",
+      "tags": ["defi", "swap"]
+    },
+    {
+      "id": "koinosblocks",
+      "icon": null,
+      "name": "Koinos Blocks",
+      "summary": "Block explorer",
+      "description": "Blocks, transactions, accounts and contracts on mainnet and Harbinger.",
+      "url": "https://koinosblocks.com/",
+      "tags": ["explorer"]
+    },
+    {
+      "id": "burnkoin",
+      "icon": null,
+      "name": "BurnKoin",
+      "summary": "Pooled VHP for block production",
+      "description": "Deposit KOIN or VHP into the pool and receive pVHP.",
+      "url": "https://burnkoin.com/",
+      "tags": ["mining", "pool"]
+    }
+  ]
+}

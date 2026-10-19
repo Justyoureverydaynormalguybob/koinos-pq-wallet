@@ -29,14 +29,20 @@ import {
 import { isNative } from "./platform";
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, forgetSlot, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
+import { SitePermissions, permissionsNamespace } from "../core/permissions";
+import { Collections, NFT_ENTRY, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
+import { DappHost, type PendingApproval } from "./dapp-host";
+import { describePlan } from "./approval-view";
+import { PqBrowser, type PqBrowserPlugin } from "../native/pq-browser";
+import dappList from "../data/dapps.json";
 
 type Screen =
   | "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "send-confirm" | "sent" | "receive" | "history"
-  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words" | "bio-enable";
+  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words" | "bio-enable" | "nfts" | "nft" | "nft-send";
 
 /** Screens that live under the tab bar, and which tab they belong to. */
 const TAB_OF: Partial<Record<Screen, string>> = {
-  home: "account", send: "account", "send-confirm": "account", sent: "account", receive: "account", setup: "account",
+  home: "account", send: "account", "send-confirm": "account", sent: "account", receive: "account", setup: "account", nfts: "account", nft: "account", "nft-send": "account",
   history: "activity",
   dapps: "dapps",
   settings: "settings", export: "settings", save: "settings", contacts: "settings", duress: "settings", "duress-words": "settings", "bio-enable": "settings",
@@ -75,10 +81,31 @@ interface SendCheck {
   to: string;
   amount: string;
   token: Token;
+  /** set when it is a collectible being sent (amount is then "1") */
+  nft?: NftToken;
   assessment: Assessment;
 }
 
+interface NftState {
+  /** per collection address: the tokens the current account holds (null: not loaded) */
+  tokens: Record<string, NftToken[] | null>;
+  /** per "collection:idHex": the token's metadata (null: none or not allowed) */
+  meta: Record<string, NftMetadata | null | undefined>;
+  collection: string | null;
+  token: NftToken | null;
+}
+const emptyNft = (): NftState => ({ tokens: {}, meta: {}, collection: null, token: null });
+
 type Theme = "system" | "light" | "dark";
+
+interface DappState {
+  open: boolean;
+  url: string;
+  title: string;
+  canGoBack: boolean;
+  approval: PendingApproval | null;
+}
+const emptyDapp = (): DappState => ({ open: false, url: "", title: "", canGoBack: false, approval: null });
 
 interface State {
   screen: Screen;
@@ -97,6 +124,12 @@ interface State {
   hideZero: boolean;
   /** the token picked on the Send screen (contract address), "" for KOIN */
   sendToken: string;
+  /** sites allowed to see this wallet's accounts (in-app browser) */
+  sites: SitePermissions | null;
+  dapp: DappState;
+  /** NFT collections added by address on this wallet */
+  collections: Collections | null;
+  nft: NftState;
   keys: PqKeys | null;
   networkName: string;
   accountIndex: number;
@@ -165,6 +198,9 @@ export interface AppOptions {
   scanner?: Scanner;
   /** the keystore and biometric prompt (tests pass fakes); the plugins by default */
   bio?: Partial<BioDeps>;
+  /** the dapp browser plugin (tests pass a fake) and the script it injects (the built inpage bundle by default) */
+  browser?: PqBrowserPlugin;
+  bridgeScript?: () => Promise<string>;
   /** whether to show what only a native shell has (the Dapps tab, the QR scan button); detected by default */
   native?: boolean;
 }
@@ -179,12 +215,17 @@ export class App {
   private readonly bio: BioDeps;
   /** whether the device offers biometrics (checked once per unlock screen on native) */
   private bioAvailable: boolean | null = null;
+  private readonly browser: PqBrowserPlugin;
+  private readonly bridgeScript: (() => Promise<string>) | undefined;
+  private host: DappHost | null = null;
 
   constructor(root: HTMLElement, opts: AppOptions = {}) {
     this.root = root;
     this.scanner = opts.scanner;
     this.native = opts.native ?? isNative();
     this.bio = { blobs: opts.bio?.blobs ?? localBlobStore, keys: opts.bio?.keys ?? nativeKeyStore, biometry: opts.bio?.biometry ?? nativeBiometry };
+    this.browser = opts.browser ?? PqBrowser;
+    this.bridgeScript = opts.bridgeScript;
     const stored = localVaultStore.load();
     const theme = (pref.get(PREF_THEME) ?? "system") as Theme;
     this.s = {
@@ -198,6 +239,10 @@ export class App {
       balancesFor: "",
       hideZero: pref.get(PREF_HIDE_ZERO) !== "0",
       sendToken: "",
+      sites: null,
+      dapp: emptyDapp(),
+      collections: null,
+      nft: emptyNft(),
       keys: null,
       networkName: pref.get(PREF_NETWORK) ?? "testnet",
       accountIndex: 0,
@@ -329,6 +374,11 @@ export class App {
     this.s.balances = {};
     this.s.balancesFor = "";
     this.s.sendToken = "";
+    this.s.sites = null;
+    this.s.collections = null;
+    this.s.nft = emptyNft();
+    if (this.host?.isOpen) void this.host.close();
+    this.s.dapp = emptyDapp();
     this.s.file = null;
     this.s.pendingDecoy = null;
     this.s.sendCheck = null;
@@ -440,6 +490,8 @@ export class App {
     this.s.keys = deriveKeys(seed);
     this.s.book = new AddressBook(addressBookNamespace(seed));
     this.s.tokens = new CustomTokens(customTokensNamespace(seed));
+    this.s.sites = new SitePermissions(permissionsNamespace(seed));
+    this.s.collections = new Collections(collectionsNamespace(seed));
     // Wipe our buffer only if the keys hold their own copy (koinos-pq-core >= 2026-10-19). Before that fix the
     // keys shared it, and wiping zeroed keys.seed: every in-session wallet then derived the account address
     // of an all-zero seed and collided on 14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR.
@@ -632,9 +684,135 @@ export class App {
     this.s.keys = deriveKeys(seed);
     this.s.book = new AddressBook(addressBookNamespace(seed));
     this.s.tokens = new CustomTokens(customTokensNamespace(seed));
+    this.s.sites = new SitePermissions(permissionsNamespace(seed));
+    this.s.collections = new Collections(collectionsNamespace(seed));
     this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
     this.touch();
     await this.enterHome();
+  }
+  /** The in-app browser's host, made on first use; its callbacks drive the Dapps screen and the approval sheet. */
+  private dappHost(): DappHost {
+    if (this.host) return this.host;
+    this.host = new DappHost(
+      this.browser,
+      {
+        onNavigation: (e) => {
+          this.s.dapp.url = e.url;
+          this.s.dapp.title = e.title;
+          this.s.dapp.canGoBack = e.canGoBack;
+          const bar = this.root.querySelector<HTMLInputElement>('form[data-form="dapp-go"] input[name="url"]');
+          if (bar && document.activeElement !== bar) bar.value = e.url;
+        },
+        onClosed: () => {
+          this.s.dapp = emptyDapp();
+          if (this.s.screen === "dapps") this.render();
+        },
+        onApproval: (p) => {
+          this.s.dapp.approval = p;
+          if (p && this.s.screen !== "dapps") this.s.screen = "dapps";
+          this.render();
+        },
+      },
+      {
+        network: () => this.network,
+        keys: () => this.s.keys,
+        accounts: () => this.s.vault?.accounts ?? [],
+        permissions: () => this.s.sites,
+        rpcOverride: () => {
+          const rpc = pref.get(PREF_DEVNET_RPC);
+          return rpc ? { devnet: [rpc] } : undefined;
+        },
+        bridgeScript: this.bridgeScript,
+      },
+    );
+    return this.host;
+  }
+  /** Where the native page view goes: the empty area between the url bar and the tab bar, in CSS px from the viewport edges. */
+  private dappFrame(): { top: number; bottom: number } {
+    const area = this.root.querySelector<HTMLElement>("#dapp-area");
+    if (!area) return { top: 0, bottom: 0 };
+    const r = area.getBoundingClientRect();
+    return { top: Math.max(0, Math.round(r.top)), bottom: Math.max(0, Math.round(window.innerHeight - r.bottom)) };
+  }
+  private async openDapp(url: string) {
+    if (!/^https?:\/\//.test(url)) url = `https://${url}`;
+    try {
+      new URL(url);
+    } catch {
+      throw new Error("That is not a web address.");
+    }
+    this.s.dapp = { ...emptyDapp(), open: true, url };
+    this.s.screen = "dapps";
+    this.render();
+    await this.dappHost().open(url, this.dappFrame());
+  }
+  /** After every render: the native page view follows the Dapps screen (shown there, hidden elsewhere). */
+  private placeDapp() {
+    const host = this.host;
+    if (!host?.isOpen) return;
+    if (this.s.screen === "dapps" && !this.s.dapp.approval) {
+      void host.setFrame(this.dappFrame()).then(() => host.show());
+    } else {
+      void host.hide();
+    }
+  }
+  private collectionList(): Collection[] {
+    return this.s.collections?.list(this.network.name) ?? [];
+  }
+  /** The tokens the current account holds in a collection, then their metadata in the background. */
+  private async loadCollection(address: string) {
+    const a = this.account();
+    if (!a) throw new Error("no account");
+    this.s.nft.collection = address;
+    this.s.nft.tokens[address] = await tokensOf(this.chain(), address, a.address);
+    this.s.screen = "nfts";
+    void this.fillNftMetadata(address);
+  }
+  private async fillNftMetadata(address: string) {
+    const chain = this.chain();
+    for (const t of this.s.nft.tokens[address] ?? []) {
+      const key = `${address}:${t.idHex}`;
+      if (this.s.nft.meta[key] !== undefined) continue;
+      let meta: NftMetadata | null = null;
+      try {
+        const uri = await tokenUri(chain, address, t.idHex);
+        meta = uri ? await loadMetadata(uri) : null;
+        if (!meta) {
+          const inline = await metadataOf(chain, address, t.idHex);
+          if (inline) meta = (await loadMetadata(`data:application/json,${encodeURIComponent(inline)}`)) ?? null;
+        }
+      } catch {
+        meta = null;
+      }
+      this.s.nft.meta[key] = meta;
+      const tile = this.root.querySelector<HTMLElement>(`[data-nft="${t.idHex}"]`);
+      if (tile && this.s.nft.collection === address) tile.outerHTML = this.nftTile(t, meta);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  /** One collectible, through the one signing path, then the recipient is remembered like any other. */
+  private async doSendNft(to: string, name: string, token: NftToken) {
+    const a = this.account();
+    if (!a || !this.s.keys || !canSign(a)) throw new Error("locked");
+    const chain = this.chain();
+    const res = await chain.sendCall({ from: a.address, contract: token.collection, entryPoint: NFT_ENTRY.transfer, args: encodeNftTransferArgs(a.address, to, token.idHex), keys: this.s.keys, mode: a.mode as "native" | "pqwallet" });
+    this.s.book?.recordSend(to, name);
+    this.s.sendCheck = null;
+    this.s.nft.tokens[token.collection] = null; // read again next time
+    const col = this.collectionList().find((c) => c.address === token.collection);
+    this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount: "1", symbol: `${col?.symbol ?? "NFT"} #${token.label}` };
+    this.s.screen = "sent";
+    this.render();
+    if (this.network.autoBlocks) {
+      try {
+        const block = await chain.waitMined(res.txId);
+        this.s.sent = { ...this.s.sent, block, waiting: false };
+      } catch (err) {
+        this.s.sent = { ...this.s.sent, waiting: false };
+        this.s.error = `Sent, but still waiting for a block: ${(err as Error).message}`;
+      }
+      await this.refresh();
+    }
   }
   private loadActivity() {
     void this.run("Loading activity", async () => {
@@ -663,6 +841,7 @@ export class App {
       this.s.balances = {};
       this.s.balancesFor = "";
       this.s.sendToken = "";
+      this.s.nft = emptyNft();
       void this.run("Loading", () => this.enterHome());
     }
     if (t instanceof HTMLSelectElement && t.name === "theme") {
@@ -793,7 +972,7 @@ export class App {
         void scanAddress(this.scanner).then(
           (address) => {
             if (!address) return;
-            const to = this.root.querySelector<HTMLInputElement>('form[data-form="send"] input[name="to"]');
+            const to = this.root.querySelector<HTMLInputElement>('form[data-form="send"] input[name="to"], form[data-form="nft-send"] input[name="to"]');
             if (to) {
               to.value = address;
               to.focus();
@@ -804,6 +983,53 @@ export class App {
             this.render();
           },
         );
+        break;
+      }
+      case "dapp-open":
+        void this.run("Opening", () => this.openDapp(el.dataset.url ?? ""));
+        break;
+      case "dapp-close":
+        void this.dappHost().close();
+        break;
+      case "dapp-back":
+        void this.dappHost().back();
+        break;
+      case "dapp-approve":
+      case "dapp-reject":
+        void this.dappHost()
+          .decide(el.dataset.key ?? "", action === "dapp-approve")
+          .catch((e: Error) => {
+            this.s.error = e.message || String(e);
+            this.render();
+          });
+        break;
+      case "site-revoke":
+        this.s.sites?.revoke(el.dataset.origin ?? "");
+        this.render();
+        break;
+      case "nft-collection":
+        void this.run("Loading the collection", () => this.loadCollection(el.dataset.address ?? ""));
+        break;
+      case "nft-open": {
+        const list = this.s.nft.tokens[this.s.nft.collection ?? ""] ?? [];
+        this.s.nft.token = list.find((t) => t.idHex === el.dataset.id) ?? null;
+        if (this.s.nft.token) this.go("nft");
+        break;
+      }
+      case "nft-send":
+        this.go("nft-send");
+        break;
+      case "nft-back":
+        this.go(this.s.nft.collection ? "nfts" : "home");
+        break;
+      case "nft-token-back":
+        this.go("nft");
+        break;
+      case "collection-remove": {
+        const addr = el.dataset.address ?? "";
+        this.s.collections?.remove(this.network.name, addr);
+        delete this.s.nft.tokens[addr];
+        this.render();
         break;
       }
       case "token-remove": {
@@ -967,6 +1193,8 @@ export class App {
           this.s.keys = deriveKeys(seed);
           this.s.book = new AddressBook(addressBookNamespace(seed));
           this.s.tokens = new CustomTokens(customTokensNamespace(seed));
+    this.s.sites = new SitePermissions(permissionsNamespace(seed));
+    this.s.collections = new Collections(collectionsNamespace(seed));
           this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
           this.touch();
           await this.enterHome();
@@ -1022,7 +1250,50 @@ export class App {
           return;
         }
         const name = field("name").trim();
-        void this.run("Signing and sending", () => this.doSend(sc.to, sc.amount, name, sc.token));
+        if (sc.nft) void this.run("Signing and sending", () => this.doSendNft(sc.to, name, sc.nft!));
+        else void this.run("Signing and sending", () => this.doSend(sc.to, sc.amount, name, sc.token));
+        break;
+      }
+      case "add-collection": {
+        const addr = field("address").trim();
+        if (!isAddress(addr)) {
+          this.s.error = "That is not a valid Koinos contract address.";
+          this.render();
+          return;
+        }
+        void this.run("Reading the collection", async () => {
+          if (this.collectionList().some((c) => c.address === addr)) {
+            this.s.notice = "That collection is already in the list.";
+            return;
+          }
+          const info = await collectionInfo(this.chain(), addr);
+          this.s.collections?.add(this.network.name, { address: addr, ...info });
+          this.s.notice = `Added ${info.name || info.symbol}.`;
+        });
+        break;
+      }
+      case "nft-send": {
+        const to = field("to").trim();
+        const token = this.s.nft.token;
+        const a = this.account();
+        if (!token || !a || !canSign(a)) {
+          this.s.error = "This account is watch-only; it has no key here.";
+          this.render();
+          return;
+        }
+        const assessment = this.s.book?.assess(to, this.ownAddresses()) ?? { kind: "new" as const };
+        if (assessment.kind === "invalid") {
+          this.s.error = "That is not a valid Koinos address (check every character; the checksum does not match).";
+          this.render();
+          return;
+        }
+        if (assessment.kind === "known" || assessment.kind === "own") {
+          void this.run("Signing and sending", () => this.doSendNft(to, "", token));
+          return;
+        }
+        const col = this.collectionList().find((c) => c.address === token.collection);
+        this.s.sendCheck = { to, amount: "1", token: { address: token.collection, symbol: col?.symbol ?? "NFT", name: col?.name ?? "", decimals: 0 }, nft: token, assessment };
+        this.go("send-confirm");
         break;
       }
       case "add-token": {
@@ -1106,6 +1377,17 @@ export class App {
       case "save":
         void this.run("Saving", () => this.saveChange(field("passphrase")));
         break;
+      case "dapp-open":
+        void this.run("Opening", () => this.openDapp(field("url").trim()));
+        break;
+      case "dapp-go":
+        void this.run("Loading", async () => {
+          let url = field("url").trim();
+          if (!/^https?:\/\//.test(url)) url = `https://${url}`;
+          if (this.host?.isOpen) await this.host.navigate(url);
+          else await this.openDapp(url);
+        });
+        break;
       case "bio-enable":
         void this.run("Setting up", async () => {
           if (!this.s.file) throw new Error("no wallet");
@@ -1180,6 +1462,9 @@ export class App {
       duress: () => this.vDuress(),
       "duress-words": () => this.vDuressWords(),
       "bio-enable": () => this.vBioEnable(),
+      nfts: () => this.vNfts(),
+      nft: () => this.vNft(),
+      "nft-send": () => this.vNftSend(),
     }[s.screen]();
     const tab = TAB_OF[s.screen];
     const inApp = !!tab && !!s.keys;
@@ -1207,6 +1492,7 @@ export class App {
     const setupCanvas = this.root.querySelector<HTMLCanvasElement>("canvas#qr-setup");
     if (setupCanvas && this.s.setup) void QRCode.toCanvas(setupCanvas, this.s.setup.account, { width: 180, margin: 1 });
     this.root.querySelector<HTMLElement>("[autofocus]")?.focus();
+    this.placeDapp();
   }
 
   private vWelcome() {
@@ -1318,7 +1604,75 @@ export class App {
           ${canSign(a) ? button("Send", { action: "send", variant: "primary" }) : button("Watch-only", { type: "button", disabled: true, title: "Watch-only: this wallet has no key for this address" })}
           ${button("Receive", { action: "receive" })}
         </div>`)}
-      ${this.vTokens()}`;
+      ${this.vTokens()}
+      ${this.vCollectibles()}`;
+  }
+
+  private vCollectibles(): string {
+    const cols = this.collectionList();
+    const rows = cols
+      .map((c) => {
+        const held = this.s.nft.tokens[c.address];
+        const count = held === undefined || held === null ? "" : `<span class="s">${held.length} held</span>`;
+        return `<li>${tile(c.symbol || c.name)}<span class="grow"><span class="t">${esc(c.name || c.symbol)}</span> ${count}<br><span class="s">${esc(c.symbol)} · ${linkButton("remove", "collection-remove", { address: c.address })}</span></span>${button("Open", { action: "nft-collection", mini: true, data: { address: c.address } })}</li>`;
+      })
+      .join("");
+    return `
+      ${section("03", "Collectibles", `${cols.length} collection${cols.length === 1 ? "" : "s"}`)}
+      ${cols.length ? list(rows) : `<p class="mute">No collections yet. Add one by its contract address (KCS-5).</p>`}
+      <form data-form="add-collection" class="field inline">
+        <label><span>Add a collection by its contract address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
+        ${button("Add", { mini: true })}
+      </form>`;
+  }
+
+  private nftTile(t: NftToken, meta: NftMetadata | null | undefined): string {
+    const pic = meta?.image ? `<img src="${esc(meta.image)}" alt="" loading="lazy">` : `#${esc(t.label)}`;
+    return `<button class="nft" type="button" data-action="nft-open" data-id="${esc(t.idHex)}" data-nft="${esc(t.idHex)}"><span class="pic">${pic}</span><span class="cap">${esc(meta?.name || `#${t.label}`)}<span class="s">#${esc(t.label)}</span></span></button>`;
+  }
+
+  private vNfts() {
+    const addr = this.s.nft.collection ?? "";
+    const col = this.collectionList().find((c) => c.address === addr);
+    const held = this.s.nft.tokens[addr] ?? [];
+    return `
+      ${section("03", "Collectibles", esc(col?.symbol ?? ""))}
+      <h1>${esc(col?.name || col?.symbol || "Collection")}</h1>
+      ${held.length ? `<div class="nfts">${held.map((t) => this.nftTile(t, this.s.nft.meta[`${addr}:${t.idHex}`])).join("")}</div>` : `<p class="mute">This account holds nothing in this collection.</p>`}
+      <div class="row">${button("Back", { action: "back-home", variant: "ghost" })}</div>`;
+  }
+
+  private vNft() {
+    const t = this.s.nft.token;
+    if (!t) return `<p>Nothing to show.</p>`;
+    const col = this.collectionList().find((c) => c.address === t.collection);
+    const meta = this.s.nft.meta[`${t.collection}:${t.idHex}`];
+    const a = this.account();
+    return `
+      ${section("03", "Collectibles", esc(col?.symbol ?? ""))}
+      <div class="nft-hero">${meta?.image ? `<img src="${esc(meta.image)}" alt="">` : `#${esc(t.label)}`}</div>
+      <h1>${esc(meta?.name || `#${t.label}`)}</h1>
+      ${meta?.description ? `<p class="mute">${esc(meta.description)}</p>` : ""}
+      <div style="margin-top:12px">${stat("Collection", esc(col?.name || shortAddr(t.collection)))}${stat("Token id", `#${esc(t.label)}`)}${stat("Contract", esc(shortAddr(t.collection)))}</div>
+      <div class="row">${a && canSign(a) ? button("Send", { action: "nft-send", variant: "primary" }) : ""}${button("Back", { action: "nft-back", variant: "ghost" })}</div>`;
+  }
+
+  private vNftSend() {
+    const t = this.s.nft.token;
+    if (!t) return `<p>Nothing to send.</p>`;
+    const col = this.collectionList().find((c) => c.address === t.collection);
+    const meta = this.s.nft.meta[`${t.collection}:${t.idHex}`];
+    return `
+      ${section("03", "Send", esc(col?.symbol ?? ""))}
+      <h1>Send ${esc(meta?.name || `#${t.label}`)}</h1>
+      <form data-form="nft-send">
+        <label class="field"><span>To</span><div class="withbtn">${input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" })}${
+          this.native ? button(`<span class="sr-only">Scan a QR code</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg>`, { action: "scan", mini: true, title: "Scan a QR code" }) : ""
+        }</div></label>
+        <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
+        <p class="fine">The collectible leaves this account for good once the transaction is in a block. A first-time or look-alike recipient asks you to confirm it before anything is signed.</p>
+        <div class="row">${button("Sign and send", { variant: "primary" })}${button("Back", { action: "nft-token-back", variant: "ghost" })}</div>
+      </form>`;
   }
 
   private vTokens(): string {
@@ -1418,9 +1772,42 @@ export class App {
   }
 
   private vDapps() {
+    const d = this.s.dapp;
+    if (!d.open) {
+      const sites = this.s.sites?.list() ?? [];
+      return `
+        ${section("03", "Dapps", "curated")}
+        ${list((dappList as { dapps: Array<{ id: string; name: string; summary: string; url: string }> }).dapps.map((x) => `<li>${tile(x.name)}<span class="grow"><span class="t">${esc(x.name)}</span><br><span class="s">${esc(x.summary)}</span></span>${button("Open", { action: "dapp-open", mini: true, data: { url: x.url } })}</li>`).join(""))}
+        <form data-form="dapp-open" class="field inline">
+          <label><span>Or any address</span>${input({ name: "url", class: "mono", inputmode: "url", autocomplete: "off", placeholder: "https://…", required: true })}</label>
+          ${button("Go", { mini: true })}
+        </form>
+        <p class="fine">Sites see your account address only after you allow it, and every signature is approved here in the wallet, never on the page. The list is this wallet's own.</p>
+        ${sites.length ? `${section(null, "Sites allowed to see your accounts")}${list(sites.map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">since ${esc(g.allowedAt.slice(0, 10))}</span>`, linkButton("forget", "site-revoke", { origin: g.origin }))).join(""))}` : ""}`;
+    }
+    const a = d.approval;
     return `
-      ${section("03", "Dapps")}
-      <p class="mute">The in-app dapp browser arrives in a later build. Until then, Koinos sites work with the browser extension on a computer, through the same window.kondor interface.</p>`;
+      <div class="urlbar">
+        ${button("&larr;", { action: "dapp-back", mini: true, title: "Back", disabled: !d.canGoBack })}
+        <form data-form="dapp-go" class="grow" style="flex:1 1 auto">${input({ name: "url", class: "in", inputmode: "url", autocomplete: "off", value: d.url, "aria-label": "Address" })}</form>
+        ${button("&times;", { action: "dapp-close", mini: true, title: "Close the page" })}
+      </div>
+      <div id="dapp-area" style="height:calc(100vh - 220px)"></div>
+      ${
+        a
+          ? `<div class="scrim"></div><section class="sheet" role="dialog" aria-labelledby="req">
+              <div class="grab" aria-hidden="true"></div>
+              ${section(">", "Request", esc(this.network.name))}
+              <h1 id="req" style="font-size:22px">${esc(a.req.origin)}</h1>
+              ${
+                a.plan
+                  ? `${describePlan(a.plan)}
+                     ${a.status ? notice("busy", esc(a.status)) : `<div class="row">${button("Approve", { action: "dapp-approve", variant: "primary", data: { key: a.key } })}${button("Reject", { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`}`
+                  : `${notice("danger", `This site sent a request the wallet will not sign. ${esc(a.refused ?? "")}`)}<div class="row">${button("Close", { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
+              }
+            </section>`
+          : ""
+      }`;
   }
 
   private vSettings() {
@@ -1497,6 +1884,8 @@ export class App {
         <div class="row tight">${button(`Check its balance on ${esc(net)}`, { action: "native-balance", mini: true })}</div>
       </details>
 
+      ${(this.s.sites?.list().length ?? 0) > 0 ? `${section(null, "Sites allowed to see your accounts")}${list(this.s.sites!.list().map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">since ${esc(g.allowedAt.slice(0, 10))}</span>`, linkButton("forget", "site-revoke", { origin: g.origin }))).join(""))}` : ""}
+
       ${section(null, "Danger")}
       <div class="row tight">${button("Delete wallet from this device", { action: "delete-wallet", variant: "danger" })}</div>`;
   }
@@ -1555,7 +1944,7 @@ export class App {
                <p style="margin-top:8px">It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.</p>`)
           : `${card(addressStrip(sc.to))}<p style="margin-top:12px">You have not sent to this address from this wallet before. Compare <em>every</em> character with the address the recipient gave you, not only the first and last few. Transfers cannot be undone.</p>`
       }
-      <p class="mute" style="margin-top:8px">Amount <strong class="mono">${esc(sc.amount)} ${esc(unit)}</strong> on ${esc(this.network.name)}.</p>
+      <p class="mute" style="margin-top:8px">${sc.nft ? `Collectible <strong class="mono">${esc(unit)} #${esc(sc.nft.label)}</strong>` : `Amount <strong class="mono">${esc(sc.amount)} ${esc(unit)}</strong>`} on ${esc(this.network.name)}.</p>
       <form data-form="send-confirm">
         ${
           look

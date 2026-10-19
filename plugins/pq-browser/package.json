@@ -1,0 +1,15 @@
+{
+  "name": "pq-browser",
+  "version": "0.10.0",
+  "private": true,
+  "description": "In-app dapp browser for Koinos PQ Wallet: a second WebView laid over the app's, a script injected at document start, a JSON message channel. No third-party code in the signing path.",
+  "license": "MIT",
+  "author": "Koinos PQ Wallet",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "capacitor": {
+    "ios": { "src": "ios" },
+    "android": { "src": "android" }
+  },
+  "files": ["android/src/main/", "android/build.gradle", "ios/Sources", "PqBrowser.podspec", "index.js", "index.d.ts"]
+}

@@ -5,8 +5,7 @@
 // Nothing secret lives here: keys are only ever decrypted inside the approval page, by passphrase.
 // Pending requests are kept in chrome.storage.session (survives the worker being put to sleep,
 // gone when the browser closes), keyed by an id this worker generates, never by the page's id.
-import { Provider } from "koilib";
-import { NETWORKS } from "koinos-pq-core";
+import { handleProvider } from "../core/provider-calls";
 
 interface Pending {
   key: string; // ours
@@ -25,7 +24,6 @@ const STORE_KEY = "pending";
 const EXPIRY_MS = 10 * 60_000;
 const MAX_PER_ORIGIN = 3;
 const APPROVAL_COMMANDS = new Set(["getAccounts", "signer:signHash", "signer:signMessage", "signer:signTransaction", "signer:sendTransaction", "signer:prepareTransaction"]);
-const NETWORK_ALIASES: Record<string, string> = { harbinger: "testnet", koinos: "mainnet", main: "mainnet" };
 const EXT_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
 
 // ---- the pending store, serialised so concurrent messages cannot lose entries ----
@@ -98,59 +96,6 @@ chrome.windows.onRemoved.addListener((windowId) => {
     if (key) void finish(key, { error: "rejected by the user" });
   });
 });
-
-// ---- provider calls (read-only chain access, no approval) ----
-function providerFor(network: unknown): Provider {
-  const raw = typeof network === "string" && network ? network.toLowerCase() : "mainnet";
-  const net = NETWORKS[NETWORK_ALIASES[raw] ?? raw];
-  if (!net) throw new Error(`unknown network ${raw}; use mainnet, testnet (harbinger) or devnet`);
-  return new Provider(net.rpc);
-}
-
-async function handleProvider(command: string, a: Record<string, unknown>): Promise<unknown> {
-  const p = providerFor(a.network);
-  switch (command) {
-    case "provider:call":
-      return p.call(a.method as string, a.params as Record<string, unknown>);
-    case "provider:getNonce":
-      return p.getNonce(a.account as string);
-    case "provider:getNextNonce":
-      return p.getNextNonce(a.account as string);
-    case "provider:getAccountRc":
-      return p.getAccountRc(a.account as string);
-    case "provider:getTransactionsById":
-      return p.getTransactionsById(a.transactionIds as string[]);
-    case "provider:getBlocksById":
-      return p.getBlocksById(a.blockIds as string[], a.opts as never);
-    case "provider:getHeadInfo":
-      return p.getHeadInfo();
-    case "provider:getChainId":
-      return p.getChainId();
-    case "provider:getBlocks":
-      return p.getBlocks(a.height as number, a.numBlocks as number, a.idRef as string, a.opts as never);
-    case "provider:getBlock":
-      return p.getBlock(a.height as number, a.opts as never);
-    case "provider:wait":
-      return p.wait(a.txId as string, a.type as never, a.timeout as number);
-    case "provider:sendTransaction":
-      return p.sendTransaction(a.transaction as never, a.broadcast as boolean);
-    case "provider:submitBlock":
-      return p.submitBlock(a.block as never);
-    case "provider:readContract":
-      return p.readContract(a.operation as never);
-    case "provider:getForkHeads":
-      return (p as unknown as { getForkHeads: () => Promise<unknown> }).getForkHeads();
-    case "provider:getResourceLimits":
-      return (p as unknown as { getResourceLimits: () => Promise<unknown> }).getResourceLimits();
-    case "provider:invokeGetContractMetadata":
-      return p.invokeGetContractMetadata(a.contractId as string);
-    case "provider:invokeSystemCall":
-      // kondor-js passes a koilib Serializer, which cannot cross a JSON message boundary
-      throw new Error("invokeSystemCall is not supported by Koinos PQ Wallet; use provider.call");
-    default:
-      throw new Error(`unsupported command ${command}`);
-  }
-}
 
 // ---- messages ----
 chrome.runtime.onMessage.addListener((msg: Record<string, unknown>, sender, sendResponse) => {

@@ -13,3 +13,6 @@ project(':capacitor-app').projectDir = new File('../node_modules/@capacitor/app/
 
 include ':capacitor-barcode-scanner'
 project(':capacitor-barcode-scanner').projectDir = new File('../node_modules/@capacitor/barcode-scanner/android')
+
+include ':pq-browser'
+project(':pq-browser').projectDir = new File('../plugins/pq-browser/android')

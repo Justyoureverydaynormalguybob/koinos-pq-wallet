@@ -13,4 +13,4 @@ declare global {
 if (!window.kondor) {
   window.kondor = { provider, getProvider, KondorSigner, getSigner, getAccounts };
 }
-window.koinosPq = { version: "0.3.1", postQuantum: true };
+window.koinosPq = { version: __APP_VERSION__, postQuantum: true };

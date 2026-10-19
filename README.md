@@ -30,6 +30,18 @@ wallet's slot key wrapped under a key the device keystore holds and releases aft
 face check; the passphrase is never stored and always works. See `docs/SECURITY.md` for what that
 protects against and what it does not.
 
+Since 0.9.0, on Android and iOS: an **in-app dapp browser** (the Dapps tab). It is the wallet's own
+Capacitor plugin (`plugins/pq-browser`, about 150 lines of Java and of Swift, no third-party code): a
+second WebView over the app's, with the extension's `window.kondor` script injected at document
+start and a JSON channel to the app. Requests are validated, described and signed by the same code
+as the extension's approval window (`src/core/approval.ts`), with the same refusals; a site is
+remembered once you let it see your accounts, every signature is approved on its own.
+
+Since 0.10.0: **collectibles (KCS-5 NFTs)**. Add a collection by its contract address (name and symbol
+are read from the contract), see the tokens the account holds (`get_tokens_by_owner`) with their
+names and pictures from `token_uri` metadata, fetched only through a short list of IPFS and Arweave
+gateways, and send one through the same recipient checks and the same signing path as a token.
+
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
                         account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)

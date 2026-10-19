@@ -19,3 +19,5 @@ ios/App/build/
 android/app/src/main/assets/public/
 *.keystore
 signing.env
+plugins/*/android/build/
+plugins/*/android/.gradle/
