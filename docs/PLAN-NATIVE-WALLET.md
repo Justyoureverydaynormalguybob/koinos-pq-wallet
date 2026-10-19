@@ -64,11 +64,88 @@ the UX in a day, (b) before any release, because the signing bridge must be ours
 (getAccounts, signer.signTransaction/sendTransaction/prepareTransaction/signMessage, provider.*) with
 the "what you see is what you sign" rules from docs/SECURITY.md. The dapp browser reuses it unchanged.
 
+
+## 1b. UI redesign: the RawByte look (do this right after the Capacitor 8 migration)
+
+The app's present look is a placeholder. Every later step adds screens, so the design system comes
+first and the new screens are built on it, not retrofitted. The brand is RawByte's own (rawbyte.ie,
+`src/app/globals.css` and `layout.tsx` in the rawbyte repo, read 2026-10-19).
+
+**Tokens, copied from the site, not approximated**
+
+| token | light | dark | use |
+|---|---|---|---|
+| `--paper` | `#e9e6df` | `#0f0f0e` | page background |
+| `--panel` | `#dfdbd2` | `#181816` | cards, inputs, bottom bar |
+| `--ink` | `#0f0f0e` | `#e9e6df` | text, icons, primary button fill |
+| `--mute` | `#5c5850` | `#98938a` | secondary text, borders, labels |
+| `--signal` | `#ff4a1c` | `#ff4a1c` | the one accent: primary actions, focus rings, live states |
+| `--on-signal` | `#0f0f0e` | `#0f0f0e` | text on signal |
+| `--grain-opacity` | `0.09` | `0.06` | the paper-grain overlay (pointer-events none) |
+
+Add wallet-only semantic tokens on top, never new hues: `--ok` (balance up, mined) = ink on panel with a
+signal underline rather than green; `--danger` for look-alike warnings and the duress/lock actions =
+signal at full strength with a thick 2px border; `--warn` = mute text on paper with a signal left rule.
+Keeping one accent is the point of the brand; the wallet's "stop" moments get weight from size and
+rule thickness, not from a second colour.
+
+**Type.** Archivo for everything (the site uses its width axis: `font-stretch: 125%` for display
+numerals and the wordmark, `75%` for dense labels) and JetBrains Mono for addresses, amounts, hashes,
+transaction ids, the hex motif and anything the user must compare character by character. Both are
+Google Fonts with open licences (OFL); **bundle the woff2 files in `public/fonts/` and declare them with
+`@font-face`**, because the CSP is `default-src 'self'` and a wallet must not load fonts from a CDN.
+Scale: 13 / 15 / 17 / 22 / 28 / 40 px; line height 1.35; balances at 40 px Archivo 125% with the unit at
+15 px mute; addresses at 15 px mono, grouped in blocks of four characters with the first and last four
+in ink and the middle in mute (this is the address-poisoning defence made visual).
+
+**Motifs that say RawByte.** The hex-dump wordmark treatment (`52 41 57 42 59 54 45` next to "RawByte")
+becomes the app mark: `50 51` beside "PQ", and an account's header shows the first bytes of its
+address as a hex strip. Numbered section labels in brackets (`[01] ACCOUNT`, `[02] ACTIVITY`) in mono
+uppercase at 13 px mute. Colour-on-hover from the site becomes colour-on-press on touch: controls are
+ink on panel at rest and flash signal while pressed. A thin live-clock-style line in the header shows
+the head block and network in mono, ticking as blocks arrive. Grain overlay on `body` as on the site,
+below 0.1 so text stays crisp.
+
+**Shape and space.** Radius 6 px on controls, 10 px on cards, 0 on the bottom bar; 1 px borders in
+mute at 40 % opacity rather than shadows; 4 px grid, 16 px gutters, 24 px between sections; safe-area
+insets already handled. Touch targets 48 px. Dark and light follow the system by default with a
+switch in Settings (the site does the same with `prefers-color-scheme`).
+
+**Information architecture (native and web alike).** Bottom bar with four tabs: **Account** (balance
+card, tokens list, send/receive), **Activity** (history with the transfer summaries we already build),
+**Dapps** (the browser and the curated list; hidden on web where the extension serves that role),
+**Settings** (security, duress, contacts, watch-only, networks, language, about). Onboarding (create,
+words, check, passphrase, activate) stays a linear flow without the bar. The extension popup is the
+Account tab at 400 px; the approval window is a single card with the request, the account strip and
+the passphrase field, same tokens. The unlock screen is paper, the wordmark, one field and one button.
+
+**Screens to design before coding** (as static HTML in `design/` first, reviewed on a phone, then
+ported): unlock; account home with balance card and token rows; send with the recipient check states
+(new, look-alike with marked differences, known); receive with QR on panel; activity list; settings
+index and the duress flow; dapp browser chrome with the approval sheet; the extension popup and
+approval window. Ten screens.
+
+**Implementation.** Keep the current approach (TypeScript rendering HTML strings, no framework): it
+is small, auditable, CSP-clean and already tested in jsdom. Add `src/ui/tokens.css` (the table above),
+`src/ui/components.ts` with the dozen building blocks (card, stat, address strip, button variants,
+field, list row, tab bar, sheet, notice, section label), and migrate `app.ts` screen by screen behind
+the existing tests. Remove the old `style.css` palette entirely at the end; no two palettes in the tree.
+Accessibility: 4.5:1 contrast on every text/background pair in both modes (check `--mute` on
+`--panel` in light mode, it is borderline; use `--ink` at 70 % if it fails), visible focus (signal
+2 px), reduced-motion respected, every icon with a label.
+
+**Credit line.** Footer and About: "Koinos PQ Wallet, by RawByte, Cavan and Cuenca. Open source, MIT."
+with the hex strip. The app icon: ink square, "PQ" in Archivo 125 % in paper, a single signal pixel.
+
+Effort: 2 days for the design pass as static screens, 3–4 days to port the app, extension popup and
+approval window onto the new system with the tests kept green.
+
 ## 2. Order of work (each step ends in a tagged release and a CI-built APK)
 
 | # | Step | Scope | Effort |
 |---|---|---|---|
 | 1 | **Capacitor 8 migration** | `npx cap migrate`; Android SDK 36 / AGP 8.13 / Gradle 8.14.3; iOS 15 + Xcode 26 in CI; `@capacitor/app` 8; re-run `mobile.yml`; APK 0.5.0 | half a day |
+| 1b | **UI redesign, RawByte look** (section 1b) | tokens, type, components, bottom-tab IA; ten screens as static HTML first, then the port; extension popup and approval window included; APK 0.6.0 | 5–6 days |
 | 2 | **Tokens (KCS-4)** | token list in `src/data/tokens.<network>.json` (seeded from koindx, MIT); `Chain.tokenBalance(contract, address)`, `tokenInfo` (name/symbol/decimals via abi-lite decoders); Assets screen listing KOIN, VHP and listed tokens with balances; Send with a token picker (same transfer entry point, different contract id, amount scaled by `decimals`); "Add token by address" (reads name/symbol/decimals from chain); hide zero balances toggle | 1–2 days |
 | 3 | **QR scanning** | `@capacitor/barcode-scanner` behind a `scanAddress()` helper; Send "To" field gets a scan button on native, hidden on web; accept `koinos:<address>` and bare addresses; checksum-validate before filling | half a day |
 | 4 | **Biometric unlock** | `@aparajita/capacitor-biometric-auth` + `@aparajita/capacitor-secure-storage`: after a passphrase unlock, offer "Unlock with biometrics"; store a random 32-byte key-wrapping key in the platform keystore (biometry-gated), wrap the vault's AES key, never the passphrase; biometric unlock fails closed to the passphrase; disabled automatically when a duress wallet exists unless each slot gets its own wrapped key (do that: wrap per slot so the decoy stays indistinguishable) | 1–2 days |
