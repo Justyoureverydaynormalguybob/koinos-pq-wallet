@@ -13,7 +13,7 @@ two years of React Native/Expo drift and rewriting every secp256k1 signing path 
 under someone else's brand. Our wallet already has the reviewed vault, ML-DSA-44 accounts, duress mode,
 address-poisoning checks, watch-only, the `window.kondor` dapp interface (extension), one code base for
 web, Android and iOS, and CI that ships a signed APK. So: grow ours to Konio parity, credit Konio, and
-ask Adriano (github.com/adrianofoschi) whether he wants to be involved or to license the lists.
+build our own token and dapp lists rather than reusing Konio's.
 
 Konio's screens, for parity tracking: Assets, Coin, NewCoin, Nft, NewNft, Deposit, Withdraw, WithdrawToScan,
 Browser, Discovery (dapp list), Wc* (WalletConnect pair/sessions), NewContact, EditAccount, ImportAccount,
@@ -134,8 +134,9 @@ Accessibility: 4.5:1 contrast on every text/background pair in both modes (check
 `--panel` in light mode, it is borderline; use `--ink` at 70 % if it fails), visible focus (signal
 2 px), reduced-motion respected, every icon with a label.
 
-**Credit line.** Footer and About: "Koinos PQ Wallet, by RawByte, Cavan and Cuenca. Open source, MIT."
-with the hex strip. The app icon: ink square, "PQ" in Archivo 125 % in paper, a single signal pixel.
+**No credit line.** The brand is used as a visual system only; the footer and About say "Koinos PQ
+Wallet. Open source, MIT." and nothing about who built it. The app icon: ink square, "PQ" in Archivo
+125 % in paper, a single signal pixel.
 
 Effort: 2 days for the design pass as static screens, 3–4 days to port the app, extension popup and
 approval window onto the new system with the tests kept green.
@@ -173,11 +174,12 @@ the attack surface yet).
 
 ## 4. What to do before step 1
 
-1. Message Adriano Foschi (Konio) and the Koinos Telegram: lineage, credit, lists, testers.
-2. Open the koindx/token-list repo, copy the mainnet and harbinger entries we want into
+1. Open the koindx/token-list repo, copy the mainnet and harbinger entries we want into
    `src/data/`, with their MIT notice.
-3. Confirm the two mainnet accounts that exist today still open in 0.4.1 (1LQYsd…, and 14Ppx… for
+2. Confirm the two mainnet accounts that exist today still open in 0.4.1 (1LQYsd…, and 14Ppx… for
    whoever holds its key), then start the Capacitor 8 branch.
+
+Decided 2026-10-19: no outreach to Konio's author and no credit line in the app; the lists are ours.
 
 ## 5. Sources
 
