@@ -39,8 +39,13 @@ async function submit(root: HTMLElement, form: string, fields: Record<string, st
   f.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await settle();
 }
+/** Waits for the app's async work (PBKDF2 at 600k iterations takes seconds on a slow CI runner). */
 const settle = async () => {
-  for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 25));
+  const root = document.getElementById("app")!;
+  const deadline = Date.now() + 60_000;
+  await new Promise((r) => setTimeout(r, 50));
+  while (root.querySelector(".busy") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 100));
 };
 const h1 = (root: HTMLElement) => root.querySelector("h1")?.textContent ?? "";
 /** After creation the app may be on the activation screen (no account on this network yet) or on home. */
