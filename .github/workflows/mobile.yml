@@ -9,6 +9,8 @@ on:
 jobs:
   android:
     runs-on: ubuntu-latest
+    env:
+      KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,11 +26,9 @@ jobs:
           npm run build
           npx cap sync android
       - name: Restore the release keystore from secrets
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-        env:
-          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        if: env.KS_B64 != ''
         run: |
-          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
       - name: Build the signed release APK
         env:
