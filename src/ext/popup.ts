@@ -1,6 +1,6 @@
 // The toolbar popup: the same wallet app in a 400px window. Closing the popup locks it (the
 // decrypted seed lives only in this page's memory). "Open in a tab" gives the full-size page.
-import "../style.css";
+import "../ui/tokens.css";
 import { App } from "../ui/app";
 
 const root = document.getElementById("app");

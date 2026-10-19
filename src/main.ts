@@ -1,4 +1,4 @@
-import "./style.css";
+import "./ui/tokens.css";
 import { App } from "./ui/app";
 
 const root = document.getElementById("app");

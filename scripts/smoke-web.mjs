@@ -73,15 +73,17 @@ try {
     if (still !== "Activate your account") throw new Error(`${network}: an unfunded wallet moved on to "${still}"`);
     console.log(`PASS  ${network}: unfunded, it waits and submits nothing`);
     await checkWidth(`${network} activation`);
+    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/activation-${network}.png` });
 
     // a wallet holding the live account (saved under the old "(testnet)" label) opens on its balance
     await unlockWith(JSON.stringify(vaultWithAccount), network);
     await page.waitForFunction(() => {
-      const cells = [...document.querySelectorAll(".stats strong")].map((e) => e.textContent?.trim());
-      return cells.length === 3 && cells.every((c) => c && !c.startsWith("…"));
+      const cells = [".bal .v", ".stat .v", "#ticker-head"].map((q) => document.querySelector(q)?.textContent?.trim());
+      return cells.every((c) => c && !c.includes("…"));
     }, null, { timeout: 45_000 });
-    const cells = await page.$$eval(".stats strong", (els) => els.map((e) => e.textContent?.trim()));
-    const label = await page.$eval(".hero .label", (e) => e.textContent?.trim());
+    const cells = await page.evaluate(() => [".bal .v", ".stat .v", "#ticker-head"].map((q) => document.querySelector(q)?.textContent?.trim()));
+    const label = await page.$eval(".card .lbl", (e) => e.textContent?.trim());
+    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/home-${network}.png` });
     if (!/^Your account/.test(label ?? "") || /\(testnet\)/.test(label ?? "")) throw new Error(`${network}: account label is "${label}"`);
     console.log(`PASS  ${network}: ${label}, balance ${cells[0]}, mana ${cells[1]}, head ${cells[2]}`);
     await checkWidth(`${network} home`);

@@ -1,7 +1,10 @@
 // Extension build, part 3 of 3: the page-world script (window.kondor) as one classic file.
 import { defineConfig } from "vite";
+import { readFileSync } from "node:fs";
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
 
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   publicDir: false,
   define: { "process.env.NODE_ENV": '"production"', global: "globalThis" },
   build: {

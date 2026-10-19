@@ -25,7 +25,11 @@ koinos-pq-core          keys (24 words <-> seed -> key -> address), the two sign
 src/core/vault.ts       encrypted at rest: PBKDF2-SHA256 (600k) + AES-256-GCM, WebCrypto only; two fixed slots (duress)
 src/core/addressbook.ts contacts per wallet, address-poisoning (look-alike) detection
 src/core/clipboard.ts   copy with a timed wipe
-src/ui/app.ts           the screens, no framework (web app and extension popup alike)
+src/ui/app.ts           the screens, no framework (web app, native shells and extension popup alike)
+src/ui/components.ts    the building blocks those screens are made of (address strip, card, tab bar, ...)
+src/ui/tokens.css       the design system: tokens, type, controls; bundled Archivo and JetBrains Mono (OFL)
+src/data/               the token lists, checked against the chain (scripts/check-token-list.mjs)
+design/                 the screens as static HTML, reviewed before they were ported (scripts/design-shots.mjs)
 src/ext/inpage.ts       window.kondor for web pages (kondor-js, MIT)
 src/ext/content.ts      relays page <-> extension messages
 src/ext/background.ts   answers provider calls; queues anything that needs a signature
@@ -71,6 +75,7 @@ npm test            # key vectors, signature formats, vault
 npm run dev         # web app at http://localhost:5173
 npm run build       # web app as a static site in dist/, serve from anywhere
 npm run build:ext   # browser extension in dist-extension/
+node scripts/smoke-web-local.mjs   # serves dist/ and drives it in a real browser with the CSP in force (needs Playwright, see the script)
 ```
 
 To use the extension: Chrome (or Brave, Edge) → `chrome://extensions` → Developer mode → "Load

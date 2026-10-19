@@ -1,9 +1,13 @@
-// The whole UI: a small state machine rendering HTML strings into #app, no framework.
+// The whole UI: a small state machine rendering HTML strings into #app, no framework. The markup comes
+// from components.ts on the design system in tokens.css.
 //
 // Flow for a new user: create (24 words, check, passphrase) -> "Activate your account": one address
 // to fund; once it holds enough, the wallet installs the post-quantum contract and registers the key
 // by itself -> home. The account's address is derived from the seed, so importing the 24 words finds
 // it again on any network with no extra input.
+//
+// Signed-in screens sit under a four-tab bar: Account, Activity, Dapps (native shells only, the
+// extension plays that role on the web) and Settings. Onboarding and unlock are a linear flow without it.
 import QRCode from "qrcode";
 import {
   Chain, NETWORKS, formatKoin, parseKoin, isAddress, short, type HistoryItem, type Network, deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput,
@@ -17,10 +21,23 @@ import {
 import { canSign, detectAccount, displayLabel } from "../core/accounts";
 import { AddressBook, addressBookNamespace, type Assessment } from "../core/addressbook";
 import { CLIPBOARD_WIPE_SECONDS, copyWithWipe } from "../core/clipboard";
+import {
+  addressStrip, balance, button, card, check, esc, field, fmtAmount, header, hexStrip, input, linkButton, list, listRow, notice, section, shortAddr, stat, tabBar,
+  ticker, tile, words, type Tab,
+} from "./components";
+import { isNative } from "./platform";
 
 type Screen =
   | "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "send-confirm" | "sent" | "receive" | "history"
-  | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words";
+  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words";
+
+/** Screens that live under the tab bar, and which tab they belong to. */
+const TAB_OF: Partial<Record<Screen, string>> = {
+  home: "account", send: "account", "send-confirm": "account", sent: "account", receive: "account", setup: "account",
+  history: "activity",
+  dapps: "dapps",
+  settings: "settings", export: "settings", save: "settings", contacts: "settings", duress: "settings", "duress-words": "settings",
+};
 
 interface SetupState {
   account: string;
@@ -57,6 +74,8 @@ interface SendCheck {
   assessment: Assessment;
 }
 
+type Theme = "system" | "light" | "dark";
+
 interface State {
   screen: Screen;
   /** the stored file (all slots); null when no wallet is saved in this browser */
@@ -84,6 +103,7 @@ interface State {
   autolockMinutes: number;
   lockOnHide: boolean;
   clipboardWipe: boolean;
+  theme: Theme;
   /** 24 words of a decoy wallet being set up */
   pendingDecoy: string | null;
   sendCheck: SendCheck | null;
@@ -98,6 +118,7 @@ const PREF_DEVNET_RPC = "koinos-pq-wallet/devnet-rpc";
 const PREF_AUTOLOCK = "koinos-pq-wallet/autolock-minutes";
 const PREF_LOCK_ON_HIDE = "koinos-pq-wallet/lock-on-hide";
 const PREF_CLIPBOARD_WIPE = "koinos-pq-wallet/clipboard-wipe";
+const PREF_THEME = "koinos-pq-wallet/theme";
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
 
@@ -118,8 +139,12 @@ const pref = {
   },
 };
 
-const esc = (s: unknown) =>
-  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+/** Light and dark follow the system unless Settings says otherwise; the choice is a data attribute tokens.css reads. */
+export function applyTheme(theme: Theme) {
+  const el = document.documentElement;
+  if (theme === "system") delete el.dataset.theme;
+  else el.dataset.theme = theme;
+}
 
 export class App {
   private s: State;
@@ -130,6 +155,7 @@ export class App {
   constructor(root: HTMLElement) {
     this.root = root;
     const stored = localVaultStore.load();
+    const theme = (pref.get(PREF_THEME) ?? "system") as Theme;
     this.s = {
       screen: stored ? "unlock" : "welcome",
       file: null,
@@ -155,6 +181,7 @@ export class App {
       autolockMinutes: Number(pref.get(PREF_AUTOLOCK) ?? 10) || 10,
       lockOnHide: pref.get(PREF_LOCK_ON_HIDE) !== "0",
       clipboardWipe: pref.get(PREF_CLIPBOARD_WIPE) !== "0",
+      theme: ["light", "dark"].includes(theme) ? theme : "system",
       pendingDecoy: null,
       sendCheck: null,
       setup: null,
@@ -162,6 +189,7 @@ export class App {
       change: null,
     };
     if (!NETWORKS[this.s.networkName]) this.s.networkName = "testnet";
+    applyTheme(this.s.theme);
     root.addEventListener("click", (e) => this.onClick(e));
     root.addEventListener("submit", (e) => this.onSubmit(e));
     root.addEventListener("change", (e) => this.onChange(e));
@@ -213,6 +241,9 @@ export class App {
   private account(): Account | null {
     const vis = this.visibleAccounts();
     return vis.find((a) => a.index === this.s.accountIndex) ?? vis[0] ?? null;
+  }
+  private unit(): string {
+    return this.network.name === "testnet" ? "tKOIN" : "KOIN";
   }
 
   // ---------- lifecycle ----------
@@ -415,7 +446,7 @@ export class App {
       if (this.s.screen !== "setup") return;
       const manaEl = this.root.querySelector<HTMLElement>("#setup-mana");
       if (manaEl && need !== null) {
-        manaEl.className = funded ? "notice" : "muted";
+        manaEl.className = funded ? "note ok" : "mute";
         manaEl.textContent = this.manaLine(st.mana, need);
       } else {
         this.render();
@@ -437,6 +468,10 @@ export class App {
   private endSetup() {
     if (this.s.setup?.timer) window.clearInterval(this.s.setup.timer);
     this.s.setup = null;
+  }
+  /** Leaving the activation screen by a tab stops its polling, unless the activation itself is running. */
+  private leaveSetup() {
+    if (this.s.setup && !this.s.setup.running) this.endSetup();
   }
   private async runSetup() {
     const st = this.s.setup;
@@ -485,6 +520,14 @@ export class App {
       await this.refresh();
     }
   }
+  private loadActivity() {
+    void this.run("Loading activity", async () => {
+      const a = this.account();
+      this.s.screen = "history";
+      if (!a) return;
+      this.s.history = await this.chain().history(a.address);
+    });
+  }
 
   // ---------- events ----------
   private onChange(e: Event) {
@@ -502,6 +545,12 @@ export class App {
       this.s.balance = this.s.mana = this.s.head = null;
       this.s.history = null;
       void this.run("Loading", () => this.enterHome());
+    }
+    if (t instanceof HTMLSelectElement && t.name === "theme") {
+      const theme = (["light", "dark"].includes(t.value) ? t.value : "system") as Theme;
+      this.s.theme = theme;
+      pref.set(PREF_THEME, theme);
+      applyTheme(theme);
     }
     if (t instanceof HTMLInputElement && t.name === "account") {
       this.s.accountIndex = Number(t.value);
@@ -542,7 +591,11 @@ export class App {
       case "back-home":
         this.s.sent = null;
         this.s.exportWords = null;
-        this.go("home");
+        if (this.s.setup?.running) this.go("setup"); // an activation in progress: back to its progress view
+        else {
+          this.leaveSetup();
+          this.go("home");
+        }
         break;
       case "welcome":
         if (this.s.pendingSeed) wipe(this.s.pendingSeed);
@@ -564,14 +617,16 @@ export class App {
         this.go("receive");
         break;
       case "history":
-        void this.run("Loading history", async () => {
-          const a = this.account();
-          if (!a) return;
-          this.s.history = await this.chain().history(a.address);
-          this.s.screen = "history";
-        });
+        this.leaveSetup();
+        this.loadActivity();
+        break;
+      case "tab-dapps":
+        this.leaveSetup();
+        this.go("dapps");
         break;
       case "settings":
+        this.leaveSetup();
+        this.s.exportWords = null;
         this.go("settings");
         break;
       case "copy": {
@@ -636,14 +691,14 @@ export class App {
         void this.run("Checking", async () => {
           if (!this.s.keys) return;
           const b = await this.chain().balance(this.s.keys.address);
-          this.s.notice = `Native address on ${this.network.name}: ${formatKoin(b)} KOIN.`;
+          this.s.notice = `Native address on ${this.network.name}: ${formatKoin(b)} ${this.unit()}.`;
         });
         break;
       case "delete-wallet": {
-        const typed = window.prompt("This deletes the wallet from this browser. Your 24 words are the only way back in.\nType DELETE to confirm.");
+        const typed = window.prompt("This deletes the wallet from this device. Your 24 words are the only way back in.\nType DELETE to confirm.");
         if (typed === "DELETE") {
           localVaultStore.clear();
-          this.lock("Wallet deleted from this browser.");
+          this.lock("Wallet deleted from this device.");
         }
         break;
       }
@@ -884,6 +939,16 @@ export class App {
   }
 
   // ---------- views ----------
+  private tabs(): Tab[] {
+    const t: Tab[] = [
+      { id: "account", label: "Account", action: "back-home" },
+      { id: "activity", label: "Activity", action: "history" },
+    ];
+    if (isNative()) t.push({ id: "dapps", label: "Dapps", action: "tab-dapps" });
+    t.push({ id: "settings", label: "Settings", action: "settings" });
+    return t;
+  }
+
   private render() {
     const s = this.s;
     const body = {
@@ -898,7 +963,8 @@ export class App {
       "send-confirm": () => this.vSendConfirm(),
       sent: () => this.vSent(),
       receive: () => this.vReceive(),
-      history: () => this.vHistory(),
+      history: () => this.vActivity(),
+      dapps: () => this.vDapps(),
       settings: () => this.vSettings(),
       export: () => this.vExport(),
       setup: () => this.vSetup(),
@@ -907,16 +973,24 @@ export class App {
       duress: () => this.vDuress(),
       "duress-words": () => this.vDuressWords(),
     }[s.screen]();
+    const tab = TAB_OF[s.screen];
+    const inApp = !!tab && !!s.keys;
+    const notes = [
+      s.busy ? notice("busy", `${esc(s.busy)}…`) : "",
+      s.error ? notice("danger", esc(s.error)) : "",
+      s.notice ? notice("ok", esc(s.notice)) : "",
+    ].join("");
     this.root.innerHTML = `
-      <header class="top">
-        <div class="brand"><span class="mark" aria-hidden="true">PQ</span>Koinos PQ Wallet <span class="tag">ML-DSA-44</span></div>
-        ${s.keys ? `<div class="topright"><select name="network" aria-label="Network">${Object.keys(NETWORKS).map((n) => `<option value="${esc(n)}" ${n === s.networkName ? "selected" : ""}>${esc(n)}</option>`).join("")}</select><button class="ghost" data-action="lock">Lock</button></div>` : ""}
-      </header>
-      ${s.busy ? `<div class="busy" role="status">${esc(s.busy)}…</div>` : ""}
-      ${s.error ? `<div class="error" role="alert">${esc(s.error)}</div>` : ""}
-      ${s.notice ? `<div class="notice" role="status">${esc(s.notice)}</div>` : ""}
-      <section class="card">${body}</section>
-      <footer class="foot">Keys never leave this browser. A test build, not audited.</footer>`;
+      <div class="shell">
+        ${header(inApp ? button("Lock", { action: "lock", variant: "ghost", mini: true }) : s.keys ? "" : `<span class="hexstrip">ML-DSA-44</span>`)}
+        ${inApp ? ticker(this.network.name, s.head, this.network.autoBlocks) : ""}
+        <div class="content ${inApp ? "" : "plain"}">
+          ${notes}
+          ${body}
+          ${inApp ? "" : `<p class="foot">Koinos PQ Wallet · open source, MIT · a test build, not audited</p>`}
+        </div>
+        ${inApp ? tabBar(this.tabs(), tab) : ""}
+      </div>`;
     const canvas = this.root.querySelector<HTMLCanvasElement>("canvas#qr");
     if (canvas) {
       const a = this.account();
@@ -929,41 +1003,38 @@ export class App {
 
   private vWelcome() {
     return `
-      <h1>A wallet that a quantum computer cannot pick</h1>
-      <p>Your account is controlled by an <strong>ML-DSA-44</strong> key (the NIST post-quantum standard, FIPS 204) instead of secp256k1. The key lives only in this browser, encrypted with a passphrase you choose, and is backed up by 24 words.</p>
-      <div class="row">
-        <button class="primary" data-action="create">Create a new wallet</button>
-        <button data-action="import">Import 24 words</button>
-      </div>
-      <p class="muted">After you create it, send some KOIN to your new account and the wallet activates it by itself. This is a test build: use small amounts.</p>`;
+      <h1 class="wide" style="margin-top:24px">A wallet that a quantum computer cannot pick</h1>
+      <p>Your account is controlled by an <strong>ML-DSA-44</strong> key (the NIST post-quantum standard, FIPS 204) instead of secp256k1. The key lives only on this device, encrypted with a passphrase you choose, and is backed up by 24 words.</p>
+      <div class="row">${button("Create a new wallet", { action: "create", variant: "primary" })}${button("Import 24 words", { action: "import" })}</div>
+      <p class="fine" style="margin-top:16px">After you create it, send some KOIN to your new account and the wallet activates it by itself. This is a test build: use small amounts.</p>`;
   }
 
   private vCreate() {
-    const words = this.s.pendingMnemonic!.split(" ");
+    const w = this.s.pendingMnemonic!.split(" ");
     return `
       <h1>Write these 24 words down</h1>
       <p>On paper, in order. They are the only way to recover the wallet. Anyone who has them has your funds. Do not screenshot them.</p>
-      <ol class="words">${words.map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
-      <div class="row"><button class="primary" data-action="wrote-down">I have written them down</button><button class="ghost" data-action="welcome">Cancel</button></div>`;
+      ${card(words(w))}
+      <div class="row">${button("I have written them down", { action: "wrote-down", variant: "primary" })}${button("Cancel", { action: "welcome", variant: "ghost" })}</div>`;
   }
 
   private vConfirm() {
     return `
       <h1>Check your note</h1>
       <form data-form="confirm">
-        ${this.s.confirmIdx.map((i, k) => `<label>Word number ${i + 1}<input name="w${k}" autocomplete="off" autocapitalize="none" spellcheck="false" required ${k === 0 ? "autofocus" : ""}></label>`).join("")}
-        <div class="row"><button class="primary" type="submit">Continue</button><button class="ghost" type="button" data-action="show-words">Show the words again</button></div>
+        ${this.s.confirmIdx.map((i, k) => field(`Word number ${i + 1}`, input({ name: `w${k}`, class: "mono", autocomplete: "off", autocapitalize: "none", spellcheck: "false", required: true, autofocus: k === 0 }))).join("")}
+        <div class="row">${button("Continue", { variant: "primary" })}${button("Show the words again", { action: "show-words", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vPassphrase() {
     return `
       <h1>Choose a passphrase</h1>
-      <p>It encrypts the wallet in this browser. It does not replace the 24 words: if you forget it, import the words again.</p>
+      <p>It encrypts the wallet on this device. It does not replace the 24 words: if you forget it, import the words again.</p>
       <form data-form="passphrase">
-        <label>Passphrase (${MIN_PASSPHRASE_LENGTH}+ characters)<input name="p1" type="password" minlength="${MIN_PASSPHRASE_LENGTH}" required autofocus autocomplete="new-password"></label>
-        <label>Repeat it<input name="p2" type="password" minlength="${MIN_PASSPHRASE_LENGTH}" required autocomplete="new-password"></label>
-        <div class="row"><button class="primary" type="submit">Create wallet</button><button class="ghost" type="button" data-action="welcome">Cancel</button></div>
+        ${field(`Passphrase (${MIN_PASSPHRASE_LENGTH}+ characters)`, input({ name: "p1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
+        ${field("Repeat it", input({ name: "p2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
+        <div class="row">${button("Create wallet", { variant: "primary" })}${button("Cancel", { action: "welcome", variant: "ghost" })}</div>
       </form>`;
   }
 
@@ -971,37 +1042,35 @@ export class App {
     return `
       <h1>Import</h1>
       <form data-form="import">
-        <label>Your 24 words
-          <textarea name="seed" rows="4" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus></textarea></label>
-        <p class="muted">An account this wallet activated is found again automatically.</p>
+        ${field("Your 24 words", `<textarea name="seed" rows="4" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus></textarea>`)}
+        <p class="fine">An account this wallet activated is found again automatically.</p>
         <details class="adv"><summary>Advanced</summary>
-          <label>The 64-character seed from the koinos-pq command-line tool also works in the box above. For an account set up with that tool, give its address:
-            <input name="pqwallet" autocomplete="off" placeholder="1…"></label>
+          ${field("The 64-character seed from the koinos-pq command-line tool also works in the box above. For an account set up with that tool, give its address:", input({ name: "pqwallet", class: "mono", autocomplete: "off", placeholder: "1…" }))}
         </details>
-        <div class="row"><button class="primary" type="submit">Continue</button><button class="ghost" type="button" data-action="welcome">Cancel</button></div>
+        <div class="row">${button("Continue", { variant: "primary" })}${button("Cancel", { action: "welcome", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vUnlock() {
     return `
-      <h1>Unlock</h1>
+      <h1 class="wide" style="margin-top:40px">Unlock</h1>
       <form data-form="unlock">
-        <label>Passphrase<input name="passphrase" type="password" required autofocus></label>
-        <div class="row"><button class="primary" type="submit">Unlock</button></div>
+        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "current-password" }))}
+        <div class="row">${button("Unlock", { variant: "primary", block: true })}</div>
       </form>
-      <p class="muted">Lost the passphrase? <button class="link" data-action="delete-wallet">Delete this wallet</button> and import your 24 words again.</p>`;
+      <p class="fine" style="margin-top:24px">Lost the passphrase? ${linkButton("Delete this wallet", "delete-wallet")} and import your 24 words again.</p>`;
   }
 
   private accountPicker() {
-    const list = this.visibleAccounts();
+    const items = this.visibleAccounts();
     const cur = this.account();
-    if (list.length <= 1) return "";
-    return `<fieldset class="accounts"><legend>Account</legend>${list
+    if (items.length <= 1) return "";
+    return `<ul class="accts">${items
       .map(
         (a) =>
-          `<label class="acct"><input type="radio" name="account" value="${a.index}" ${cur && a.index === cur.index ? "checked" : ""}><span>${esc(a.label)} <code>${esc(short(a.address))}</code>${a.mode === "native" ? " <small>native</small>" : a.mode === "watch" ? " <small>watch-only</small>" : ""}</span></label>`,
+          `<li><label><input type="radio" name="account" value="${a.index}" ${cur && a.index === cur.index ? "checked" : ""}><span class="grow">${esc(a.label)} <span class="s mono">${esc(shortAddr(a.address))}</span>${a.mode === "native" ? ` <span class="s">native</span>` : a.mode === "watch" ? ` <span class="s">watch-only</span>` : ""}</span></label></li>`,
       )
-      .join("")}</fieldset>`;
+      .join("")}</ul>`;
   }
 
   private vHome() {
@@ -1009,41 +1078,45 @@ export class App {
     const s = this.s;
     if (!a) {
       return `
+        ${section("01", "Account")}
         <h1>Activate your account</h1>
-        <p>Your wallet has its post-quantum key. To use it on <strong>${esc(this.network.name)}</strong>, send some KOIN to your account's address and the wallet activates it.</p>
-        <div class="row"><button class="primary" data-action="setup">Show my account's address</button><button data-action="settings">Settings</button></div>
-        <p class="muted">Head block ${s.head === null ? "…" : esc(s.head)}</p>`;
+        <p>Your wallet has its post-quantum key. To use it on <strong>${esc(this.network.name)}</strong>, send some ${esc(this.unit())} to your account's address and the wallet activates it.</p>
+        <div class="row">${button("Show my account's address", { action: "setup", variant: "primary" })}${button("Settings", { action: "settings" })}</div>`;
     }
+    const unit = this.unit();
+    const sig = a.mode === "native" ? "ML-DSA-44 · 3,733 B" : "ML-DSA-44 · 2,420 B";
     return `
+      ${section("01", "Account", hexStrip(a.address))}
       ${this.accountPicker()}
-      <div class="hero">
-        <span class="label">${esc(a.label)} · ${esc(this.network.name)}</span>
-        <div class="chip"><code>${esc(a.address)}</code><button class="mini" data-action="copy" data-copy="${esc(a.address)}">Copy</button></div>
-        <div class="stats">
-          <div class="stat main"><span class="label">Balance</span><strong>${s.balance === null ? "…" : esc(formatKoin(s.balance))}<span class="unit">KOIN</span></strong></div>
-          <div class="stat"><span class="label">Mana</span><strong>${s.mana === null ? "…" : esc(formatKoin(s.mana, 2))}</strong></div>
-          <div class="stat"><span class="label">Head block</span><strong>${s.head === null ? "…" : esc(s.head)}</strong></div>
+      ${card(`
+        <span class="lbl">${esc(a.label)} · ${esc(this.network.name)}</span>
+        ${addressStrip(a.address)}
+        <div class="row tight">${button("Copy", { action: "copy", mini: true, data: { copy: a.address } })}${button("Refresh", { action: "refresh", variant: "ghost", mini: true })}</div>
+        <div style="margin-top:20px">${balance(s.balance === null ? null : fmtAmount(formatKoin(s.balance)), unit)}</div>
+        <div style="margin-top:12px">
+          ${stat("Mana", s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2))))}
+          ${stat("Signature", canSign(a) ? esc(sig) : "none here (watch-only)")}
         </div>
-      </div>
-      <div class="tiles">
-        ${canSign(a) ? `<button class="primary" data-action="send">Send</button>` : `<button disabled title="Watch-only: this wallet has no key for this address">Watch-only</button>`}
-        <button data-action="receive">Receive</button>
-        <button data-action="history">History</button>
-        <button data-action="settings">Settings</button>
-      </div>
-      <div class="row"><button class="ghost mini" data-action="refresh">Refresh</button></div>`;
+        <div class="actions">
+          ${canSign(a) ? button("Send", { action: "send", variant: "primary" }) : button("Watch-only", { type: "button", disabled: true, title: "Watch-only: this wallet has no key for this address" })}
+          ${button("Receive", { action: "receive" })}
+        </div>`)}
+      ${section("02", "Tokens")}
+      ${list(`<li data-token="koin">${tile(unit)}<span class="grow"><span class="t">${esc(unit === "tKOIN" ? "Test Koin" : "Koin")}</span><br><span class="s">${esc(unit)}</span></span><span class="amt">${s.balance === null ? "…" : esc(fmtAmount(formatKoin(s.balance)))}</span></li>`)}`;
   }
 
   private vSend() {
     const a = this.account();
+    const unit = this.unit();
     return `
+      ${section("01", "Send", `from <span class="mono">${esc(shortAddr(a?.address))}</span>`)}
       <h1>Send KOIN</h1>
-      <p class="muted">From ${esc(a?.label ?? "")} <code>${esc(short(a?.address))}</code> on ${esc(this.network.name)}. Signed with ML-DSA-44 (${a?.mode === "native" ? "3,733-byte native entry" : "2,420-byte signature"}).</p>
       <form data-form="send">
-        <label>To<input name="to" autocomplete="off" required placeholder="1…" autofocus list="contacts"></label>
+        ${field("To", input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" }))}
         <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
-        <label>Amount (KOIN)<input name="amount" inputmode="decimal" autocomplete="off" required placeholder="0.5"></label>
-        <div class="row"><button class="primary" type="submit">Sign and send</button><button class="ghost" type="button" data-action="back-home">Back</button></div>
+        ${field(`Amount (${unit})`, input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" }))}
+        <p class="fine">From ${esc(a?.label ?? "")} on ${esc(this.network.name)}, signed here with ML-DSA-44 (${a?.mode === "native" ? "3,733-byte native entry" : "2,420-byte signature"}). A first-time or look-alike recipient asks you to confirm it before anything is signed.</p>
+        <div class="row">${button("Sign and send", { variant: "primary" })}${button("Back", { action: "back-home", variant: "ghost" })}</div>
       </form>`;
   }
 
@@ -1051,116 +1124,159 @@ export class App {
     const t = this.s.sent!;
     const link = this.network.explorerTx?.(t.txId);
     return `
+      ${section("01", "Send", t.waiting ? "waiting" : t.block ? "mined" : "submitted")}
       <h1>${t.waiting ? "Sent, waiting for a block" : t.block ? "Mined" : "Submitted"}</h1>
-      <p>Transaction <code class="address">${esc(t.txId)}</code></p>
-      <p class="muted">Signature entry ${esc(t.bytes)} bytes; rc used ${esc(t.rcUsed)}${t.block ? `; block ${esc(t.block)}` : ""}.${this.network.autoBlocks ? "" : " This network only makes blocks when the devnet script produces one."}</p>
-      ${link ? `<p><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Open in explorer</a></p>` : ""}
-      <div class="row"><button class="primary" data-action="back-home">Done</button></div>`;
+      ${card(`<span class="lbl">Transaction</span><code class="address addr sm box" style="color:var(--ink)">${esc(t.txId)}</code>
+        <div style="margin-top:12px">${stat("Signature entry", `${esc(t.bytes)} B`)}${stat("Mana used", esc(t.rcUsed))}${t.block ? stat("Block", esc(fmtAmount(t.block))) : ""}</div>`)}
+      ${this.network.autoBlocks ? "" : `<p class="fine" style="margin-top:12px">This network only makes blocks when the devnet script produces one.</p>`}
+      ${link ? `<p style="margin-top:12px"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Open in explorer</a></p>` : ""}
+      <div class="row">${button("Done", { action: "back-home", variant: "primary" })}</div>`;
   }
 
   private vReceive() {
     const a = this.account();
     return `
-      <h1>Receive</h1>
-      <canvas id="qr" width="220" height="220" aria-label="QR code of the address"></canvas>
-      <code class="address">${esc(a?.address ?? "")}</code>
-      <div class="row"><button data-action="copy" data-copy="${esc(a?.address ?? "")}">Copy address</button><button class="ghost" data-action="back-home">Back</button></div>`;
+      ${section("01", "Receive", esc(a?.label ?? ""))}
+      ${card(`
+        <canvas id="qr" class="qr" width="220" height="220" aria-label="QR code of the address"></canvas>
+        ${addressStrip(a?.address ?? "", { box: true })}
+        <div class="row">${button("Copy address", { action: "copy", variant: "primary", data: { copy: a?.address ?? "" } })}${button("Back", { action: "back-home", variant: "ghost" })}</div>
+        ${this.s.clipboardWipe ? `<p class="fine" style="margin-top:12px">The clipboard clears itself ${CLIPBOARD_WIPE_SECONDS} s after copying.</p>` : ""}`, `style="text-align:center"`)}`;
   }
 
-  private vHistory() {
+  private vActivity() {
+    const a = this.account();
     const h = this.s.history ?? [];
+    const rows = h
+      .map((i) => {
+        const m = /^(received|sent) (\S+) (from|to) (.+?)( \(reverted\))?$/.exec(i.summary);
+        const main = m
+          ? `<span class="t">${esc(m[1] === "sent" ? "Sent" : "Received")} ${esc(fmtAmount(m[2]!))} ${esc(this.unit())}</span> <span class="s">${esc(m[3])} ${esc(m[4])}${m[5] ? " (reverted)" : ""}</span>`
+          : `<span class="t">${esc(i.summary)}</span>`;
+        const meta = [i.txId ? esc(short(i.txId)) : "", i.blockHeight ? `block ${esc(fmtAmount(i.blockHeight))}` : ""].filter(Boolean).join(" · ");
+        const amt = m ? `<span class="amt">${m[1] === "sent" ? "−" : "+"}${esc(fmtAmount(m[2]!))}</span>` : "";
+        return listRow(`${main}<br><span class="s mono">${meta}</span>`, amt);
+      })
+      .join("");
     return `
-      <h1>History</h1>
-      ${h.length ? `<ul class="hist">${h.map((i) => `<li><span>${esc(i.summary)}</span>${i.txId ? `<code>${esc(short(i.txId))}</code>` : ""}${i.blockHeight ? `<small>block ${esc(i.blockHeight)}</small>` : ""}</li>`).join("")}</ul>` : "<p class='muted'>Nothing yet.</p>"}
-      <div class="row"><button class="ghost" data-action="back-home">Back</button></div>`;
+      ${section("02", "Activity", `<span class="mono">${esc(shortAddr(a?.address))}</span>`)}
+      ${!a ? `<p class="mute">No account on ${esc(this.network.name)} yet.</p>` : h.length ? list(rows) : `<p class="mute">Nothing yet.</p>`}
+      <div class="row tight">${button("Refresh", { action: "history", variant: "ghost", mini: true })}</div>`;
+  }
+
+  private vDapps() {
+    return `
+      ${section("03", "Dapps")}
+      <p class="mute">The in-app dapp browser arrives in a later build. Until then, Koinos sites work with the browser extension on a computer, through the same window.kondor interface.</p>`;
   }
 
   private vSettings() {
     const net = this.network.name;
-    const list = this.accounts().filter((a) => a.mode === "pqwallet");
+    const items = this.accounts().filter((a) => a.mode === "pqwallet" || a.mode === "watch");
     const hasHere = this.visibleAccounts().some((a) => a.mode === "pqwallet");
+    const sel = (name: string, options: Array<[string, string]>, current: string) =>
+      `<select name="${name}">${options.map(([v, l]) => `<option value="${esc(v)}" ${v === current ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
     return `
+      ${section("04", "Settings", esc(__APP_VERSION__))}
       <h1>Settings</h1>
-      <h2>Accounts</h2>
+      ${section(null, "Accounts")}
       ${
-        list.length
-          ? `<ul class="plain">${list.map((a) => `<li><code>${esc(a.address)}</code> ${esc(a.label)}${a.derived ? " <small>found from your 24 words</small>" : ` <button class="link" data-action="remove-account" data-index="${a.index}">remove</button>`}</li>`).join("")}</ul>`
-          : `<p class="muted">No account on ${esc(net)} yet.</p>`
+        items.length
+          ? list(items.map((a) => listRow(`<span class="t">${esc(a.label)}</span>${a.mode === "watch" ? ` <span class="s">watch-only</span>` : ""}<br><span class="s mono">${esc(a.address)}</span>`, a.derived ? `<span class="s">found from your 24 words</span>` : linkButton("remove", "remove-account", { index: a.index }))).join(""))
+          : `<p class="mute">No account on ${esc(net)} yet.</p>`
       }
-      ${hasHere ? "" : `<div class="row"><button class="primary" data-action="setup">Activate your account on ${esc(net)}</button></div>`}
-      <h2>Backup</h2>
-      <p class="muted">Show the 24 words again (asks for the passphrase).</p>
-      <div class="row"><button data-action="export">Show recovery words</button></div>
-      <h2>Contacts</h2>
-      <p class="muted">${this.s.book?.list().length ?? 0} saved. Sending to an address you have never used, or one that merely resembles one you have, asks you to check it first.</p>
-      <div class="row"><button data-action="contacts">Open contacts</button></div>
-      <h2>Watch an address</h2>
-      <p class="muted">See the balance, mana and history of any address (your cold account, a friend's). No key, no sending.</p>
-      <form data-form="watch" class="inline"><input name="address" placeholder="1…" autocomplete="off" required><input name="label" placeholder="label (optional)" autocomplete="off"><button type="submit">Watch</button></form>
-      <h2>Duress wallet</h2>
-      <p class="muted">${this.s.vault?.hasDecoy ? "Set up. A second passphrase opens a separate, small wallet." : "Not set up. A second passphrase would open a separate, small wallet to show under pressure."}</p>
-      <div class="row"><button data-action="duress">${this.s.vault?.hasDecoy ? "Replace the duress wallet" : "Set up a duress wallet"}</button></div>
-      <h2>Locking and clipboard</h2>
-      <form data-form="autolock">
-        <label class="check">Auto-lock after <input name="minutes" type="number" min="1" max="120" value="${esc(this.s.autolockMinutes)}" style="width:5em"> minutes without activity</label>
-        <label class="check"><input type="checkbox" name="lockOnHide" ${this.s.lockOnHide ? "checked" : ""}> Lock ${HIDDEN_LOCK_SECONDS} s after this tab is hidden or the screen goes off</label>
-        <label class="check"><input type="checkbox" name="clipboardWipe" ${this.s.clipboardWipe ? "checked" : ""}> Clear the clipboard ${CLIPBOARD_WIPE_SECONDS} s after copying an address</label>
-        <div class="row"><button type="submit">Save</button></div>
+      ${hasHere ? "" : `<div class="row tight">${button(`Activate your account on ${esc(net)}`, { action: "setup", variant: "primary" })}</div>`}
+      <form data-form="watch" class="field inline">
+        <label><span>Watch an address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
+        <label><span>Label</span>${input({ name: "label", placeholder: "optional", autocomplete: "off" })}</label>
+        ${button("Watch")}
       </form>
+      <p class="fine">See the balance, mana and activity of any address (your cold account, a friend's). No key, no sending.</p>
+
+      ${section(null, "Security")}
+      <form data-form="autolock">
+        ${check("lockOnHide", `Lock ${HIDDEN_LOCK_SECONDS} s after this tab is hidden or the screen goes off`, this.s.lockOnHide)}
+        ${check("clipboardWipe", `Clear the clipboard ${CLIPBOARD_WIPE_SECONDS} s after copying an address`, this.s.clipboardWipe)}
+        ${field("Auto-lock after minutes without activity", input({ name: "minutes", class: "mono", type: "number", min: 1, max: 120, value: this.s.autolockMinutes, style: "max-width:7em" }))}
+        <div class="row tight">${button("Save")}</div>
+      </form>
+
+      ${section(null, "Backup")}
+      <p class="mute">Show the 24 words again (asks for the passphrase).</p>
+      <div class="row tight">${button("Show recovery words", { action: "export" })}</div>
+
+      ${section(null, "Contacts", `${this.s.book?.list().length ?? 0} saved`)}
+      <p class="mute">Sending to an address you have never used, or one that merely resembles one you have, asks you to check it first.</p>
+      <div class="row tight">${button("Open contacts", { action: "contacts" })}</div>
+
+      ${section(null, "Duress wallet", this.s.vault?.hasDecoy ? "set up" : "not set up")}
+      <p class="mute">${this.s.vault?.hasDecoy ? "Set up. A second passphrase opens a separate, small wallet." : "Not set up. A second passphrase would open a separate, small wallet to show under pressure."}</p>
+      <div class="row tight">${button(this.s.vault?.hasDecoy ? "Replace the duress wallet" : "Set up a duress wallet", { action: "duress" })}</div>
+
+      ${section(null, "Network")}
+      ${field("Node", sel("network", Object.keys(NETWORKS).map((n) => [n, n === "testnet" ? "testnet (Harbinger)" : n]), this.s.networkName))}
+      ${net === "devnet" ? `<form data-form="devnet-rpc" class="field inline"><label><span>Devnet RPC</span>${input({ name: "rpc", class: "mono", value: pref.get(PREF_DEVNET_RPC) ?? "http://127.0.0.1:8080/" })}</label>${button("Save")}</form>` : ""}
+
+      ${section(null, "Appearance")}
+      ${field("Theme", sel("theme", [["system", "Follow the system"], ["light", "Light"], ["dark", "Dark"]], this.s.theme))}
+
+      ${section(null, "About")}
+      <p class="mute">Koinos PQ Wallet ${esc(__APP_VERSION__)}. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.</p>
+
       <details class="adv"><summary>Advanced</summary>
-        <h2>Add an account by address</h2>
-        <p class="muted">Only for an account set up with the koinos-pq command-line tool. Accounts this wallet activates are found automatically.</p>
-        <form data-form="add-account" class="inline">
-          <input name="address" placeholder="1…" autocomplete="off" required><input name="label" placeholder="label (optional)" autocomplete="off"><button type="submit">Add</button>
+        ${section(null, "Add an account by address")}
+        <p class="fine">Only for an account set up with the koinos-pq command-line tool. Accounts this wallet activates are found automatically.</p>
+        <form data-form="add-account" class="field inline">
+          <label><span>Address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
+          <label><span>Label</span>${input({ name: "label", placeholder: "optional", autocomplete: "off" })}</label>
+          ${button("Add")}
         </form>
-        <h2>Native post-quantum address</h2>
-        <p class="muted">The address of the key itself. It needs nodes that verify ML-DSA-44 directly, a proposed node change that runs on the devnet only. On mainnet and Harbinger it can receive but cannot spend, so do not send to it.</p>
-        <code class="address">${esc(this.s.keys?.address ?? "")}</code>
-        <div class="row"><button data-action="native-balance">Check its balance on ${esc(net)}</button></div>
-        <h2>Devnet RPC</h2>
-        <form data-form="devnet-rpc" class="inline"><input name="rpc" value="${esc(pref.get(PREF_DEVNET_RPC) ?? "http://127.0.0.1:8080/")}"><button type="submit">Save</button></form>
+        ${section(null, "Native post-quantum address")}
+        <p class="fine">The address of the key itself. It needs nodes that verify ML-DSA-44 directly, a proposed node change that runs on the devnet only. On mainnet and Harbinger it can receive but cannot spend, so do not send to it.</p>
+        ${addressStrip(this.s.keys?.address ?? "", { size: "sm", box: true })}
+        <div class="row tight">${button(`Check its balance on ${esc(net)}`, { action: "native-balance", mini: true })}</div>
       </details>
-      <h2>Danger</h2>
-      <div class="row"><button class="danger" data-action="delete-wallet">Delete wallet from this browser</button><button class="ghost" data-action="back-home">Back</button></div>`;
+
+      ${section(null, "Danger")}
+      <div class="row tight">${button("Delete wallet from this device", { action: "delete-wallet", variant: "danger" })}</div>`;
   }
 
   private vSetup() {
     const st = this.s.setup;
     if (!st) return `<p>Nothing to activate.</p>`;
-    const unit = this.network.name === "mainnet" ? "KOIN" : "tKOIN";
+    const unit = this.unit();
     if (st.result) {
       const r = st.result;
       const link = (id: string | null) => (id && this.network.explorerTx ? `<a href="${esc(this.network.explorerTx(id))}" target="_blank" rel="noopener noreferrer">${esc(short(id))}</a>` : id ? `<code>${esc(short(id))}</code>` : "already done");
       return `
+        ${section("01", "Account", "ready")}
         <h1>Account ready</h1>
-        <p><code class="address">${esc(r.account)}</code></p>
-        <p>${r.uploadTx && r.uploadTx === r.registerTx ? `Contract installed and key registered in one transaction, ${link(r.uploadTx)}.` : `Contract installed ${link(r.uploadTx)}, key registered ${link(r.registerTx)}.`} From now on only this wallet's post-quantum key can move this account.</p>
-        <div class="row"><button class="primary" data-action="setup-done">Go to the account</button></div>`;
+        ${addressStrip(r.account, { box: true })}
+        <p style="margin-top:12px">${r.uploadTx && r.uploadTx === r.registerTx ? `Contract installed and key registered in one transaction, ${link(r.uploadTx)}.` : `Contract installed ${link(r.uploadTx)}, key registered ${link(r.registerTx)}.`} From now on only this wallet's post-quantum key can move this account.</p>
+        <div class="row">${button("Go to the account", { action: "setup-done", variant: "primary" })}</div>`;
     }
     if (st.running) {
       return `
+        ${section("01", "Account", "activating")}
         <h1>Activating your account</h1>
-        <p><code class="address">${esc(st.account)}</code></p>
-        <p>${esc(st.status?.message ?? "Starting")}${st.status?.txId ? ` <code>${esc(short(st.status.txId))}</code>` : ""}</p>
-        <p class="muted">One transaction, waiting for its block; usually under a minute. Keep this page open.${this.network.autoBlocks ? "" : " On the devnet, produce blocks with devnet/produce-block.mjs."}</p>`;
+        ${addressStrip(st.account, { box: true })}
+        ${notice("busy", `${esc(st.status?.message ?? "Starting")}${st.status?.txId ? ` <code>${esc(short(st.status.txId))}</code>` : ""}`)}
+        <p class="fine">One transaction, waiting for its block; usually under a minute. Keep this page open.${this.network.autoBlocks ? "" : " On the devnet, produce blocks with devnet/produce-block.mjs."}</p>`;
     }
     const need = this.needed(st);
     const funded = need !== null && st.mana !== null && st.mana >= need;
     return `
+      ${section("01", "Account", "activate")}
       <h1>Activate your account</h1>
-      <p>This is your account's address on <strong>${esc(this.network.name)}</strong>. Send at least <strong>${need === null ? "…" : esc(formatKoin(need, 2))} ${unit}</strong> to it.</p>
-      <canvas id="qr-setup" width="180" height="180" aria-label="QR code of your account's address"></canvas>
-      <code class="address">${esc(st.account)}</code>
-      <div class="row"><button data-action="copy" data-copy="${esc(st.account)}">Copy address</button></div>
-      <p id="setup-mana" class="${funded ? "notice" : "muted"}">${need !== null ? esc(this.manaLine(st.mana, need)) : "Pricing the activation from the node…"}</p>
-      ${st.failed ? `<p class="error">Activation stopped: ${esc(st.failed)}</p><div class="row"><button class="primary" data-action="setup-retry">Try again</button></div>` : ""}
-      <p class="muted">As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here in this page. From then on only your 24 words can move the account. The ${unit} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.</p>
-      <div class="row"><button class="ghost" data-action="setup-cancel">Settings</button></div>`;
-  }
-
-  /** Characters of `addr` that differ from `ref` are marked, so the eye lands on them. */
-  private diffMarked(addr: string, ref: string): string {
-    return [...addr].map((ch, i) => (ch === ref[i] ? esc(ch) : `<mark>${esc(ch)}</mark>`)).join("");
+      <p>This is your account's address on <strong>${esc(this.network.name)}</strong>. Send at least <strong class="mono">${need === null ? "…" : esc(formatKoin(need, 2))} ${esc(unit)}</strong> to it.</p>
+      ${card(`
+        <canvas id="qr-setup" class="qr" width="180" height="180" aria-label="QR code of your account's address"></canvas>
+        ${addressStrip(st.account, { box: true })}
+        <div class="row tight">${button("Copy address", { action: "copy", data: { copy: st.account } })}</div>`, `style="text-align:center"`)}
+      <p id="setup-mana" class="${funded ? "note ok" : "mute"}" style="margin-top:12px">${need !== null ? esc(this.manaLine(st.mana, need)) : "Pricing the activation from the node…"}</p>
+      ${st.failed ? `${notice("danger", `Activation stopped: ${esc(st.failed)}`)}<div class="row tight">${button("Try again", { action: "setup-retry", variant: "primary" })}</div>` : ""}
+      <p class="fine" style="margin-top:12px">As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here. From then on only your 24 words can move the account. The ${esc(unit)} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.</p>
+      <div class="row">${button("Settings", { action: "setup-cancel", variant: "ghost" })}</div>`;
   }
 
   private vSendConfirm() {
@@ -1168,65 +1284,75 @@ export class App {
     if (!sc) return `<p>Nothing to confirm.</p>`;
     const look = sc.assessment.kind === "lookalike";
     const m = sc.assessment.match;
+    const unit = this.unit();
     return `
+      ${section("01", "Send", look ? "stop" : "first time")}
       <h1>${look ? "Stop: this address looks like one you use" : "First time sending here"}</h1>
       ${
         look && m
-          ? `<div class="error" role="alert">
-               <p><strong>${esc(sc.to)}</strong> is not <strong>${esc(m.name || short(m.address))}</strong>. It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.</p>
-               <p class="muted">Typed: <code class="address">${this.diffMarked(sc.to, m.address)}</code><br>Known: <code class="address">${esc(m.address)}</code></p>
-             </div>`
-          : `<p>You have not sent to <code class="address">${esc(sc.to)}</code> from this wallet before. Compare <em>every</em> character with the address the recipient gave you, not only the first and last few. Transfers cannot be undone.</p>`
+          ? notice("danger", `<p><strong>Typed</strong></p>${addressStrip(sc.to, { diffFrom: m.address })}
+               <p style="margin-top:8px"><strong>Known: ${esc(m.name || short(m.address))}</strong></p>${addressStrip(m.address)}
+               <p style="margin-top:8px">It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.</p>`)
+          : `${card(addressStrip(sc.to))}<p style="margin-top:12px">You have not sent to this address from this wallet before. Compare <em>every</em> character with the address the recipient gave you, not only the first and last few. Transfers cannot be undone.</p>`
       }
-      <p class="muted">Amount: <strong>${esc(sc.amount)} KOIN</strong> on ${esc(this.network.name)}.</p>
+      <p class="mute" style="margin-top:8px">Amount <strong class="mono">${esc(sc.amount)} ${esc(unit)}</strong> on ${esc(this.network.name)}.</p>
       <form data-form="send-confirm">
         ${
           look
-            ? `<label>If you are certain, type the last six characters of the address you want to pay: <input name="tail" autocomplete="off" required autofocus maxlength="6" style="width:8em"></label>`
-            : `<label class="check"><input type="checkbox" name="checked" required> I have compared the whole address</label>
-               <label>Save as a contact (optional)<input name="name" autocomplete="off" placeholder="name" maxlength="40"></label>`
+            ? field("If you are certain, type the last six characters of the address you want to pay", input({ name: "tail", class: "mono", autocomplete: "off", required: true, autofocus: true, maxlength: 6, style: "max-width:9em" }))
+            : `${check("checked", "I have compared the whole address", false, "required")}
+               ${field("Save as a contact (optional)", input({ name: "name", autocomplete: "off", placeholder: "name", maxlength: 40 }))}`
         }
-        <div class="row"><button class="${look ? "danger" : "primary"}" type="submit">${look ? "Send anyway" : "Sign and send"}</button><button class="ghost" type="button" data-action="send-cancel">Back</button></div>
+        <div class="row">${button(look ? "Send anyway" : "Sign and send", { variant: look ? "danger" : "primary" })}${button("Back", { action: "send-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vContacts() {
-    const list = this.s.book?.list() ?? [];
+    const items = this.s.book?.list() ?? [];
     return `
+      ${section("04", "Settings", "contacts")}
       <h1>Contacts</h1>
-      <p class="muted">Addresses this wallet has sent to, with the names you gave them. Kept in this browser only, separately for each wallet.</p>
+      <p class="mute">Addresses this wallet has sent to, with the names you gave them. Kept on this device only, separately for each wallet.</p>
       ${
-        list.length
-          ? `<ul class="plain">${list
-              .map(
-                (c) => `<li><form data-form="contact-rename" class="inline"><input type="hidden" name="address" value="${esc(c.address)}"><code>${esc(short(c.address))}</code><input name="name" value="${esc(c.name)}" placeholder="name" maxlength="40"><button type="submit">Save</button><button type="button" class="link" data-action="contact-remove" data-address="${esc(c.address)}">remove</button></form><small>${c.sends} send${c.sends === 1 ? "" : "s"}${c.lastSentAt ? `, last ${esc(c.lastSentAt.slice(0, 10))}` : ""}</small></li>`,
-              )
-              .join("")}</ul>`
-          : "<p class='muted'>No contacts yet. The first successful send to an address adds it.</p>"
+        items.length
+          ? list(
+              items
+                .map(
+                  (c) =>
+                    `<li><form data-form="contact-rename" class="grow"><input type="hidden" name="address" value="${esc(c.address)}">
+                       ${addressStrip(c.address, { size: "sm" })}
+                       <div class="withbtn" style="margin-top:6px">${input({ name: "name", class: "in", value: c.name, placeholder: "name", maxlength: 40 })}${button("Save", { mini: true })}${button("Remove", { action: "contact-remove", variant: "ghost", mini: true, data: { address: c.address } })}</div>
+                       <span class="s">${c.sends} send${c.sends === 1 ? "" : "s"}${c.lastSentAt ? `, last ${esc(c.lastSentAt.slice(0, 10))}` : ""}</span></form></li>`,
+                )
+                .join(""),
+            )
+          : `<p class="mute">No contacts yet. The first successful send to an address adds it.</p>`
       }
-      <div class="row"><button class="ghost" data-action="settings">Back</button></div>`;
+      <div class="row">${button("Back", { action: "settings", variant: "ghost" })}</div>`;
   }
 
   private vDuress() {
     return `
+      ${section("04", "Settings", "duress")}
       <h1>Duress wallet</h1>
       <p>A second, separate wallet with its own 24 words and its own passphrase. If someone forces you to unlock, you type the duress passphrase and they see that wallet, with whatever small amount you keep in it. Nothing on this device shows that another wallet exists, and unlocking takes the same time either way.</p>
       <p><strong>What it cannot do.</strong> Balances are public on the chain. Anyone who already knows your main address can look it up. The decoy protects you from someone who does not, and only if it looks lived-in: give it a little KOIN and use it now and then.</p>
-      <p class="muted">Setting it up asks for your main passphrase (so only you can), and a new passphrase for the decoy. The decoy's 24 words are shown once; write them down if you want to recover it, otherwise just note that losing them loses only the decoy.</p>
-      <div class="row"><button class="primary" data-action="duress-create">Create the duress wallet</button><button class="ghost" data-action="duress-cancel">Back</button></div>`;
+      <p class="fine">Setting it up asks for your main passphrase (so only you can), and a new passphrase for the decoy. The decoy's 24 words are shown once; write them down if you want to recover it, otherwise just note that losing them loses only the decoy.</p>
+      <div class="row">${button("Create the duress wallet", { action: "duress-create", variant: "primary" })}${button("Back", { action: "duress-cancel", variant: "ghost" })}</div>`;
   }
 
   private vDuressWords() {
-    const words = (this.s.pendingDecoy ?? "").split(" ");
+    const w = (this.s.pendingDecoy ?? "").split(" ");
     return `
+      ${section("04", "Settings", "duress")}
       <h1>The duress wallet's 24 words</h1>
-      <ol class="words">${words.map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
+      ${card(words(w))}
       <form data-form="duress-save">
-        <label>Duress passphrase (${MIN_PASSPHRASE_LENGTH}+ characters, different from your main one)<input name="d1" type="password" minlength="${MIN_PASSPHRASE_LENGTH}" required autofocus autocomplete="new-password"></label>
-        <label>Repeat it<input name="d2" type="password" minlength="${MIN_PASSPHRASE_LENGTH}" required autocomplete="new-password"></label>
-        <label>Your main passphrase (to confirm)<input name="main" type="password" required autocomplete="off"></label>
-        <p class="muted">After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.</p>
-        <div class="row"><button class="primary" type="submit">Save duress wallet</button><button class="ghost" type="button" data-action="duress-cancel">Cancel</button></div>
+        ${field(`Duress passphrase (${MIN_PASSPHRASE_LENGTH}+ characters, different from your main one)`, input({ name: "d1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
+        ${field("Repeat it", input({ name: "d2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
+        ${field("Your main passphrase (to confirm)", input({ name: "main", type: "password", required: true, autocomplete: "off" }))}
+        <p class="fine">After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.</p>
+        <div class="row">${button("Save duress wallet", { variant: "danger" })}${button("Cancel", { action: "duress-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 
@@ -1234,27 +1360,31 @@ export class App {
     const c = this.s.change;
     if (!c) return `<p>Nothing to save.</p>`;
     return `
+      ${section("04", "Settings", "confirm")}
       <h1>${esc(c.title)}</h1>
       <p>${esc(c.detail)}</p>
       <form data-form="save">
-        <label>Passphrase (to save the change)<input name="passphrase" type="password" required autofocus autocomplete="off"></label>
-        <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-action="change-cancel">Cancel</button></div>
+        ${field("Passphrase (to save the change)", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}
+        <div class="row">${button("Save", { variant: "primary" })}${button("Cancel", { action: "change-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vExport() {
     if (this.s.exportWords) {
       return `
+        ${section("04", "Settings", "backup")}
         <h1>Your 24 words</h1>
-        <ol class="words">${this.s.exportWords.split(" ").map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
-        <p class="muted">Seed (hex, for the command-line tool's key file): <code class="address">${esc(this.s.vault?.seedHex ?? "")}</code></p>
-        <div class="row"><button class="primary" data-action="back-home">Done</button></div>`;
+        ${card(words(this.s.exportWords.split(" ")))}
+        <p class="fine" style="margin-top:12px">Seed (hex, for the command-line tool's key file):</p>
+        <code class="address addr sm box">${esc(this.s.vault?.seedHex ?? "")}</code>
+        <div class="row">${button("Done", { action: "settings", variant: "primary" })}</div>`;
     }
     return `
+      ${section("04", "Settings", "backup")}
       <h1>Show recovery words</h1>
       <form data-form="export">
-        <label>Passphrase<input name="passphrase" type="password" required autofocus autocomplete="off"></label>
-        <div class="row"><button class="primary" type="submit">Show</button><button class="ghost" type="button" data-action="back-home">Back</button></div>
+        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}
+        <div class="row">${button("Show", { variant: "primary" })}${button("Back", { action: "settings", variant: "ghost" })}</div>
       </form>`;
   }
 }

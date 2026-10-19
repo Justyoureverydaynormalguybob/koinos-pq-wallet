@@ -14,12 +14,14 @@
 //   - raw hash signing is refused: a signed hash is a signature over an unseen transaction;
 //   - messages are signed under their own context (koinos-pq-core), never usable as a transaction;
 //   - everything rendered goes through esc().
-import "../style.css";
+import "../ui/tokens.css";
 import { Transaction, utils } from "koilib";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { Chain, NETWORKS, PqSigner, bootstrapAddress, deriveKeys, decodeFields, formatKoin, wipe, TOKEN_ENTRY, type Network, type PqKeys } from "koinos-pq-core";
 import { localVaultStore, openVault, toFile } from "../core/vault";
 import { detectAccount, walletAccounts } from "../core/accounts";
+import { addressStrip, button, card, field, header, input, list, listRow, notice, stat, ticker } from "../ui/components";
+import { applyTheme } from "../ui/app";
 
 interface Request {
   id: string;
@@ -48,6 +50,7 @@ interface Tx {
 
 const esc = (s: unknown) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 const root = document.getElementById("app")!;
+applyTheme((pref("theme") as "light" | "dark" | "system" | null) ?? "system");
 const reqId = new URLSearchParams(location.search).get("req") ?? "";
 const KNOWN_TOKENS: Record<string, Record<string, string>> = {
   mainnet: { "19GYjDBVXU7keLbYvMLazsGQn3GTWHjHkK": "KOIN", "12Y5vW6gk8GceH53YfRkRre2Rrcsgw7Naq": "VHP" },
@@ -157,18 +160,18 @@ function describeOperation(cc: CallContract, net: Network, signer: string): stri
     const t = strictTransfer(cc.args);
     if (t) {
       const fromNote = t.from === signer ? "" : ` <span class="warn-inline">from a different account, ${esc(t.from)},</span>`;
-      return `Send <strong>${esc(formatKoin(t.value))} ${esc(symbol)}</strong>${fromNote} to <code>${esc(t.to)}</code>`;
+      return `Send <strong class="mono">${esc(formatKoin(t.value))} ${esc(symbol)}</strong>${fromNote} to ${addressStrip(t.to, { size: "sm" })}`;
     }
-    return `<span class="warn-inline">Unusual ${esc(symbol)} transfer encoding: the amount and recipient cannot be shown reliably.</span> Call to <code>${esc(cc.contract_id)}</code>`;
+    return `<span class="warn-inline">Unusual ${esc(symbol)} transfer encoding: the amount and recipient cannot be shown reliably.</span> Call to ${addressStrip(cc.contract_id, { size: "sm" })}`;
   }
-  return `Call contract <code>${esc(cc.contract_id)}</code>${symbol ? ` (${esc(symbol)})` : ""}, entry point <code>0x${cc.entry_point.toString(16)}</code>`;
+  return `Call contract ${addressStrip(cc.contract_id, { size: "sm" })}${symbol ? ` (${esc(symbol)})` : ""}, entry point <code>0x${cc.entry_point.toString(16)}</code>`;
 }
 
-function render(html: string) {
-  root.innerHTML = `<header class="top"><div class="brand"><span class="mark" aria-hidden="true">PQ</span>Koinos PQ Wallet <span class="tag">request</span></div></header><section class="card">${html}</section><footer class="foot">Keys never leave this window. A test build, not audited.</footer>`;
+function render(html: string, net: Network = currentNetwork()) {
+  root.innerHTML = `<div class="shell">${header('<span class="hexstrip">request</span>')}${ticker(net.name, null, false, "what you see is what you sign")}<div class="content plain">${html}<p class="foot">Keys never leave this window · a test build, not audited</p></div></div>`;
 }
 const refuse = (origin: string, why: string) =>
-  render(`<h1>${esc(origin)}</h1><p class="warn">This site sent a request the wallet will not sign. ${esc(why)}</p><div class="row"><button class="ghost" data-refuse>Close</button></div>`);
+  render(`<h1 style="font-size:22px">${esc(origin)}</h1>${notice("danger", `This site sent a request the wallet will not sign. ${esc(why)}`)}<div class="row">${button("Close", { variant: "ghost", attrs: "data-refuse" })}</div>`);
 
 // ---- what will be signed, fixed before the passphrase is asked for ----
 interface Plan {
@@ -213,28 +216,27 @@ async function plan(req: Request, net: Network): Promise<Plan> {
 }
 
 function describe(p: Plan): string {
-  const who = `<strong>${esc(p.signerAddress ?? "?")}</strong>`;
+  const who = p.signerAddress ? addressStrip(p.signerAddress, { size: "sm" }) : "<strong>?</strong>";
   switch (p.req.command) {
     case "getAccounts":
       return `<p>wants to <strong>see your account addresses</strong>. No signature is involved.</p>`;
     case "signer:signMessage":
-      return `<p>wants ${who} to sign this message:</p><code class="address">${esc(typeof p.message === "string" ? p.message : utils.toHexString(p.message!))}</code>
-        <p class="muted">A signed message cannot be used as a transaction signature (it is made under a separate context), and no public key can be recovered from it.</p>`;
+      return `<p>wants ${who} to sign this message:</p>${card(`<code class="address addr sm" style="color:var(--ink)">${esc(typeof p.message === "string" ? p.message : utils.toHexString(p.message!))}</code>`)}
+        <p class="fine" style="margin-top:8px">A signed message cannot be used as a transaction signature (it is made under a separate context), and no public key can be recovered from it.</p>`;
     default: {
       const tx = p.prepared!;
       const h = tx.header!;
       const verb = p.req.command === "signer:sendTransaction" ? "sign and send" : p.req.command === "signer:prepareTransaction" ? "prepare" : "sign";
       const siteSetLimit = ((p.req.args?.transaction as { header?: { rc_limit?: unknown } } | undefined)?.header?.rc_limit ?? undefined) !== undefined;
       const rows = [
-        `<li>Network <strong>${esc(p.net.name)}</strong></li>`,
-        h.payer !== p.signerAddress ? `<li class="warn-inline">Mana paid by another account: <code>${esc(h.payer)}</code></li>` : "",
-        h.payee ? `<li>Payee <code>${esc(h.payee)}</code></li>` : "",
-        `<li>Mana limit <strong>${esc(formatKoin(BigInt(h.rc_limit ?? "0"), 2))}</strong>${siteSetLimit ? "" : ' <span class="muted">(the site set no limit, so this is all the mana the account has)</span>'}</li>`,
-        `<li class="muted">Transaction id <code>${esc((tx.id ?? "").slice(0, 22))}…</code></li>`,
+        stat("Network", `<strong>${esc(p.net.name)}</strong>`),
+        h.payee ? stat("Payee", `<span class="mono">${esc(h.payee)}</span>`) : "",
+        stat("Mana limit", `<strong>${esc(formatKoin(BigInt(h.rc_limit ?? "0"), 2))}</strong>${siteSetLimit ? "" : ' <span class="mute">(the site set no limit: all the mana the account has)</span>'}`),
+        stat("Transaction", esc((tx.id ?? "").slice(0, 22)) + "…"),
       ].join("");
+      const payerNote = h.payer !== p.signerAddress ? notice("warn", `Mana paid by another account: <span class="mono">${esc(h.payer)}</span>`) : "";
       return `<p>wants ${who} to <strong>${verb}</strong> a transaction:</p>
-        <ul class="plain">${tx.operations!.map((op) => `<li>${describeOperation(op.call_contract, p.net, p.signerAddress ?? "")}</li>`).join("")}</ul>
-        <ul class="plain small">${rows}</ul>`;
+        ${card(`${list(tx.operations!.map((op, i) => listRow(`<span class="lbl">Operation ${i + 1} of ${tx.operations!.length}</span>${describeOperation(op.call_contract, p.net, p.signerAddress ?? "")}`)).join(""))}<div style="margin-top:8px">${rows}</div>`)}${payerNote ? `<div style="margin-top:12px">${payerNote}</div>` : ""}`;
     }
   }
 }
@@ -248,12 +250,12 @@ async function main() {
   });
   if (!reqId) return render(`<p>Nothing to approve.</p>`);
   const req = (await chrome.runtime.sendMessage({ type: "pq:get", id: reqId })) as Request | null;
-  if (!req || typeof req.command !== "string" || typeof req.origin !== "string") return render(`<p>This request has already been answered or has expired.</p><div class="row"><button class="primary" data-reject>Close</button></div>`);
+  if (!req || typeof req.command !== "string" || typeof req.origin !== "string") return render(`<p>This request has already been answered or has expired.</p><div class="row">${button("Close", { variant: "primary", attrs: "data-reject" })}</div>`);
   if (!localVaultStore.load()) {
-    render(`<h1>No wallet yet</h1><p>This extension has no wallet. Open it, create or import one, then try again from the site.</p><div class="row"><button class="primary" data-open>Open the wallet</button><button class="ghost" data-reject>Reject</button></div>`);
+    render(`<h1>No wallet yet</h1><p>This extension has no wallet. Open it, create or import one, then try again from the site.</p><div class="row">${button("Open the wallet", { variant: "primary", attrs: "data-open" })}${button("Reject", { variant: "ghost", attrs: "data-reject" })}</div>`);
     return;
   }
-  render(`<h1>${esc(req.origin)}</h1><p class="muted">Checking the request…</p>`);
+  render(`<h1 style="font-size:22px">${esc(req.origin)}</h1>${notice("busy", "Checking the request…")}`);
   let p: Plan;
   try {
     p = await plan(req, currentNetwork());
@@ -262,13 +264,13 @@ async function main() {
     return;
   }
   render(`
-    <h1>${esc(req.origin)}</h1>
+    <h1 style="font-size:22px">${esc(req.origin)}</h1>
     ${describe(p)}
     <form data-form="approve">
-      <label>Passphrase<input name="passphrase" type="password" required autofocus autocomplete="off"></label>
-      <div class="row"><button class="primary" type="submit">Approve</button><button class="ghost" type="button" data-reject>Reject</button></div>
+      ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}
+      <div class="row">${button("Approve", { variant: "primary" })}${button("Reject", { variant: "ghost", attrs: "data-reject" })}</div>
     </form>
-    <p id="status" class="muted"></p>`);
+    <p id="status" class="mute"></p>`, p.net);
   root.addEventListener("submit", (e) => {
     e.preventDefault();
     if (busy) return;

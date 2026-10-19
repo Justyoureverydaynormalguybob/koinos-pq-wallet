@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request</title>
+<link rel="stylesheet" href="../src/ui/tokens.css">
+</head>
+<body>
+<div class="shell">
+  <header class="hdr">
+    <span class="mark"><span class="px" aria-hidden="true"></span>PQ <span class="hex" aria-hidden="true">50 51</span></span>
+    <span class="hexstrip">request</span>
+  </header>
+  <div class="ticker"><span><span class="live" aria-hidden="true"></span>mainnet</span><span>what you see is what you sign</span></div>
+  <main class="content plain">
+    <h1 style="font-size:22px">demo.koinosproof.com</h1>
+    <p>wants <strong>Your account</strong> to <strong>sign and send</strong> a transaction:</p>
+    <section class="card" style="margin-top:12px">
+      <span class="lbl">Account</span>
+      <span class="addr sm"><span class="g k">1LQY</span><span class="g">sdpG</span><span class="g">uA3n</span><span class="g">wU5G</span><span class="g">1jAN</span><span class="g">CnMW</span><span class="g">s3yY</span><span class="g">Wf<b class="k">Hw</b></span><span class="g k">kQ</span></span>
+      <span class="lbl" style="margin-top:12px">Operation 1 of 1</span>
+      <p>Send <strong class="mono">0.5 KOIN</strong> to</p>
+      <span class="addr sm"><span class="g k">1Bob</span><span class="g">xq7L</span><span class="g">mP2k</span><span class="g">9YtR</span><span class="g">wQ4n</span><span class="g">Zs8A</span><span class="g">hD1v</span><span class="g">Lc<b class="k">7E</b></span><span class="g k">g3</span></span>
+      <div style="margin-top:12px">
+        <div class="stat"><span class="k">Network</span><span class="v">mainnet</span></div>
+        <div class="stat"><span class="k">Mana limit</span><span class="v">1.00</span></div>
+        <div class="stat"><span class="k">Transaction</span><span class="v">0x1220a3…8f2e</span></div>
+      </div>
+    </section>
+    <div class="note warn" style="margin-top:12px">Mana paid by another account: <span class="mono">1Car…Q9mz</span></div>
+    <form>
+      <label class="field"><span>Passphrase</span><input type="password" autocomplete="off" autofocus></label>
+      <div class="row"><button class="btn primary" type="submit">Approve</button><button class="btn ghost" type="button">Reject</button></div>
+    </form>
+    <p class="foot">Keys never leave this window</p>
+  </main>
+</div>
+</body>
+</html>
