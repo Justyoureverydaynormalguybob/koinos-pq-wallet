@@ -187,7 +187,7 @@ describe("wallet app (jsdom)", () => {
     expect(text(root)).toMatch(/Tick the box/);
     // look-alike of our own account PQ: valid checksum is required for the matcher, so use a real address that we make "known"
     click(root, "send-cancel");
-    expect(h1(root)).toBe("Send KOIN");
+    expect(h1(root)).toMatch(/^Send /); // the heading names the picked token (tKOIN on Harbinger)
   }, 120_000);
 
   it("locks when the tab stays hidden, and copies with a timed clipboard wipe", async () => {

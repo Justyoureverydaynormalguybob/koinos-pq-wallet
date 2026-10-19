@@ -10,7 +10,7 @@
 // extension plays that role on the web) and Settings. Onboarding and unlock are a linear flow without it.
 import QRCode from "qrcode";
 import {
-  Chain, NETWORKS, formatKoin, parseKoin, isAddress, short, type HistoryItem, type Network, deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput,
+  Chain, NETWORKS, formatKoin, isAddress, short, type HistoryItem, type Network, deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput,
   seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys, bootstrapAddress, estimateSetupCosts, pqwalletInfo, setupPqwalletAccount,
   type SetupCosts, type SetupResult, type SetupStatus,
 } from "koinos-pq-core";
@@ -21,6 +21,7 @@ import {
 import { canSign, detectAccount, displayLabel } from "../core/accounts";
 import { AddressBook, addressBookNamespace, type Assessment } from "../core/addressbook";
 import { CLIPBOARD_WIPE_SECONDS, copyWithWipe } from "../core/clipboard";
+import { CustomTokens, allTokens, customTokensNamespace, findToken, formatUnits, parseUnits, type Token } from "../core/tokens";
 import {
   addressStrip, balance, button, card, check, esc, field, fmtAmount, header, hexStrip, input, linkButton, list, listRow, notice, section, shortAddr, stat, tabBar,
   ticker, tile, words, type Tab,
@@ -71,6 +72,7 @@ interface PendingChange {
 interface SendCheck {
   to: string;
   amount: string;
+  token: Token;
   assessment: Assessment;
 }
 
@@ -84,6 +86,15 @@ interface State {
   slot: number;
   vault: VaultData | null;
   book: AddressBook | null;
+  /** tokens added by address on this wallet */
+  tokens: CustomTokens | null;
+  /** per listed token (by contract): base-unit balance, null when the read failed, missing when not read yet */
+  balances: Record<string, bigint | null>;
+  /** which network:account the balances belong to */
+  balancesFor: string;
+  hideZero: boolean;
+  /** the token picked on the Send screen (contract address), "" for KOIN */
+  sendToken: string;
   keys: PqKeys | null;
   networkName: string;
   accountIndex: number;
@@ -98,7 +109,7 @@ interface State {
   mana: bigint | null;
   head: string | null;
   history: HistoryItem[] | null;
-  sent: { txId: string; bytes: number; rcUsed: string; block: string | null; waiting: boolean } | null;
+  sent: { txId: string; bytes: number; rcUsed: string; block: string | null; waiting: boolean; amount: string; symbol: string } | null;
   exportWords: string | null;
   autolockMinutes: number;
   lockOnHide: boolean;
@@ -119,6 +130,7 @@ const PREF_AUTOLOCK = "koinos-pq-wallet/autolock-minutes";
 const PREF_LOCK_ON_HIDE = "koinos-pq-wallet/lock-on-hide";
 const PREF_CLIPBOARD_WIPE = "koinos-pq-wallet/clipboard-wipe";
 const PREF_THEME = "koinos-pq-wallet/theme";
+const PREF_HIDE_ZERO = "koinos-pq-wallet/hide-zero";
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
 
@@ -162,6 +174,11 @@ export class App {
       slot: 0,
       vault: null,
       book: null,
+      tokens: null,
+      balances: {},
+      balancesFor: "",
+      hideZero: pref.get(PREF_HIDE_ZERO) !== "0",
+      sendToken: "",
       keys: null,
       networkName: pref.get(PREF_NETWORK) ?? "testnet",
       accountIndex: 0,
@@ -245,6 +262,24 @@ export class App {
   private unit(): string {
     return this.network.name === "testnet" ? "tKOIN" : "KOIN";
   }
+  /** The curated tokens of this network plus the wallet's additions; KOIN first. */
+  private tokenList(): Token[] {
+    return allTokens(this.network.name, this.s.tokens);
+  }
+  private koinToken(): Token {
+    return this.tokenList()[0]!;
+  }
+  private currentSendToken(): Token {
+    return findToken(this.tokenList(), this.s.sendToken) ?? this.koinToken();
+  }
+  /** A token's balance for the current account: KOIN's comes with the main refresh, the rest from fillTokenBalances. */
+  private tokenBalance(t: Token): bigint | null | undefined {
+    return t.address === this.network.koin ? this.s.balance ?? undefined : this.s.balances[t.address];
+  }
+  private tokenAmount(t: Token): string {
+    const v = this.tokenBalance(t);
+    return v === undefined ? "…" : v === null ? "?" : fmtAmount(formatUnits(v, t.decimals));
+  }
 
   // ---------- lifecycle ----------
   private touch() {
@@ -271,6 +306,10 @@ export class App {
     this.s.detected = {};
     this.s.change = null;
     this.s.book = null;
+    this.s.tokens = null;
+    this.s.balances = {};
+    this.s.balancesFor = "";
+    this.s.sendToken = "";
     this.s.file = null;
     this.s.pendingDecoy = null;
     this.s.sendCheck = null;
@@ -329,6 +368,40 @@ export class App {
       this.s.notice = `Balance unavailable from this ${this.network.name} node right now (${(balance.reason as Error).message?.slice(0, 120) ?? "error"}). Mana and head block are live.`;
     }
     if (mana.status === "rejected" && head.status === "rejected") throw new Error(`cannot reach the ${this.network.name} node: ${(head.reason as Error).message}`);
+    void this.fillTokenBalances(a.address);
+  }
+  /**
+   * balance_of on every listed token but KOIN, three at a time (the public nodes answer HTML to bursts),
+   * patching the token rows in place as answers arrive; one render at the end applies "hide zero balances".
+   */
+  private async fillTokenBalances(address: string) {
+    const key = `${this.network.name}:${address}`;
+    if (this.s.balancesFor !== key) {
+      this.s.balances = {};
+      this.s.balancesFor = key;
+    }
+    const chain = this.chain();
+    const todo = this.tokenList().filter((t) => t.address !== this.network.koin && this.s.balances[t.address] === undefined);
+    if (!todo.length) return;
+    const worker = async () => {
+      for (;;) {
+        const t = todo.shift();
+        if (!t) return;
+        let v: bigint | null = null;
+        try {
+          v = await chain.tokenBalance(t.address, address);
+        } catch {
+          v = null;
+        }
+        await new Promise((r) => setTimeout(r, 120)); // api.koinos.io answers HTML to bursts
+        if (this.s.balancesFor !== key) return;
+        this.s.balances[t.address] = v;
+        const el = this.root.querySelector<HTMLElement>(`[data-token="${t.address}"] .amt`);
+        if (el) el.textContent = this.tokenAmount(t);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (this.s.balancesFor === key && this.s.screen === "home" && !this.s.busy) this.render();
   }
   /** Home, or straight to activation when this network has no account for the wallet yet. */
   private async enterHome() {
@@ -347,6 +420,7 @@ export class App {
     this.s.vault = vault;
     this.s.keys = deriveKeys(seed);
     this.s.book = new AddressBook(addressBookNamespace(seed));
+    this.s.tokens = new CustomTokens(customTokensNamespace(seed));
     // Wipe our buffer only if the keys hold their own copy (koinos-pq-core >= 2026-10-19). Before that fix the
     // keys shared it, and wiping zeroed keys.seed: every in-session wallet then derived the account address
     // of an all-zero seed and collided on 14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR.
@@ -497,16 +571,18 @@ export class App {
     }
   }
 
-  /** Signs and submits a KOIN transfer from the current account, then remembers the recipient. */
-  private async doSend(to: string, amount: string, name = "") {
+  /** Signs and submits a token transfer (KOIN or any listed KCS-4 token) from the current account, then remembers the recipient. */
+  private async doSend(to: string, amount: string, name = "", token: Token = this.koinToken()) {
     const a = this.account();
     if (!a || !this.s.keys || !canSign(a)) throw new Error("locked");
-    const valueBase = parseKoin(amount);
+    const valueBase = parseUnits(amount, token.decimals);
     const chain = this.chain();
-    const res = await chain.sendKoin({ from: a.address, to, valueBase, keys: this.s.keys, mode: a.mode as "native" | "pqwallet" });
+    const contract = token.address === this.network.koin ? undefined : token.address;
+    const res = await chain.sendKoin({ from: a.address, to, valueBase, keys: this.s.keys, mode: a.mode as "native" | "pqwallet", contract });
     this.s.book?.recordSend(to, name);
     this.s.sendCheck = null;
-    this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks };
+    if (contract) delete this.s.balances[contract]; // read again on the next refresh
+    this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount, symbol: token.symbol };
     this.s.screen = "sent";
     this.render();
     if (this.network.autoBlocks) {
@@ -544,6 +620,9 @@ export class App {
       this.endSetup();
       this.s.balance = this.s.mana = this.s.head = null;
       this.s.history = null;
+      this.s.balances = {};
+      this.s.balancesFor = "";
+      this.s.sendToken = "";
       void this.run("Loading", () => this.enterHome());
     }
     if (t instanceof HTMLSelectElement && t.name === "theme") {
@@ -557,6 +636,20 @@ export class App {
       this.s.balance = this.s.mana = null;
       this.s.history = null;
       void this.run("Loading", () => this.refresh());
+    }
+    if (t instanceof HTMLInputElement && t.name === "hideZero") {
+      this.s.hideZero = t.checked;
+      pref.set(PREF_HIDE_ZERO, t.checked ? "1" : "0");
+      this.render();
+    }
+    if (t instanceof HTMLSelectElement && t.name === "token") {
+      // no re-render: the user may have typed the recipient already; only the labels change
+      this.s.sendToken = t.value;
+      const tok = this.currentSendToken();
+      const sym = this.root.querySelector<HTMLElement>("#send-sym");
+      if (sym) sym.textContent = tok.symbol;
+      const lbl = this.root.querySelector<HTMLElement>("#amount-label");
+      if (lbl) lbl.textContent = `Amount (${tok.symbol})`;
     }
   }
 
@@ -655,6 +748,14 @@ export class App {
         this.s.book?.remove(el.dataset.address ?? "");
         this.render();
         break;
+      case "token-remove": {
+        const addr = el.dataset.address ?? "";
+        this.s.tokens?.remove(this.network.name, addr);
+        delete this.s.balances[addr];
+        if (this.s.sendToken === addr) this.s.sendToken = "";
+        this.render();
+        break;
+      }
       case "duress":
         this.go("duress");
         break;
@@ -790,6 +891,7 @@ export class App {
           const seed = hexToBytes(opened.data.seedHex);
           this.s.keys = deriveKeys(seed);
           this.s.book = new AddressBook(addressBookNamespace(seed));
+          this.s.tokens = new CustomTokens(customTokensNamespace(seed));
           this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
           this.touch();
           await this.enterHome();
@@ -800,6 +902,8 @@ export class App {
         // Step one: look at the recipient before anything is signed.
         const to = field("to").trim();
         const amount = field("amount").trim();
+        const token = findToken(this.tokenList(), field("token")) ?? this.koinToken();
+        this.s.sendToken = token.address === this.network.koin ? "" : token.address;
         const a = this.account();
         if (!a || !canSign(a)) {
           this.s.error = "This account is watch-only; it has no key here.";
@@ -807,7 +911,7 @@ export class App {
           return;
         }
         try {
-          parseKoin(amount);
+          parseUnits(amount, token.decimals);
         } catch (err) {
           this.s.error = (err as Error).message;
           this.render();
@@ -820,10 +924,10 @@ export class App {
           return;
         }
         if (assessment.kind === "known" || assessment.kind === "own") {
-          void this.run("Signing and sending", () => this.doSend(to, amount));
+          void this.run("Signing and sending", () => this.doSend(to, amount, "", token));
           return;
         }
-        this.s.sendCheck = { to, amount, assessment };
+        this.s.sendCheck = { to, amount, token, assessment };
         this.go("send-confirm");
         break;
       }
@@ -843,7 +947,27 @@ export class App {
           return;
         }
         const name = field("name").trim();
-        void this.run("Signing and sending", () => this.doSend(sc.to, sc.amount, name));
+        void this.run("Signing and sending", () => this.doSend(sc.to, sc.amount, name, sc.token));
+        break;
+      }
+      case "add-token": {
+        const addr = field("address").trim();
+        if (!isAddress(addr)) {
+          this.s.error = "That is not a valid Koinos contract address.";
+          this.render();
+          return;
+        }
+        void this.run("Reading the token", async () => {
+          if (findToken(this.tokenList(), addr)) {
+            this.s.notice = "That token is already in the list.";
+            return;
+          }
+          const info = await this.chain().tokenInfo(addr);
+          this.s.tokens?.add(this.network.name, { address: addr, ...info });
+          this.s.notice = `Added ${info.symbol} (${info.name}).`;
+          const a = this.account();
+          if (a) void this.fillTokenBalances(a.address);
+        });
         break;
       }
       case "contact-rename": {
@@ -1101,20 +1225,46 @@ export class App {
           ${canSign(a) ? button("Send", { action: "send", variant: "primary" }) : button("Watch-only", { type: "button", disabled: true, title: "Watch-only: this wallet has no key for this address" })}
           ${button("Receive", { action: "receive" })}
         </div>`)}
-      ${section("02", "Tokens")}
-      ${list(`<li data-token="koin">${tile(unit)}<span class="grow"><span class="t">${esc(unit === "tKOIN" ? "Test Koin" : "Koin")}</span><br><span class="s">${esc(unit)}</span></span><span class="amt">${s.balance === null ? "…" : esc(fmtAmount(formatKoin(s.balance)))}</span></li>`)}`;
+      ${this.vTokens()}`;
+  }
+
+  private vTokens(): string {
+    const s = this.s;
+    const tokens = this.tokenList();
+    const shown = tokens.filter((t) => {
+      if (t.address === this.network.koin || !s.hideZero) return true;
+      const v = this.tokenBalance(t);
+      return v === undefined || v === null || v > 0n;
+    });
+    const rows = shown
+      .map(
+        (t) =>
+          `<li data-token="${esc(t.address)}">${tile(t.symbol)}<span class="grow"><span class="t">${esc(t.name)}</span><br><span class="s">${esc(t.symbol)}${t.custom ? ` · added ${linkButton("remove", "token-remove", { address: t.address })}` : ""}</span></span><span class="amt">${esc(this.tokenAmount(t))}</span></li>`,
+      )
+      .join("");
+    return `
+      ${section("02", "Tokens", `${shown.length} of ${tokens.length}`)}
+      ${list(rows)}
+      <label class="check"><input type="checkbox" name="hideZero" ${s.hideZero ? "checked" : ""}> Hide zero balances</label>
+      <form data-form="add-token" class="field inline">
+        <label><span>Add a token by its contract address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
+        ${button("Add", { mini: true })}
+      </form>
+      <p class="fine">Name, symbol and decimals are read from the contract itself. The list is this wallet's own; nothing is fetched from anyone's server.</p>`;
   }
 
   private vSend() {
     const a = this.account();
-    const unit = this.unit();
+    const tokens = this.tokenList();
+    const tok = this.currentSendToken();
     return `
       ${section("01", "Send", `from <span class="mono">${esc(shortAddr(a?.address))}</span>`)}
-      <h1>Send KOIN</h1>
+      <h1>Send <span id="send-sym">${esc(tok.symbol)}</span></h1>
       <form data-form="send">
+        ${field("Token", `<select name="token">${tokens.map((t) => `<option value="${esc(t.address)}" ${t.address === tok.address ? "selected" : ""}>${esc(t.symbol)} · ${esc(this.tokenAmount(t))}</option>`).join("")}</select>`)}
         ${field("To", input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" }))}
         <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
-        ${field(`Amount (${unit})`, input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" }))}
+        <label class="field"><span id="amount-label">Amount (${esc(tok.symbol)})</span>${input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" })}</label>
         <p class="fine">From ${esc(a?.label ?? "")} on ${esc(this.network.name)}, signed here with ML-DSA-44 (${a?.mode === "native" ? "3,733-byte native entry" : "2,420-byte signature"}). A first-time or look-alike recipient asks you to confirm it before anything is signed.</p>
         <div class="row">${button("Sign and send", { variant: "primary" })}${button("Back", { action: "back-home", variant: "ghost" })}</div>
       </form>`;
@@ -1126,7 +1276,7 @@ export class App {
     return `
       ${section("01", "Send", t.waiting ? "waiting" : t.block ? "mined" : "submitted")}
       <h1>${t.waiting ? "Sent, waiting for a block" : t.block ? "Mined" : "Submitted"}</h1>
-      ${card(`<span class="lbl">Transaction</span><code class="address addr sm box" style="color:var(--ink)">${esc(t.txId)}</code>
+      ${card(`<span class="lbl">Sent</span><div class="bal" style="margin-bottom:12px"><span class="v" style="font-size:28px">${esc(fmtAmount(t.amount))}</span><span class="u">${esc(t.symbol)}</span></div><span class="lbl">Transaction</span><code class="address addr sm box" style="color:var(--ink)">${esc(t.txId)}</code>
         <div style="margin-top:12px">${stat("Signature entry", `${esc(t.bytes)} B`)}${stat("Mana used", esc(t.rcUsed))}${t.block ? stat("Block", esc(fmtAmount(t.block))) : ""}</div>`)}
       ${this.network.autoBlocks ? "" : `<p class="fine" style="margin-top:12px">This network only makes blocks when the devnet script produces one.</p>`}
       ${link ? `<p style="margin-top:12px"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Open in explorer</a></p>` : ""}
@@ -1147,14 +1297,20 @@ export class App {
   private vActivity() {
     const a = this.account();
     const h = this.s.history ?? [];
+    const tokens = this.tokenList();
     const rows = h
       .map((i) => {
-        const m = /^(received|sent) (\S+) (from|to) (.+?)( \(reverted\))?$/.exec(i.summary);
-        const main = m
-          ? `<span class="t">${esc(m[1] === "sent" ? "Sent" : "Received")} ${esc(fmtAmount(m[2]!))} ${esc(this.unit())}</span> <span class="s">${esc(m[3])} ${esc(m[4])}${m[5] ? " (reverted)" : ""}</span>`
-          : `<span class="t">${esc(i.summary)}</span>`;
+        let main = `<span class="t">${esc(i.summary)}</span>`;
+        let amt = "";
+        if (i.direction && i.valueBase) {
+          const t = i.contract ? findToken(tokens, i.contract) : undefined;
+          const value = t ? fmtAmount(formatUnits(BigInt(i.valueBase), t.decimals)) : fmtAmount(i.valueBase);
+          const sym = t ? t.symbol : i.contract ? `units of ${shortAddr(i.contract)}` : "?";
+          const who = i.counterparty ? this.s.book?.get(i.counterparty)?.name || shortAddr(i.counterparty) : "?";
+          main = `<span class="t">${i.direction === "out" ? "Sent" : "Received"} ${esc(value)} ${esc(sym)}</span> <span class="s">${i.direction === "out" ? "to" : "from"} ${esc(who)}${i.reverted ? " (reverted)" : ""}</span>`;
+          amt = `<span class="amt">${i.direction === "out" ? "−" : "+"}${esc(value)}</span>`;
+        }
         const meta = [i.txId ? esc(short(i.txId)) : "", i.blockHeight ? `block ${esc(fmtAmount(i.blockHeight))}` : ""].filter(Boolean).join(" · ");
-        const amt = m ? `<span class="amt">${m[1] === "sent" ? "−" : "+"}${esc(fmtAmount(m[2]!))}</span>` : "";
         return listRow(`${main}<br><span class="s mono">${meta}</span>`, amt);
       })
       .join("");
@@ -1284,7 +1440,7 @@ export class App {
     if (!sc) return `<p>Nothing to confirm.</p>`;
     const look = sc.assessment.kind === "lookalike";
     const m = sc.assessment.match;
-    const unit = this.unit();
+    const unit = sc.token.symbol;
     return `
       ${section("01", "Send", look ? "stop" : "first time")}
       <h1>${look ? "Stop: this address looks like one you use" : "First time sending here"}</h1>

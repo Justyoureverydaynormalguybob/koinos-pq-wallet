@@ -19,6 +19,11 @@ is flagged with the differing characters marked and needs its last six character
 accounts**, **lock when the tab is hidden**, and a **timed clipboard wipe** after copying an address.
 `docs/SECURITY.md` has the design notes and limits of each.
 
+Since 0.7.0: **KCS-4 tokens**. The Account tab lists the network's tokens (a curated list in `src/data/`,
+every entry checked against the chain) with balances read per contract, a token can be added by its
+contract address (name, symbol and decimals are read from the contract), and Send has a token picker;
+a token transfer is the same signed operation as a KOIN transfer with a different contract id.
+
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
                         account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)

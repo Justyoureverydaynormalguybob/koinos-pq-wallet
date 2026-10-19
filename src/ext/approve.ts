@@ -21,6 +21,7 @@ import { Chain, NETWORKS, PqSigner, bootstrapAddress, deriveKeys, decodeFields, 
 import { localVaultStore, openVault, toFile } from "../core/vault";
 import { detectAccount, walletAccounts } from "../core/accounts";
 import { addressStrip, button, card, field, header, input, list, listRow, notice, stat, ticker } from "../ui/components";
+import { allTokens, findToken, formatUnits } from "../core/tokens";
 import { applyTheme } from "../ui/app";
 
 interface Request {
@@ -52,11 +53,6 @@ const esc = (s: unknown) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;"
 const root = document.getElementById("app")!;
 applyTheme((pref("theme") as "light" | "dark" | "system" | null) ?? "system");
 const reqId = new URLSearchParams(location.search).get("req") ?? "";
-const KNOWN_TOKENS: Record<string, Record<string, string>> = {
-  mainnet: { "19GYjDBVXU7keLbYvMLazsGQn3GTWHjHkK": "KOIN", "12Y5vW6gk8GceH53YfRkRre2Rrcsgw7Naq": "VHP" },
-  testnet: { "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju": "tKOIN" },
-  devnet: { "1BRmrUgtSQVUggoeE9weG4f7nidyydnYfQ": "KOIN" },
-};
 let busy = false;
 
 function pref(key: string): string | null {
@@ -155,12 +151,14 @@ function strictTransfer(argsB64: string): { from: string; to: string; value: big
 }
 
 function describeOperation(cc: CallContract, net: Network, signer: string): string {
-  const symbol = KNOWN_TOKENS[net.name]?.[cc.contract_id];
-  if (symbol && cc.entry_point === TOKEN_ENTRY.transfer) {
+  // the curated list only: the approval window runs before the passphrase, so a wallet's own additions are not known here
+  const token = findToken(allTokens(net.name, null), cc.contract_id);
+  const symbol = token?.symbol;
+  if (token && cc.entry_point === TOKEN_ENTRY.transfer) {
     const t = strictTransfer(cc.args);
     if (t) {
       const fromNote = t.from === signer ? "" : ` <span class="warn-inline">from a different account, ${esc(t.from)},</span>`;
-      return `Send <strong class="mono">${esc(formatKoin(t.value))} ${esc(symbol)}</strong>${fromNote} to ${addressStrip(t.to, { size: "sm" })}`;
+      return `Send <strong class="mono">${esc(formatUnits(t.value, token.decimals))} ${esc(token.symbol)}</strong>${fromNote} to ${addressStrip(t.to, { size: "sm" })}`;
     }
     return `<span class="warn-inline">Unusual ${esc(symbol)} transfer encoding: the amount and recipient cannot be shown reliably.</span> Call to ${addressStrip(cc.contract_id, { size: "sm" })}`;
   }

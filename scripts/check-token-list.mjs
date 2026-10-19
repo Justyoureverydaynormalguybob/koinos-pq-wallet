@@ -5,7 +5,7 @@
 //   node scripts/check-token-list.mjs mainnet    # one network (mainnet | testnet | harbinger)
 //   node scripts/check-token-list.mjs --fix      # rewrite the files with the chain's answers
 import { readFileSync, writeFileSync } from "node:fs";
-import { Chain, NETWORKS, TOKEN_ENTRY, decodeStringResult, decodeDecimalsResult } from "koinos-pq-core";
+import { Chain, NETWORKS, TOKEN_ENTRY, decodeStringResult, decodeDecimalsResult, decodeUint64Result } from "koinos-pq-core";
 
 const args = process.argv.slice(2);
 const fix = args.includes("--fix");
@@ -54,6 +54,9 @@ for (const [net, file] of Object.entries(FILES)) {
       name = decodeStringResult(await readSlow(chain, t.address, TOKEN_ENTRY.name));
       symbol = decodeStringResult(await readSlow(chain, t.address, TOKEN_ENTRY.symbol));
       decimals = decodeDecimalsResult(await readSlow(chain, t.address, TOKEN_ENTRY.decimals));
+      // a contract that answers name/symbol but cannot read its own state is a stale copy (mainnet KOIN and
+      // VHP both moved; the old addresses fail with "user code cannot access system space")
+      decodeUint64Result(await readSlow(chain, t.address, TOKEN_ENTRY.total_supply));
     } catch (e) {
       problems++;
       console.log(`${file}: ${t.symbol} ${t.address}: read failed: ${String(e.message ?? e).slice(0, 100)}`);
