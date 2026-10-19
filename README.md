@@ -24,6 +24,12 @@ every entry checked against the chain) with balances read per contract, a token 
 contract address (name, symbol and decimals are read from the contract), and Send has a token picker;
 a token transfer is the same signed operation as a KOIN transfer with a different contract id.
 
+Since 0.8.0, on Android and iOS: **QR scanning** of a recipient address on Send (the code must be a
+checksum-valid Koinos address or a `koinos:` URI, nothing else is pasted), and **biometric unlock**: the
+wallet's slot key wrapped under a key the device keystore holds and releases after the fingerprint or
+face check; the passphrase is never stored and always works. See `docs/SECURITY.md` for what that
+protects against and what it does not.
+
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
                         account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)
@@ -66,7 +72,7 @@ byte for byte, running in the system WebView against the same nodes. Every push 
 with its sha256) and an unsigned iOS app (artifact `ios-app-unsigned`; installing on an iPhone needs an
 Apple developer account to sign it). Locally: `npm run build && npx cap sync`, then open `android/` in
 Android Studio or `ios/App/App.xcworkspace` in Xcode. Capacitor 8 (since 0.5.0) needs Node 22, JDK 21
-(Android Studio's bundled one does), Android SDK 36 and Xcode 26; the app runs on Android 7 (API 24) and
+(Android Studio's bundled one does), Android SDK 36 and Xcode 26; the app runs on Android 8 (API 26, the QR scanner's floor) and
 iOS 15 or newer. The Android signing key lives outside the repo;
 its SHA-256 fingerprint is `DC:7D:CE:C9:60:76:30:58:F8:5B:FE:1A:DD:87:6B:72:46:39:18:E8:67:0A:21:96:F6:4A:A9:3A:24:66:63:FF`.
 Android keeps the encrypted vault in the app's WebView storage; uninstalling the app deletes it, so the

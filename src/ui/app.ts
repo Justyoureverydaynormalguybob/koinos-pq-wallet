@@ -27,17 +27,19 @@ import {
   ticker, tile, words, type Tab,
 } from "./components";
 import { isNative } from "./platform";
+import { scanAddress, type Scanner } from "./scan";
+import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, forgetSlot, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
 
 type Screen =
   | "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "send-confirm" | "sent" | "receive" | "history"
-  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words";
+  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words" | "bio-enable";
 
 /** Screens that live under the tab bar, and which tab they belong to. */
 const TAB_OF: Partial<Record<Screen, string>> = {
   home: "account", send: "account", "send-confirm": "account", sent: "account", receive: "account", setup: "account",
   history: "activity",
   dapps: "dapps",
-  settings: "settings", export: "settings", save: "settings", contacts: "settings", duress: "settings", "duress-words": "settings",
+  settings: "settings", export: "settings", save: "settings", contacts: "settings", duress: "settings", "duress-words": "settings", "bio-enable": "settings",
 };
 
 interface SetupState {
@@ -158,14 +160,31 @@ export function applyTheme(theme: Theme) {
   else el.dataset.theme = theme;
 }
 
+export interface AppOptions {
+  /** the camera scanner to use (tests pass a fake); the plugin by default */
+  scanner?: Scanner;
+  /** the keystore and biometric prompt (tests pass fakes); the plugins by default */
+  bio?: Partial<BioDeps>;
+  /** whether to show what only a native shell has (the Dapps tab, the QR scan button); detected by default */
+  native?: boolean;
+}
+
 export class App {
   private s: State;
   private root: HTMLElement;
   private lockTimer: number | undefined;
   private hideTimer: number | undefined;
+  private readonly scanner: Scanner | undefined;
+  private readonly native: boolean;
+  private readonly bio: BioDeps;
+  /** whether the device offers biometrics (checked once per unlock screen on native) */
+  private bioAvailable: boolean | null = null;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, opts: AppOptions = {}) {
     this.root = root;
+    this.scanner = opts.scanner;
+    this.native = opts.native ?? isNative();
+    this.bio = { blobs: opts.bio?.blobs ?? localBlobStore, keys: opts.bio?.keys ?? nativeKeyStore, biometry: opts.bio?.biometry ?? nativeBiometry };
     const stored = localVaultStore.load();
     const theme = (pref.get(PREF_THEME) ?? "system") as Theme;
     this.s = {
@@ -445,6 +464,7 @@ export class App {
     change.apply(vault);
     const file = withSlot(this.s.file, this.s.slot, await encryptVault(vault, passphrase));
     if (!localVaultStore.save(file)) throw new Error("could not write to local storage");
+    await refreshWrappedKey(file, this.s.slot, passphrase, this.bio).catch(() => undefined); // biometrics, if on for this slot, follow the new salt
     this.s.file = file;
     this.s.vault = vault;
     this.s.change = null;
@@ -478,6 +498,8 @@ export class App {
       next = withSlot(next, this.s.slot, await encryptVault(current, mainPass));
     }
     if (!localVaultStore.save(next)) throw new Error("could not write to local storage");
+    forgetSlot(target, this.bio.blobs); // whatever biometrics opened in that slot is gone with it
+    if (roleOf(current) === "main") await refreshWrappedKey(next, this.s.slot, mainPass, this.bio).catch(() => undefined);
     this.lock("Duress wallet saved. Unlock with either passphrase: each opens its own wallet.");
   }
 
@@ -595,6 +617,24 @@ export class App {
       }
       await this.refresh();
     }
+  }
+  /** Opens whatever slot the device key unwraps, after the OS prompt; any failure falls back to the passphrase field. */
+  private async unlockWithBiometrics() {
+    const stored = localVaultStore.load();
+    if (!stored) throw new Error("no wallet on this device");
+    const file = await toFile(stored);
+    const opened = await biometricUnlock(file, this.bio);
+    if (!opened) throw new Error("Biometrics are not set up for this wallet.");
+    this.s.file = file;
+    this.s.slot = opened.slot;
+    this.s.vault = opened.data;
+    const seed = hexToBytes(opened.data.seedHex);
+    this.s.keys = deriveKeys(seed);
+    this.s.book = new AddressBook(addressBookNamespace(seed));
+    this.s.tokens = new CustomTokens(customTokensNamespace(seed));
+    this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
+    this.touch();
+    await this.enterHome();
   }
   private loadActivity() {
     void this.run("Loading activity", async () => {
@@ -748,6 +788,24 @@ export class App {
         this.s.book?.remove(el.dataset.address ?? "");
         this.render();
         break;
+      case "scan": {
+        // fills the "To" field in place; the user may have typed the amount already
+        void scanAddress(this.scanner).then(
+          (address) => {
+            if (!address) return;
+            const to = this.root.querySelector<HTMLInputElement>('form[data-form="send"] input[name="to"]');
+            if (to) {
+              to.value = address;
+              to.focus();
+            }
+          },
+          (e: Error) => {
+            this.s.error = e.message || String(e);
+            this.render();
+          },
+        );
+        break;
+      }
       case "token-remove": {
         const addr = el.dataset.address ?? "";
         this.s.tokens?.remove(this.network.name, addr);
@@ -799,10 +857,27 @@ export class App {
         const typed = window.prompt("This deletes the wallet from this device. Your 24 words are the only way back in.\nType DELETE to confirm.");
         if (typed === "DELETE") {
           localVaultStore.clear();
+          void disableBiometrics(this.bio).catch(() => undefined);
           this.lock("Wallet deleted from this device.");
         }
         break;
       }
+      case "bio-unlock":
+        void this.run("Waiting for the device", () => this.unlockWithBiometrics());
+        break;
+      case "bio-enable":
+        this.go("bio-enable");
+        break;
+      case "bio-disable":
+        void this.run("Turning biometrics off", async () => {
+          await disableBiometrics(this.bio);
+          this.s.screen = "settings";
+          this.s.notice = "Biometric unlock is off. The passphrase is the only way in.";
+        });
+        break;
+      case "bio-cancel":
+        this.go("settings");
+        break;
       case "export":
         this.go("export");
         break;
@@ -1031,6 +1106,14 @@ export class App {
       case "save":
         void this.run("Saving", () => this.saveChange(field("passphrase")));
         break;
+      case "bio-enable":
+        void this.run("Setting up", async () => {
+          if (!this.s.file) throw new Error("no wallet");
+          await enableBiometrics(this.s.file, this.s.slot, field("passphrase"), this.bio);
+          this.s.screen = "settings";
+          this.s.notice = "Biometric unlock is on for this wallet.";
+        });
+        break;
       case "export": {
         void this.run("Checking passphrase", async () => {
           const vault = await this.reopenCurrent(field("passphrase"));
@@ -1068,7 +1151,7 @@ export class App {
       { id: "account", label: "Account", action: "back-home" },
       { id: "activity", label: "Activity", action: "history" },
     ];
-    if (isNative()) t.push({ id: "dapps", label: "Dapps", action: "tab-dapps" });
+    if (this.native) t.push({ id: "dapps", label: "Dapps", action: "tab-dapps" });
     t.push({ id: "settings", label: "Settings", action: "settings" });
     return t;
   }
@@ -1096,6 +1179,7 @@ export class App {
       contacts: () => this.vContacts(),
       duress: () => this.vDuress(),
       "duress-words": () => this.vDuressWords(),
+      "bio-enable": () => this.vBioEnable(),
     }[s.screen]();
     const tab = TAB_OF[s.screen];
     const inApp = !!tab && !!s.keys;
@@ -1176,11 +1260,20 @@ export class App {
   }
 
   private vUnlock() {
+    const bio = this.native && biometricsEnabled(this.bio.blobs);
+    if (bio && this.bioAvailable === null) {
+      this.bioAvailable = false;
+      void this.bio.biometry.available().then((ok) => {
+        this.bioAvailable = ok;
+        if (ok && this.s.screen === "unlock") this.render();
+      }, () => undefined);
+    }
     return `
       <h1 class="wide" style="margin-top:40px">Unlock</h1>
+      ${bio && this.bioAvailable ? `<div class="row" style="margin-top:0">${button("Unlock with fingerprint or face", { action: "bio-unlock", variant: "primary", block: true })}</div><p class="fine" style="margin:12px 0 0">Or type the passphrase.</p>` : ""}
       <form data-form="unlock">
-        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "current-password" }))}
-        <div class="row">${button("Unlock", { variant: "primary", block: true })}</div>
+        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: !(bio && this.bioAvailable), autocomplete: "current-password" }))}
+        <div class="row">${button("Unlock", { variant: bio && this.bioAvailable ? undefined : "primary", block: true })}</div>
       </form>
       <p class="fine" style="margin-top:24px">Lost the passphrase? ${linkButton("Delete this wallet", "delete-wallet")} and import your 24 words again.</p>`;
   }
@@ -1262,7 +1355,11 @@ export class App {
       <h1>Send <span id="send-sym">${esc(tok.symbol)}</span></h1>
       <form data-form="send">
         ${field("Token", `<select name="token">${tokens.map((t) => `<option value="${esc(t.address)}" ${t.address === tok.address ? "selected" : ""}>${esc(t.symbol)} · ${esc(this.tokenAmount(t))}</option>`).join("")}</select>`)}
-        ${field("To", input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" }))}
+        <label class="field"><span>To</span><div class="withbtn">${input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" })}${
+          this.native
+            ? button(`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg><span class="sr-only">Scan a QR code</span>`, { action: "scan", mini: true, title: "Scan a QR code" })
+            : ""
+        }</div></label>
         <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
         <label class="field"><span id="amount-label">Amount (${esc(tok.symbol)})</span>${input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" })}</label>
         <p class="fine">From ${esc(a?.label ?? "")} on ${esc(this.network.name)}, signed here with ML-DSA-44 (${a?.mode === "native" ? "3,733-byte native entry" : "2,420-byte signature"}). A first-time or look-alike recipient asks you to confirm it before anything is signed.</p>
@@ -1350,6 +1447,13 @@ export class App {
       <p class="fine">See the balance, mana and activity of any address (your cold account, a friend's). No key, no sending.</p>
 
       ${section(null, "Security")}
+      ${
+        this.native
+          ? biometricsEnabled(this.bio.blobs)
+            ? `<p class="mute">Biometric unlock is on. It opens the wallet that turned it on last; the passphrase always works too.</p><div class="row tight">${button("Turn biometric unlock off", { action: "bio-disable" })}</div>`
+            : `<p class="mute">Unlock with fingerprint or face instead of typing the passphrase. The device keeps a wrapped copy of this wallet's key, never the passphrase or the words.</p><div class="row tight">${button("Turn biometric unlock on", { action: "bio-enable" })}</div>`
+          : ""
+      }
       <form data-form="autolock">
         ${check("lockOnHide", `Lock ${HIDDEN_LOCK_SECONDS} s after this tab is hidden or the screen goes off`, this.s.lockOnHide)}
         ${check("clipboardWipe", `Clear the clipboard ${CLIPBOARD_WIPE_SECONDS} s after copying an address`, this.s.clipboardWipe)}
@@ -1509,6 +1613,18 @@ export class App {
         ${field("Your main passphrase (to confirm)", input({ name: "main", type: "password", required: true, autocomplete: "off" }))}
         <p class="fine">After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.</p>
         <div class="row">${button("Save duress wallet", { variant: "danger" })}${button("Cancel", { action: "duress-cancel", variant: "ghost" })}</div>
+      </form>`;
+  }
+
+  private vBioEnable() {
+    return `
+      ${section("04", "Settings", "biometrics")}
+      <h1>Biometric unlock</h1>
+      <p>Your passphrase, once, so this wallet's key can be wrapped under a key kept by the device and released by its fingerprint or face check.</p>
+      <p class="fine">What is stored: the wrapped key, on this device only, never the passphrase or the 24 words. Biometrics open the wallet that turned them on last, whichever passphrase it has. Under pressure, turn them off or let the other wallet turn them on.</p>
+      <form data-form="bio-enable">
+        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "current-password" }))}
+        <div class="row">${button("Turn on", { variant: "primary" })}${button("Cancel", { action: "bio-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 

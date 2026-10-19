@@ -45,6 +45,10 @@
     </array>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <true/>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Unlocks the wallet with Face ID instead of the passphrase, if you turn that on.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Scans a QR code to fill in a recipient address. Nothing is recorded.</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
       <key>UIApplicationSupportsMultipleScenes</key>

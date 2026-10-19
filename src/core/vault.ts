@@ -111,6 +111,28 @@ export async function fillerSlot(iterations = PBKDF2_ITERATIONS): Promise<Encryp
 export async function decryptVault(enc: EncryptedVault, passphrase: string): Promise<VaultData> {
   if (enc.v !== 1 || enc.kdf !== "PBKDF2-SHA256") throw new Error("unknown vault format");
   const key = await deriveAesKey(passphrase, hexToBytes(enc.saltHex), enc.iterations);
+  return decryptWith(enc, key);
+}
+
+/**
+ * The slot's AES key as raw bytes (the same PBKDF2 derivation decryptVault uses), for wrapping under a
+ * device-held key so biometrics can open the slot without the passphrase. Wipe the result when done.
+ */
+export async function deriveSlotKeyBytes(enc: EncryptedVault, passphrase: string): Promise<Uint8Array> {
+  if (enc.v !== 1 || enc.kdf !== "PBKDF2-SHA256") throw new Error("unknown vault format");
+  const base = await subtle().importKey("raw", utf8ToBytes(passphrase.normalize("NFKD")), "PBKDF2", false, ["deriveBits"]);
+  const bits = await subtle().deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: hexToBytes(enc.saltHex) as BufferSource, iterations: enc.iterations }, base, 256);
+  return new Uint8Array(bits);
+}
+
+/** Opens a slot with its raw AES key (from deriveSlotKeyBytes, unwrapped). Throws "wrong passphrase" if it does not fit. */
+export async function decryptVaultWithKeyBytes(enc: EncryptedVault, keyBytes: Uint8Array): Promise<VaultData> {
+  if (enc.v !== 1 || keyBytes.length !== 32) throw new Error("wrong passphrase");
+  const key = await subtle().importKey("raw", keyBytes as BufferSource, { name: "AES-GCM" }, false, ["decrypt"]);
+  return decryptWith(enc, key);
+}
+
+async function decryptWith(enc: EncryptedVault, key: CryptoKey): Promise<VaultData> {
   let pt: ArrayBuffer;
   try {
     pt = await subtle().decrypt({ name: "AES-GCM", iv: hexToBytes(enc.ivHex) as BufferSource }, key, hexToBytes(enc.ciphertextHex) as BufferSource);

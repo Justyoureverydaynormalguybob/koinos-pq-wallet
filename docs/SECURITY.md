@@ -158,3 +158,34 @@ as "Your account". Its 24 words are the only backup, as always.
 stored seed only after the bug; it should have existed from the first activation flow. The devnet
 end-to-end run did not catch it because the zero-seed account is perfectly functional: it only
 collides.
+
+
+## Added 2026-10-19 (wallet 0.8.0): QR scanning and biometric unlock (native shells)
+
+**QR scanning** (`src/ui/scan.ts`). The camera plugin returns text; only a checksum-valid Koinos address,
+bare or as `koinos:<address>`, reaches the "To" field. Anything else is refused with a message and the
+field is left as it was. The scan fills the field only: the recipient checks (first-time, look-alike)
+run on submit exactly as for a typed address. The web app and the extension have no scan button and
+load none of the camera code (the plugin is imported on demand).
+
+**Biometric unlock** (`src/core/biometrics.ts`). What is stored: the slot's AES key (the same key the
+passphrase derives, taken with `deriveBits`) encrypted under a random 32-byte key-wrapping key (KWK)
+with AES-GCM, in localStorage next to the vault; the KWK itself in the platform keystore
+(`@aparajita/capacitor-secure-storage`: Android KeyStore + EncryptedSharedPreferences, iOS Keychain
+with iCloud sync off). The passphrase and the 24 words are never stored. The OS biometric prompt
+(`@aparajita/capacitor-biometric-auth`, device PIN fallback disabled) gates the app's read of the KWK.
+Every failure (cancel, no key, a blob that does not unwrap, a slot that does not open) falls back to
+the passphrase field; nothing is retried silently.
+
+Duress mode stays indistinguishable: the stored blobs cover every slot, one real wrap and the rest
+random bytes of the same length; all slots are tried on every biometric unlock, whatever the outcome.
+Biometrics belong to one wallet at a time: turning them on from a wallet wraps that wallet's slot and
+turns the other slots' blobs into filler, so under pressure the decoy's user can take them over and
+the owner can turn them off. A saved change re-encrypts the slot with a fresh salt, so the wrap is
+refreshed with the passphrase that saved it; a decoy written over a slot forgets that slot's wrap.
+
+Limits. The KWK is protected by the device keystore, not by the biometric sensor itself: an attacker
+with root on an unlocked device can read it and the blob, which is the same trust the OS places in app
+data. Biometrics are a convenience over the passphrase, not a second factor; the passphrase remains the
+thing to protect. The jsdom tests drive the real screens with a fake keystore and prompt; the plugins
+themselves are exercised only on a device.
