@@ -1,6 +1,6 @@
 {
   "name": "koinos-pq-wallet",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "description": "Post-quantum (ML-DSA-44) wallet for Koinos: web app and browser extension (window.kondor compatible) on one signing core",
   "type": "module",
@@ -16,11 +16,11 @@
     "e2e:activation": "node --experimental-strip-types scripts/e2e-activation.mjs"
   },
   "dependencies": {
-    "@capacitor/android": "^6.2.2",
-    "@capacitor/app": "^6.0.3",
-    "@capacitor/cli": "^6.2.2",
-    "@capacitor/core": "^6.2.2",
-    "@capacitor/ios": "^6.2.2",
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/cli": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
     "koilib": "^9.4.1",

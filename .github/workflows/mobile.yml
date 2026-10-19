@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "17" }
+        with: { distribution: temurin, java-version: "21" } # Capacitor 8 / AGP 8.13 need JDK 21
       - name: Install (git dependency's prepare needs tsc, so scripts are skipped; its dist is committed)
         run: npm ci --ignore-scripts
       - name: Unit tests
@@ -54,9 +54,11 @@ jobs:
           if-no-files-found: error
 
   ios:
-    runs-on: macos-latest
+    # Capacitor 8 needs Xcode 26; the macOS 26 image has it as the default toolchain
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - run: xcodebuild -version
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm ci --ignore-scripts
