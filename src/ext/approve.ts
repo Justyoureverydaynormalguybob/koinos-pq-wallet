@@ -11,10 +11,12 @@ import { executePlan, planRequest, type DappRequest, type Plan } from "../core/a
 import { describePlan } from "../ui/approval-view";
 import { button, field, header, input, notice, ticker } from "../ui/components";
 import { applyTheme } from "../ui/app";
+import { initLanguage } from "../i18n";
 
 const esc = (s: unknown) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 const root = document.getElementById("app")!;
 applyTheme((pref("theme") as "light" | "dark" | "system" | null) ?? "system");
+initLanguage();
 const reqId = new URLSearchParams(location.search).get("req") ?? "";
 let busy = false;
 

@@ -42,6 +42,11 @@ are read from the contract), see the tokens the account holds (`get_tokens_by_ow
 names and pictures from `token_uri` metadata, fetched only through a short list of IPFS and Arweave
 gateways, and send one through the same recipient checks and the same signing path as a token.
 
+Since 0.11.0: **languages**. Every string the app shows is a key in `src/i18n/en.json` with Spanish
+(`es.json`) and Portuguese (`pt.json`) lines; the language follows the device unless Settings says
+otherwise, and a missing line falls back to English. To add a language, copy `en.json`, translate the
+values (keep the `{placeholders}` and inline tags), and list it in `src/i18n/index.ts`.
+
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
                         account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)
@@ -51,7 +56,8 @@ src/core/clipboard.ts   copy with a timed wipe
 src/ui/app.ts           the screens, no framework (web app, native shells and extension popup alike)
 src/ui/components.ts    the building blocks those screens are made of (address strip, card, tab bar, ...)
 src/ui/tokens.css       the design system: tokens, type, controls; bundled Archivo and JetBrains Mono (OFL)
-src/data/               the token lists, checked against the chain (scripts/check-token-list.mjs)
+src/data/               the token and dapp lists, checked against the chain (scripts/check-token-list.mjs)
+src/i18n/               the languages: en.json is the key list, es.json and pt.json the translations
 design/                 the screens as static HTML, reviewed before they were ported (scripts/design-shots.mjs)
 src/ext/inpage.ts       window.kondor for web pages (kondor-js, MIT)
 src/ext/content.ts      relays page <-> extension messages

@@ -27,6 +27,7 @@ import {
   ticker, tile, words, type Tab,
 } from "./components";
 import { isNative } from "./platform";
+import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr } from "../i18n";
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, forgetSlot, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
 import { SitePermissions, permissionsNamespace } from "../core/permissions";
@@ -271,6 +272,7 @@ export class App {
     };
     if (!NETWORKS[this.s.networkName]) this.s.networkName = "testnet";
     applyTheme(this.s.theme);
+    initLanguage();
     root.addEventListener("click", (e) => this.onClick(e));
     root.addEventListener("submit", (e) => this.onSubmit(e));
     root.addEventListener("change", (e) => this.onChange(e));
@@ -434,9 +436,9 @@ export class App {
       // A failed balance read must not take the whole screen down (seen on mainnet 2026-10-18: the public
       // nodes answered "user code cannot access system space" to every KOIN balance_of while mana still read).
       this.s.balance = null;
-      this.s.notice = `Balance unavailable from this ${this.network.name} node right now (${(balance.reason as Error).message?.slice(0, 120) ?? "error"}). Mana and head block are live.`;
+      this.s.notice = tr("Balance unavailable from this {net} node right now ({why}). Mana and head block are live.", { net: this.network.name, why: (balance.reason as Error).message?.slice(0, 120) ?? "error" });
     }
-    if (mana.status === "rejected" && head.status === "rejected") throw new Error(`cannot reach the ${this.network.name} node: ${(head.reason as Error).message}`);
+    if (mana.status === "rejected" && head.status === "rejected") throw new Error(tr("cannot reach the {net} node: {why}", { net: this.network.name, why: (head.reason as Error).message }));
     void this.fillTokenBalances(a.address);
   }
   /**
@@ -480,10 +482,10 @@ export class App {
   }
   private async finishSetup(passphrase: string) {
     const seed = this.s.pendingSeed;
-    if (!seed) throw new Error("nothing to save");
+    if (!seed) throw new Error(tr("nothing to save"));
     const vault: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: this.s.pendingAccounts, createdAt: new Date().toISOString(), role: "main" };
     const { file, slot } = await newFile(vault, passphrase);
-    if (!localVaultStore.save(file)) throw new Error("this browser blocks local storage; the wallet cannot be saved here");
+    if (!localVaultStore.save(file)) throw new Error(tr("this browser blocks local storage; the wallet cannot be saved here"));
     this.s.file = file;
     this.s.slot = slot;
     this.s.vault = vault;
@@ -506,22 +508,22 @@ export class App {
   }
   /** The passphrase must open the slot this session was unlocked from; anything else is "wrong". */
   private async reopenCurrent(passphrase: string): Promise<VaultData> {
-    if (!this.s.file) throw new Error("no wallet");
+    if (!this.s.file) throw new Error(tr("no wallet"));
     return decryptVault(this.s.file.slots[this.s.slot]!, passphrase);
   }
   private async saveChange(passphrase: string) {
     const change = this.s.change;
-    if (!change || !this.s.file) throw new Error("nothing to save");
+    if (!change || !this.s.file) throw new Error(tr("nothing to save"));
     const vault = await this.reopenCurrent(passphrase); // also checks the passphrase
     change.apply(vault);
     const file = withSlot(this.s.file, this.s.slot, await encryptVault(vault, passphrase));
-    if (!localVaultStore.save(file)) throw new Error("could not write to local storage");
+    if (!localVaultStore.save(file)) throw new Error(tr("could not write to local storage"));
     await refreshWrappedKey(file, this.s.slot, passphrase, this.bio).catch(() => undefined); // biometrics, if on for this slot, follow the new salt
     this.s.file = file;
     this.s.vault = vault;
     this.s.change = null;
     this.s.screen = "settings";
-    this.s.notice = "Saved.";
+    this.s.notice = tr("Saved.");
   }
   /**
    * Duress mode: writes a decoy wallet (its own seed, its own passphrase) into the slot decoySlotFor()
@@ -530,7 +532,7 @@ export class App {
    */
   private async saveDecoy(mainPass: string, decoyPass: string) {
     const file = this.s.file, words = this.s.pendingDecoy, vault = this.s.vault;
-    if (!file || !words || !vault) throw new Error("nothing to save");
+    if (!file || !words || !vault) throw new Error(tr("nothing to save"));
     const current = await this.reopenCurrent(mainPass);
     let taken = false;
     try {
@@ -539,7 +541,7 @@ export class App {
     } catch {
       /* good: the decoy passphrase opens nothing yet */
     }
-    if (taken) throw new Error("The duress passphrase must be different from any passphrase this wallet already uses.");
+    if (taken) throw new Error(tr("The duress passphrase must be different from any passphrase this wallet already uses."));
     const seed = mnemonicToSeed(words);
     const decoy: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: [], createdAt: new Date().toISOString(), role: "decoy" };
     wipe(seed);
@@ -549,7 +551,7 @@ export class App {
       current.hasDecoy = true;
       next = withSlot(next, this.s.slot, await encryptVault(current, mainPass));
     }
-    if (!localVaultStore.save(next)) throw new Error("could not write to local storage");
+    if (!localVaultStore.save(next)) throw new Error(tr("could not write to local storage"));
     forgetSlot(target, this.bio.blobs); // whatever biometrics opened in that slot is gone with it
     if (roleOf(current) === "main") await refreshWrappedKey(next, this.s.slot, mainPass, this.bio).catch(() => undefined);
     this.lock("Duress wallet saved. Unlock with either passphrase: each opens its own wallet.");
@@ -573,7 +575,7 @@ export class App {
       })
       .catch((e) => {
         if (this.s.setup !== st0) return;
-        this.s.error = `Could not price the activation from the ${this.network.name} node: ${(e as Error).message}`;
+        this.s.error = tr("Could not price the activation from the {net} node: {why}", { net: this.network.name, why: (e as Error).message });
         if (this.s.screen === "setup") this.render();
       });
     const poll = async () => {
@@ -610,8 +612,8 @@ export class App {
   }
   private manaLine(mana: bigint | null, required: bigint): string {
     const need = formatKoin(required, 2);
-    if (mana === null) return `Mana now: checking… (needs ${need})`;
-    return `Mana now: ${formatKoin(mana, 2)} ${mana >= required ? "(enough, activating)" : `(needs ${need})`}`;
+    if (mana === null) return tr("Mana now: checking… (needs {need})", { need });
+    return tr("Mana now: {mana} {state}", { mana: formatKoin(mana, 2), state: mana >= required ? tr("(enough, activating)") : tr("(needs {need})", { need }) });
   }
   private endSetup() {
     if (this.s.setup?.timer) window.clearInterval(this.s.setup.timer);
@@ -623,7 +625,7 @@ export class App {
   }
   private async runSetup() {
     const st = this.s.setup;
-    if (!st || !this.s.keys) throw new Error("locked");
+    if (!st || !this.s.keys) throw new Error(tr("locked"));
     if (st.running || st.result) return;
     st.running = true;
     st.failed = null;
@@ -648,7 +650,7 @@ export class App {
   /** Signs and submits a token transfer (KOIN or any listed KCS-4 token) from the current account, then remembers the recipient. */
   private async doSend(to: string, amount: string, name = "", token: Token = this.koinToken()) {
     const a = this.account();
-    if (!a || !this.s.keys || !canSign(a)) throw new Error("locked");
+    if (!a || !this.s.keys || !canSign(a)) throw new Error(tr("locked"));
     const valueBase = parseUnits(amount, token.decimals);
     const chain = this.chain();
     const contract = token.address === this.network.koin ? undefined : token.address;
@@ -665,7 +667,7 @@ export class App {
         this.s.sent = { ...this.s.sent, block, waiting: false };
       } catch (err) {
         this.s.sent = { ...this.s.sent, waiting: false };
-        this.s.error = `Sent, but still waiting for a block: ${(err as Error).message}`;
+        this.s.error = tr("Sent, but still waiting for a block: {why}", { why: (err as Error).message });
       }
       await this.refresh();
     }
@@ -673,10 +675,10 @@ export class App {
   /** Opens whatever slot the device key unwraps, after the OS prompt; any failure falls back to the passphrase field. */
   private async unlockWithBiometrics() {
     const stored = localVaultStore.load();
-    if (!stored) throw new Error("no wallet on this device");
+    if (!stored) throw new Error(tr("no wallet on this device"));
     const file = await toFile(stored);
     const opened = await biometricUnlock(file, this.bio);
-    if (!opened) throw new Error("Biometrics are not set up for this wallet.");
+    if (!opened) throw new Error(tr("Biometrics are not set up for this wallet."));
     this.s.file = file;
     this.s.slot = opened.slot;
     this.s.vault = opened.data;
@@ -739,7 +741,7 @@ export class App {
     try {
       new URL(url);
     } catch {
-      throw new Error("That is not a web address.");
+      throw new Error(tr("That is not a web address."));
     }
     this.s.dapp = { ...emptyDapp(), open: true, url };
     this.s.screen = "dapps";
@@ -762,7 +764,7 @@ export class App {
   /** The tokens the current account holds in a collection, then their metadata in the background. */
   private async loadCollection(address: string) {
     const a = this.account();
-    if (!a) throw new Error("no account");
+    if (!a) throw new Error(tr("no account"));
     this.s.nft.collection = address;
     this.s.nft.tokens[address] = await tokensOf(this.chain(), address, a.address);
     this.s.screen = "nfts";
@@ -793,7 +795,7 @@ export class App {
   /** One collectible, through the one signing path, then the recipient is remembered like any other. */
   private async doSendNft(to: string, name: string, token: NftToken) {
     const a = this.account();
-    if (!a || !this.s.keys || !canSign(a)) throw new Error("locked");
+    if (!a || !this.s.keys || !canSign(a)) throw new Error(tr("locked"));
     const chain = this.chain();
     const res = await chain.sendCall({ from: a.address, contract: token.collection, entryPoint: NFT_ENTRY.transfer, args: encodeNftTransferArgs(a.address, to, token.idHex), keys: this.s.keys, mode: a.mode as "native" | "pqwallet" });
     this.s.book?.recordSend(to, name);
@@ -809,7 +811,7 @@ export class App {
         this.s.sent = { ...this.s.sent, block, waiting: false };
       } catch (err) {
         this.s.sent = { ...this.s.sent, waiting: false };
-        this.s.error = `Sent, but still waiting for a block: ${(err as Error).message}`;
+        this.s.error = tr("Sent, but still waiting for a block: {why}", { why: (err as Error).message });
       }
       await this.refresh();
     }
@@ -829,7 +831,7 @@ export class App {
     if (t instanceof HTMLSelectElement && t.name === "network") {
       if (this.s.setup?.running) {
         t.value = this.s.networkName;
-        this.s.error = "Wait until the activation has finished before switching network.";
+        this.s.error = tr("Wait until the activation has finished before switching network.");
         this.render();
         return;
       }
@@ -843,6 +845,10 @@ export class App {
       this.s.sendToken = "";
       this.s.nft = emptyNft();
       void this.run("Loading", () => this.enterHome());
+    }
+    if (t instanceof HTMLSelectElement && t.name === "lang") {
+      if (isLang(t.value)) setLanguage(t.value);
+      this.render();
     }
     if (t instanceof HTMLSelectElement && t.name === "theme") {
       const theme = (["light", "dark"].includes(t.value) ? t.value : "system") as Theme;
@@ -868,7 +874,7 @@ export class App {
       const sym = this.root.querySelector<HTMLElement>("#send-sym");
       if (sym) sym.textContent = tok.symbol;
       const lbl = this.root.querySelector<HTMLElement>("#amount-label");
-      if (lbl) lbl.textContent = `Amount (${tok.symbol})`;
+      if (lbl) lbl.textContent = tr("Amount ({symbol})", { symbol: tok.symbol });
     }
   }
 
@@ -946,7 +952,7 @@ export class App {
         const secs = this.s.clipboardWipe ? CLIPBOARD_WIPE_SECONDS : 0;
         void copyWithWipe(text, secs).then(
           () => {
-            this.s.notice = secs ? `Copied. The clipboard clears itself in ${secs} s.` : "Copied.";
+            this.s.notice = secs ? tr("Copied. The clipboard clears itself in {s} s.", { s: secs }) : tr("Copied.");
             this.render();
             window.setTimeout(() => {
               this.s.notice = null;
@@ -954,7 +960,7 @@ export class App {
             }, 2500);
           },
           () => {
-            this.s.error = "Could not copy; select the text instead.";
+            this.s.error = tr("Could not copy; select the text instead.");
             this.render();
           },
         );
@@ -1059,8 +1065,8 @@ export class App {
         const acct = this.accounts().find((a) => a.index === Number(el.dataset.index));
         if (!acct || acct.derived || acct.mode === "native") break;
         this.s.change = {
-          title: acct.mode === "watch" ? "Stop watching" : "Remove account",
-          detail: `Remove ${acct.address} from this wallet's list. Nothing changes on chain, and you can add it back any time.`,
+          title: acct.mode === "watch" ? tr("Stop watching") : tr("Remove account"),
+          detail: tr("Remove {address} from this wallet's list. Nothing changes on chain, and you can add it back any time.", { address: acct.address }),
           apply: (v) => {
             v.accounts = v.accounts.filter((x) => x.address !== acct.address);
           },
@@ -1076,11 +1082,11 @@ export class App {
         void this.run("Checking", async () => {
           if (!this.s.keys) return;
           const b = await this.chain().balance(this.s.keys.address);
-          this.s.notice = `Native address on ${this.network.name}: ${formatKoin(b)} ${this.unit()}.`;
+          this.s.notice = tr("Native address on {net}: {amount} {unit}.", { net: this.network.name, amount: formatKoin(b), unit: this.unit() });
         });
         break;
       case "delete-wallet": {
-        const typed = window.prompt("This deletes the wallet from this device. Your 24 words are the only way back in.\nType DELETE to confirm.");
+        const typed = window.prompt(tr("This deletes the wallet from this device. Your 24 words are the only way back in.\nType DELETE to confirm."));
         if (typed === "DELETE") {
           localVaultStore.clear();
           void disableBiometrics(this.bio).catch(() => undefined);
@@ -1098,7 +1104,7 @@ export class App {
         void this.run("Turning biometrics off", async () => {
           await disableBiometrics(this.bio);
           this.s.screen = "settings";
-          this.s.notice = "Biometric unlock is off. The passphrase is the only way in.";
+          this.s.notice = tr("Biometric unlock is off. The passphrase is the only way in.");
         });
         break;
       case "bio-cancel":
@@ -1139,7 +1145,7 @@ export class App {
         const words = this.s.pendingMnemonic!.split(" ");
         const ok = this.s.confirmIdx.every((i, k) => field(`w${k}`).trim().toLowerCase() === words[i]);
         if (!ok) {
-          this.s.error = "One of the words does not match. Check your note and try again.";
+          this.s.error = tr("One of the words does not match. Check your note and try again.");
           this.render();
           return;
         }
@@ -1154,7 +1160,7 @@ export class App {
           const pq = field("pqwallet").trim();
           const accounts: AccountRecord[] = [];
           if (pq) {
-            if (!isAddress(pq)) throw new Error("the account address is not a valid Koinos address");
+            if (!isAddress(pq)) throw new Error(tr("the account address is not a valid Koinos address"));
             accounts.push({ label: "Post-quantum account", mode: "pqwallet", address: pq });
           }
           this.s.pendingSeed = seed;
@@ -1167,12 +1173,12 @@ export class App {
       case "passphrase": {
         const p1 = field("p1"), p2 = field("p2");
         if (p1.length < MIN_PASSPHRASE_LENGTH) {
-          this.s.error = `Use at least ${MIN_PASSPHRASE_LENGTH} characters.`;
+          this.s.error = tr("Use at least {n} characters.", { n: MIN_PASSPHRASE_LENGTH });
           this.render();
           return;
         }
         if (p1 !== p2) {
-          this.s.error = "The two passphrases differ.";
+          this.s.error = tr("The two passphrases differ.");
           this.render();
           return;
         }
@@ -1182,7 +1188,7 @@ export class App {
       case "unlock": {
         void this.run("Unlocking", async () => {
           const stored = localVaultStore.load();
-          if (!stored) throw new Error("no wallet in this browser");
+          if (!stored) throw new Error(tr("no wallet in this browser"));
           const file = await toFile(stored);
           const opened = await openVault(file, field("passphrase"));
           if (!("slots" in stored)) localVaultStore.save(file); // a pre-duress wallet: store it in the slot format from now on
@@ -1209,7 +1215,7 @@ export class App {
         this.s.sendToken = token.address === this.network.koin ? "" : token.address;
         const a = this.account();
         if (!a || !canSign(a)) {
-          this.s.error = "This account is watch-only; it has no key here.";
+          this.s.error = tr("This account is watch-only; it has no key here.");
           this.render();
           return;
         }
@@ -1222,7 +1228,7 @@ export class App {
         }
         const assessment = this.s.book?.assess(to, this.ownAddresses()) ?? { kind: "new" as const };
         if (assessment.kind === "invalid") {
-          this.s.error = "That is not a valid Koinos address (check every character; the checksum does not match).";
+          this.s.error = tr("That is not a valid Koinos address (check every character; the checksum does not match).");
           this.render();
           return;
         }
@@ -1240,12 +1246,12 @@ export class App {
         if (sc.assessment.kind === "lookalike") {
           const typed = field("tail").trim();
           if (typed !== sc.to.slice(-6)) {
-            this.s.error = "The last six characters you typed do not match the address.";
+            this.s.error = tr("The last six characters you typed do not match the address.");
             this.render();
             return;
           }
         } else if (!data.get("checked")) {
-          this.s.error = "Tick the box once you have compared the whole address.";
+          this.s.error = tr("Tick the box once you have compared the whole address.");
           this.render();
           return;
         }
@@ -1257,18 +1263,18 @@ export class App {
       case "add-collection": {
         const addr = field("address").trim();
         if (!isAddress(addr)) {
-          this.s.error = "That is not a valid Koinos contract address.";
+          this.s.error = tr("That is not a valid Koinos contract address.");
           this.render();
           return;
         }
         void this.run("Reading the collection", async () => {
           if (this.collectionList().some((c) => c.address === addr)) {
-            this.s.notice = "That collection is already in the list.";
+            this.s.notice = tr("That collection is already in the list.");
             return;
           }
           const info = await collectionInfo(this.chain(), addr);
           this.s.collections?.add(this.network.name, { address: addr, ...info });
-          this.s.notice = `Added ${info.name || info.symbol}.`;
+          this.s.notice = tr("Added {name}.", { name: info.name || info.symbol });
         });
         break;
       }
@@ -1277,13 +1283,13 @@ export class App {
         const token = this.s.nft.token;
         const a = this.account();
         if (!token || !a || !canSign(a)) {
-          this.s.error = "This account is watch-only; it has no key here.";
+          this.s.error = tr("This account is watch-only; it has no key here.");
           this.render();
           return;
         }
         const assessment = this.s.book?.assess(to, this.ownAddresses()) ?? { kind: "new" as const };
         if (assessment.kind === "invalid") {
-          this.s.error = "That is not a valid Koinos address (check every character; the checksum does not match).";
+          this.s.error = tr("That is not a valid Koinos address (check every character; the checksum does not match).");
           this.render();
           return;
         }
@@ -1299,18 +1305,18 @@ export class App {
       case "add-token": {
         const addr = field("address").trim();
         if (!isAddress(addr)) {
-          this.s.error = "That is not a valid Koinos contract address.";
+          this.s.error = tr("That is not a valid Koinos contract address.");
           this.render();
           return;
         }
         void this.run("Reading the token", async () => {
           if (findToken(this.tokenList(), addr)) {
-            this.s.notice = "That token is already in the list.";
+            this.s.notice = tr("That token is already in the list.");
             return;
           }
           const info = await this.chain().tokenInfo(addr);
           this.s.tokens?.add(this.network.name, { address: addr, ...info });
-          this.s.notice = `Added ${info.symbol} (${info.name}).`;
+          this.s.notice = tr("Added {symbol} ({name}).", { symbol: info.symbol, name: info.name });
           const a = this.account();
           if (a) void this.fillTokenBalances(a.address);
         });
@@ -1319,21 +1325,21 @@ export class App {
       case "contact-rename": {
         const addr = field("address"), name = field("name");
         if (this.s.book && addr) this.s.book.upsert(addr, name);
-        this.s.notice = "Saved.";
+        this.s.notice = tr("Saved.");
         this.render();
         break;
       }
       case "watch": {
         const addr = field("address").trim();
         if (!isAddress(addr)) {
-          this.s.error = "That is not a valid Koinos address.";
+          this.s.error = tr("That is not a valid Koinos address.");
           this.render();
           return;
         }
-        const label = field("label").trim().slice(0, 60) || "Watched address";
+        const label = field("label").trim().slice(0, 60) || tr("Watched address");
         this.s.change = {
-          title: "Watch an address",
-          detail: `Show ${addr} (${label}) in this wallet: balance, mana and history only. This wallet holds no key for it and cannot spend from it.`,
+          title: tr("Watch an address"),
+          detail: tr("Show {address} ({label}) in this wallet: balance, mana and history only. This wallet holds no key for it and cannot spend from it.", { address: addr, label }),
           apply: (v) => {
             if (!v.accounts.some((x) => x.address === addr)) v.accounts.push({ label, mode: "watch", address: addr });
           },
@@ -1344,12 +1350,12 @@ export class App {
       case "duress-save": {
         const d1 = field("d1"), d2 = field("d2");
         if (d1.length < MIN_PASSPHRASE_LENGTH) {
-          this.s.error = `Use at least ${MIN_PASSPHRASE_LENGTH} characters for the duress passphrase.`;
+          this.s.error = tr("Use at least {n} characters for the duress passphrase.", { n: MIN_PASSPHRASE_LENGTH });
           this.render();
           return;
         }
         if (d1 !== d2) {
-          this.s.error = "The two duress passphrases differ.";
+          this.s.error = tr("The two duress passphrases differ.");
           this.render();
           return;
         }
@@ -1359,14 +1365,14 @@ export class App {
       case "add-account": {
         const addr = field("address").trim();
         if (!isAddress(addr)) {
-          this.s.error = "That is not a valid Koinos address.";
+          this.s.error = tr("That is not a valid Koinos address.");
           this.render();
           return;
         }
-        const label = field("label").trim().slice(0, 60) || "Post-quantum account";
+        const label = field("label").trim().slice(0, 60) || tr("Post-quantum account");
         this.s.change = {
-          title: "Add account",
-          detail: `Add ${addr} (${label}) to this wallet. It only works if that account's contract has this wallet's key registered.`,
+          title: tr("Add account"),
+          detail: tr("Add {address} ({label}) to this wallet. It only works if that account's contract has this wallet's key registered.", { address: addr, label }),
           apply: (v) => {
             if (!v.accounts.some((x) => x.address === addr)) v.accounts.push({ label, mode: "pqwallet", address: addr });
           },
@@ -1390,10 +1396,10 @@ export class App {
         break;
       case "bio-enable":
         void this.run("Setting up", async () => {
-          if (!this.s.file) throw new Error("no wallet");
+          if (!this.s.file) throw new Error(tr("no wallet"));
           await enableBiometrics(this.s.file, this.s.slot, field("passphrase"), this.bio);
           this.s.screen = "settings";
-          this.s.notice = "Biometric unlock is on for this wallet.";
+          this.s.notice = tr("Biometric unlock is on for this wallet.");
         });
         break;
       case "export": {
@@ -1412,13 +1418,13 @@ export class App {
         this.s.clipboardWipe = !!data.get("clipboardWipe");
         pref.set(PREF_CLIPBOARD_WIPE, this.s.clipboardWipe ? "1" : "0");
         this.touch();
-        this.s.notice = `Auto-lock after ${m} minutes${this.s.lockOnHide ? `, and ${HIDDEN_LOCK_SECONDS} s after the tab is hidden` : ""}. Clipboard wipe ${this.s.clipboardWipe ? "on" : "off"}.`;
+        this.s.notice = tr("Auto-lock after {m} minutes{hide}. Clipboard wipe {wipe}.", { m, hide: this.s.lockOnHide ? tr(", and {s} s after the tab is hidden", { s: HIDDEN_LOCK_SECONDS }) : "", wipe: this.s.clipboardWipe ? tr("on") : tr("off") });
         this.render();
         break;
       }
       case "devnet-rpc": {
         pref.set(PREF_DEVNET_RPC, field("rpc").trim() || "http://127.0.0.1:8080/");
-        this.s.notice = "Devnet RPC saved.";
+        this.s.notice = tr("Devnet RPC saved.");
         this.render();
         break;
       }
@@ -1430,11 +1436,11 @@ export class App {
   // ---------- views ----------
   private tabs(): Tab[] {
     const t: Tab[] = [
-      { id: "account", label: "Account", action: "back-home" },
-      { id: "activity", label: "Activity", action: "history" },
+      { id: "account", label: tr("Account"), action: "back-home" },
+      { id: "activity", label: tr("Activity"), action: "history" },
     ];
-    if (this.native) t.push({ id: "dapps", label: "Dapps", action: "tab-dapps" });
-    t.push({ id: "settings", label: "Settings", action: "settings" });
+    if (this.native) t.push({ id: "dapps", label: tr("Dapps"), action: "tab-dapps" });
+    t.push({ id: "settings", label: tr("Settings"), action: "settings" });
     return t;
   }
 
@@ -1475,12 +1481,12 @@ export class App {
     ].join("");
     this.root.innerHTML = `
       <div class="shell">
-        ${header(inApp ? button("Lock", { action: "lock", variant: "ghost", mini: true }) : s.keys ? "" : `<span class="hexstrip">ML-DSA-44</span>`)}
+        ${header(inApp ? button(tr("Lock"), { action: "lock", variant: "ghost", mini: true }) : s.keys ? "" : `<span class="hexstrip">ML-DSA-44</span>`)}
         ${inApp ? ticker(this.network.name, s.head, this.network.autoBlocks) : ""}
         <div class="content ${inApp ? "" : "plain"}">
           ${notes}
           ${body}
-          ${inApp ? "" : `<p class="foot">Koinos PQ Wallet · open source, MIT · a test build, not audited</p>`}
+          ${inApp ? "" : `<p class="foot">${tr("Koinos PQ Wallet · open source, MIT · a test build, not audited")}</p>`}
         </div>
         ${inApp ? tabBar(this.tabs(), tab) : ""}
       </div>`;
@@ -1497,51 +1503,51 @@ export class App {
 
   private vWelcome() {
     return `
-      <h1 class="wide" style="margin-top:24px">A wallet that a quantum computer cannot pick</h1>
-      <p>Your account is controlled by an <strong>ML-DSA-44</strong> key (the NIST post-quantum standard, FIPS 204) instead of secp256k1. The key lives only on this device, encrypted with a passphrase you choose, and is backed up by 24 words.</p>
-      <div class="row">${button("Create a new wallet", { action: "create", variant: "primary" })}${button("Import 24 words", { action: "import" })}</div>
-      <p class="fine" style="margin-top:16px">After you create it, send some KOIN to your new account and the wallet activates it by itself. This is a test build: use small amounts.</p>`;
+      <h1 class="wide" style="margin-top:24px">${tr("A wallet that a quantum computer cannot pick")}</h1>
+      <p>${tr("Your account is controlled by an <strong>ML-DSA-44</strong> key (the NIST post-quantum standard, FIPS 204) instead of secp256k1. The key lives only on this device, encrypted with a passphrase you choose, and is backed up by 24 words.")}</p>
+      <div class="row">${button(tr("Create a new wallet"), { action: "create", variant: "primary" })}${button(tr("Import 24 words"), { action: "import" })}</div>
+      <p class="fine" style="margin-top:16px">${tr("After you create it, send some KOIN to your new account and the wallet activates it by itself. This is a test build: use small amounts.")}</p>`;
   }
 
   private vCreate() {
     const w = this.s.pendingMnemonic!.split(" ");
     return `
-      <h1>Write these 24 words down</h1>
-      <p>On paper, in order. They are the only way to recover the wallet. Anyone who has them has your funds. Do not screenshot them.</p>
+      <h1>${tr("Write these 24 words down")}</h1>
+      <p>${tr("On paper, in order. They are the only way to recover the wallet. Anyone who has them has your funds. Do not screenshot them.")}</p>
       ${card(words(w))}
-      <div class="row">${button("I have written them down", { action: "wrote-down", variant: "primary" })}${button("Cancel", { action: "welcome", variant: "ghost" })}</div>`;
+      <div class="row">${button(tr("I have written them down"), { action: "wrote-down", variant: "primary" })}${button(tr("Cancel"), { action: "welcome", variant: "ghost" })}</div>`;
   }
 
   private vConfirm() {
     return `
-      <h1>Check your note</h1>
+      <h1>${tr("Check your note")}</h1>
       <form data-form="confirm">
-        ${this.s.confirmIdx.map((i, k) => field(`Word number ${i + 1}`, input({ name: `w${k}`, class: "mono", autocomplete: "off", autocapitalize: "none", spellcheck: "false", required: true, autofocus: k === 0 }))).join("")}
-        <div class="row">${button("Continue", { variant: "primary" })}${button("Show the words again", { action: "show-words", variant: "ghost" })}</div>
+        ${this.s.confirmIdx.map((i, k) => field(tr("Word number {n}", { n: i + 1 }), input({ name: `w${k}`, class: "mono", autocomplete: "off", autocapitalize: "none", spellcheck: "false", required: true, autofocus: k === 0 }))).join("")}
+        <div class="row">${button(tr("Continue"), { variant: "primary" })}${button(tr("Show the words again"), { action: "show-words", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vPassphrase() {
     return `
-      <h1>Choose a passphrase</h1>
-      <p>It encrypts the wallet on this device. It does not replace the 24 words: if you forget it, import the words again.</p>
+      <h1>${tr("Choose a passphrase")}</h1>
+      <p>${tr("It encrypts the wallet on this device. It does not replace the 24 words: if you forget it, import the words again.")}</p>
       <form data-form="passphrase">
-        ${field(`Passphrase (${MIN_PASSPHRASE_LENGTH}+ characters)`, input({ name: "p1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
-        ${field("Repeat it", input({ name: "p2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
-        <div class="row">${button("Create wallet", { variant: "primary" })}${button("Cancel", { action: "welcome", variant: "ghost" })}</div>
+        ${field(tr("Passphrase ({n}+ characters)", { n: MIN_PASSPHRASE_LENGTH }), input({ name: "p1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
+        ${field(tr("Repeat it"), input({ name: "p2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
+        <div class="row">${button(tr("Create wallet"), { variant: "primary" })}${button(tr("Cancel"), { action: "welcome", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vImport() {
     return `
-      <h1>Import</h1>
+      <h1>${tr("Import")}</h1>
       <form data-form="import">
-        ${field("Your 24 words", `<textarea name="seed" rows="4" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus></textarea>`)}
-        <p class="fine">An account this wallet activated is found again automatically.</p>
+        ${field(tr("Your 24 words"), `<textarea name="seed" rows="4" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus></textarea>`)}
+        <p class="fine">${tr("An account this wallet activated is found again automatically.")}</p>
         <details class="adv"><summary>Advanced</summary>
-          ${field("The 64-character seed from the koinos-pq command-line tool also works in the box above. For an account set up with that tool, give its address:", input({ name: "pqwallet", class: "mono", autocomplete: "off", placeholder: "1…" }))}
+          ${field(tr("The 64-character seed from the koinos-pq command-line tool also works in the box above. For an account set up with that tool, give its address:"), input({ name: "pqwallet", class: "mono", autocomplete: "off", placeholder: "1…" }))}
         </details>
-        <div class="row">${button("Continue", { variant: "primary" })}${button("Cancel", { action: "welcome", variant: "ghost" })}</div>
+        <div class="row">${button(tr("Continue"), { variant: "primary" })}${button(tr("Cancel"), { action: "welcome", variant: "ghost" })}</div>
       </form>`;
   }
 
@@ -1555,13 +1561,13 @@ export class App {
       }, () => undefined);
     }
     return `
-      <h1 class="wide" style="margin-top:40px">Unlock</h1>
-      ${bio && this.bioAvailable ? `<div class="row" style="margin-top:0">${button("Unlock with fingerprint or face", { action: "bio-unlock", variant: "primary", block: true })}</div><p class="fine" style="margin:12px 0 0">Or type the passphrase.</p>` : ""}
+      <h1 class="wide" style="margin-top:40px">${tr("Unlock")}</h1>
+      ${bio && this.bioAvailable ? `<div class="row" style="margin-top:0">${button(tr("Unlock with fingerprint or face"), { action: "bio-unlock", variant: "primary", block: true })}</div><p class="fine" style="margin:12px 0 0">${tr("Or type the passphrase.")}</p>` : ""}
       <form data-form="unlock">
-        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: !(bio && this.bioAvailable), autocomplete: "current-password" }))}
-        <div class="row">${button("Unlock", { variant: bio && this.bioAvailable ? undefined : "primary", block: true })}</div>
+        ${field(tr("Passphrase"), input({ name: "passphrase", type: "password", required: true, autofocus: !(bio && this.bioAvailable), autocomplete: "current-password" }))}
+        <div class="row">${button(tr("Unlock"), { variant: bio && this.bioAvailable ? undefined : "primary", block: true })}</div>
       </form>
-      <p class="fine" style="margin-top:24px">Lost the passphrase? ${linkButton("Delete this wallet", "delete-wallet")} and import your 24 words again.</p>`;
+      <p class="fine" style="margin-top:24px">Lost the passphrase? ${linkButton(tr("Delete this wallet"), "delete-wallet")} and import your 24 words again.</p>`;
   }
 
   private accountPicker() {
@@ -1571,7 +1577,7 @@ export class App {
     return `<ul class="accts">${items
       .map(
         (a) =>
-          `<li><label><input type="radio" name="account" value="${a.index}" ${cur && a.index === cur.index ? "checked" : ""}><span class="grow">${esc(a.label)} <span class="s mono">${esc(shortAddr(a.address))}</span>${a.mode === "native" ? ` <span class="s">native</span>` : a.mode === "watch" ? ` <span class="s">watch-only</span>` : ""}</span></label></li>`,
+          `<li><label><input type="radio" name="account" value="${a.index}" ${cur && a.index === cur.index ? "checked" : ""}><span class="grow">${esc(a.label)} <span class="s mono">${esc(shortAddr(a.address))}</span>${a.mode === "native" ? ` <span class="s">${tr("native")}</span>` : a.mode === "watch" ? ` <span class="s">${tr("watch-only")}</span>` : ""}</span></label></li>`,
       )
       .join("")}</ul>`;
   }
@@ -1581,28 +1587,28 @@ export class App {
     const s = this.s;
     if (!a) {
       return `
-        ${section("01", "Account")}
-        <h1>Activate your account</h1>
-        <p>Your wallet has its post-quantum key. To use it on <strong>${esc(this.network.name)}</strong>, send some ${esc(this.unit())} to your account's address and the wallet activates it.</p>
-        <div class="row">${button("Show my account's address", { action: "setup", variant: "primary" })}${button("Settings", { action: "settings" })}</div>`;
+        ${section("01", tr("Account"))}
+        <h1>${tr("Activate your account")}</h1>
+        <p>${tr("Your wallet has its post-quantum key. To use it on <strong>{net}</strong>, send some {unit} to your account's address and the wallet activates it.", { net: esc(this.network.name), unit: esc(this.unit()) })}</p>
+        <div class="row">${button(tr("Show my account's address"), { action: "setup", variant: "primary" })}${button(tr("Settings"), { action: "settings" })}</div>`;
     }
     const unit = this.unit();
     const sig = a.mode === "native" ? "ML-DSA-44 · 3,733 B" : "ML-DSA-44 · 2,420 B";
     return `
-      ${section("01", "Account", hexStrip(a.address))}
+      ${section("01", tr("Account"), hexStrip(a.address))}
       ${this.accountPicker()}
       ${card(`
         <span class="lbl">${esc(a.label)} · ${esc(this.network.name)}</span>
         ${addressStrip(a.address)}
-        <div class="row tight">${button("Copy", { action: "copy", mini: true, data: { copy: a.address } })}${button("Refresh", { action: "refresh", variant: "ghost", mini: true })}</div>
+        <div class="row tight">${button(tr("Copy"), { action: "copy", mini: true, data: { copy: a.address } })}${button(tr("Refresh"), { action: "refresh", variant: "ghost", mini: true })}</div>
         <div style="margin-top:20px">${balance(s.balance === null ? null : fmtAmount(formatKoin(s.balance)), unit)}</div>
         <div style="margin-top:12px">
-          ${stat("Mana", s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2))))}
-          ${stat("Signature", canSign(a) ? esc(sig) : "none here (watch-only)")}
+          ${stat(tr("Mana"), s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2))))}
+          ${stat(tr("Signature"), canSign(a) ? esc(sig) : "none here (watch-only)")}
         </div>
         <div class="actions">
-          ${canSign(a) ? button("Send", { action: "send", variant: "primary" }) : button("Watch-only", { type: "button", disabled: true, title: "Watch-only: this wallet has no key for this address" })}
-          ${button("Receive", { action: "receive" })}
+          ${canSign(a) ? button(tr("Send"), { action: "send", variant: "primary" }) : button(tr("Watch-only"), { type: "button", disabled: true, title: tr("Watch-only: this wallet has no key for this address") })}
+          ${button(tr("Receive"), { action: "receive" })}
         </div>`)}
       ${this.vTokens()}
       ${this.vCollectibles()}`;
@@ -1613,16 +1619,16 @@ export class App {
     const rows = cols
       .map((c) => {
         const held = this.s.nft.tokens[c.address];
-        const count = held === undefined || held === null ? "" : `<span class="s">${held.length} held</span>`;
-        return `<li>${tile(c.symbol || c.name)}<span class="grow"><span class="t">${esc(c.name || c.symbol)}</span> ${count}<br><span class="s">${esc(c.symbol)} · ${linkButton("remove", "collection-remove", { address: c.address })}</span></span>${button("Open", { action: "nft-collection", mini: true, data: { address: c.address } })}</li>`;
+        const count = held === undefined || held === null ? "" : `<span class="s">${tr("{n} held", { n: held.length })}</span>`;
+        return `<li>${tile(c.symbol || c.name)}<span class="grow"><span class="t">${esc(c.name || c.symbol)}</span> ${count}<br><span class="s">${esc(c.symbol)} · ${linkButton(tr("remove"), "collection-remove", { address: c.address })}</span></span>${button(tr("Open"), { action: "nft-collection", mini: true, data: { address: c.address } })}</li>`;
       })
       .join("");
     return `
-      ${section("03", "Collectibles", `${cols.length} collection${cols.length === 1 ? "" : "s"}`)}
-      ${cols.length ? list(rows) : `<p class="mute">No collections yet. Add one by its contract address (KCS-5).</p>`}
+      ${section("03", tr("Collectibles"), cols.length === 1 ? tr("1 collection") : tr("{n} collections", { n: cols.length }))}
+      ${cols.length ? list(rows) : `<p class="mute">${tr("No collections yet. Add one by its contract address (KCS-5).")}</p>`}
       <form data-form="add-collection" class="field inline">
         <label><span>Add a collection by its contract address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
-        ${button("Add", { mini: true })}
+        ${button(tr("Add"), { mini: true })}
       </form>`;
   }
 
@@ -1636,42 +1642,42 @@ export class App {
     const col = this.collectionList().find((c) => c.address === addr);
     const held = this.s.nft.tokens[addr] ?? [];
     return `
-      ${section("03", "Collectibles", esc(col?.symbol ?? ""))}
-      <h1>${esc(col?.name || col?.symbol || "Collection")}</h1>
-      ${held.length ? `<div class="nfts">${held.map((t) => this.nftTile(t, this.s.nft.meta[`${addr}:${t.idHex}`])).join("")}</div>` : `<p class="mute">This account holds nothing in this collection.</p>`}
-      <div class="row">${button("Back", { action: "back-home", variant: "ghost" })}</div>`;
+      ${section("03", tr("Collectibles"), esc(col?.symbol ?? ""))}
+      <h1>${esc(col?.name || col?.symbol || tr("Collection"))}</h1>
+      ${held.length ? `<div class="nfts">${held.map((t) => this.nftTile(t, this.s.nft.meta[`${addr}:${t.idHex}`])).join("")}</div>` : `<p class="mute">${tr("This account holds nothing in this collection.")}</p>`}
+      <div class="row">${button(tr("Back"), { action: "back-home", variant: "ghost" })}</div>`;
   }
 
   private vNft() {
     const t = this.s.nft.token;
-    if (!t) return `<p>Nothing to show.</p>`;
+    if (!t) return `<p>${tr("Nothing to show.")}</p>`;
     const col = this.collectionList().find((c) => c.address === t.collection);
     const meta = this.s.nft.meta[`${t.collection}:${t.idHex}`];
     const a = this.account();
     return `
-      ${section("03", "Collectibles", esc(col?.symbol ?? ""))}
+      ${section("03", tr("Collectibles"), esc(col?.symbol ?? ""))}
       <div class="nft-hero">${meta?.image ? `<img src="${esc(meta.image)}" alt="">` : `#${esc(t.label)}`}</div>
       <h1>${esc(meta?.name || `#${t.label}`)}</h1>
       ${meta?.description ? `<p class="mute">${esc(meta.description)}</p>` : ""}
-      <div style="margin-top:12px">${stat("Collection", esc(col?.name || shortAddr(t.collection)))}${stat("Token id", `#${esc(t.label)}`)}${stat("Contract", esc(shortAddr(t.collection)))}</div>
-      <div class="row">${a && canSign(a) ? button("Send", { action: "nft-send", variant: "primary" }) : ""}${button("Back", { action: "nft-back", variant: "ghost" })}</div>`;
+      <div style="margin-top:12px">${stat(tr("Collection"), esc(col?.name || shortAddr(t.collection)))}${stat(tr("Token id"), `#${esc(t.label)}`)}${stat(tr("Contract"), esc(shortAddr(t.collection)))}</div>
+      <div class="row">${a && canSign(a) ? button(tr("Send"), { action: "nft-send", variant: "primary" }) : ""}${button(tr("Back"), { action: "nft-back", variant: "ghost" })}</div>`;
   }
 
   private vNftSend() {
     const t = this.s.nft.token;
-    if (!t) return `<p>Nothing to send.</p>`;
+    if (!t) return `<p>${tr("Nothing to send.")}</p>`;
     const col = this.collectionList().find((c) => c.address === t.collection);
     const meta = this.s.nft.meta[`${t.collection}:${t.idHex}`];
     return `
-      ${section("03", "Send", esc(col?.symbol ?? ""))}
-      <h1>Send ${esc(meta?.name || `#${t.label}`)}</h1>
+      ${section("03", tr("Send"), esc(col?.symbol ?? ""))}
+      <h1>${tr("Send {what}", { what: esc(meta?.name || `#${t.label}`) })}</h1>
       <form data-form="nft-send">
         <label class="field"><span>To</span><div class="withbtn">${input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" })}${
-          this.native ? button(`<span class="sr-only">Scan a QR code</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg>`, { action: "scan", mini: true, title: "Scan a QR code" }) : ""
+          this.native ? button(`<span class="sr-only">Scan a QR code</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg>`, { action: "scan", mini: true, title: tr("Scan a QR code") }) : ""
         }</div></label>
         <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
-        <p class="fine">The collectible leaves this account for good once the transaction is in a block. A first-time or look-alike recipient asks you to confirm it before anything is signed.</p>
-        <div class="row">${button("Sign and send", { variant: "primary" })}${button("Back", { action: "nft-token-back", variant: "ghost" })}</div>
+        <p class="fine">${tr("The collectible leaves this account for good once the transaction is in a block. A first-time or look-alike recipient asks you to confirm it before anything is signed.")}</p>
+        <div class="row">${button(tr("Sign and send"), { variant: "primary" })}${button(tr("Back"), { action: "nft-token-back", variant: "ghost" })}</div>
       </form>`;
   }
 
@@ -1686,18 +1692,18 @@ export class App {
     const rows = shown
       .map(
         (t) =>
-          `<li data-token="${esc(t.address)}">${tile(t.symbol)}<span class="grow"><span class="t">${esc(t.name)}</span><br><span class="s">${esc(t.symbol)}${t.custom ? ` · added ${linkButton("remove", "token-remove", { address: t.address })}` : ""}</span></span><span class="amt">${esc(this.tokenAmount(t))}</span></li>`,
+          `<li data-token="${esc(t.address)}">${tile(t.symbol)}<span class="grow"><span class="t">${esc(t.name)}</span><br><span class="s">${esc(t.symbol)}${t.custom ? ` · ${tr("added")} ${linkButton(tr("remove"), "token-remove", { address: t.address })}` : ""}</span></span><span class="amt">${esc(this.tokenAmount(t))}</span></li>`,
       )
       .join("");
     return `
-      ${section("02", "Tokens", `${shown.length} of ${tokens.length}`)}
+      ${section("02", tr("Tokens"), tr("{a} of {b}", { a: shown.length, b: tokens.length }))}
       ${list(rows)}
-      <label class="check"><input type="checkbox" name="hideZero" ${s.hideZero ? "checked" : ""}> Hide zero balances</label>
+      <label class="check"><input type="checkbox" name="hideZero" ${s.hideZero ? "checked" : ""}> ${tr("Hide zero balances")}</label>
       <form data-form="add-token" class="field inline">
         <label><span>Add a token by its contract address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
-        ${button("Add", { mini: true })}
+        ${button(tr("Add"), { mini: true })}
       </form>
-      <p class="fine">Name, symbol and decimals are read from the contract itself. The list is this wallet's own; nothing is fetched from anyone's server.</p>`;
+      <p class="fine">${tr("Name, symbol and decimals are read from the contract itself. The list is this wallet's own; nothing is fetched from anyone's server.")}</p>`;
   }
 
   private vSend() {
@@ -1705,19 +1711,19 @@ export class App {
     const tokens = this.tokenList();
     const tok = this.currentSendToken();
     return `
-      ${section("01", "Send", `from <span class="mono">${esc(shortAddr(a?.address))}</span>`)}
+      ${section("01", tr("Send"), `from <span class="mono">${esc(shortAddr(a?.address))}</span>`)}
       <h1>Send <span id="send-sym">${esc(tok.symbol)}</span></h1>
       <form data-form="send">
-        ${field("Token", `<select name="token">${tokens.map((t) => `<option value="${esc(t.address)}" ${t.address === tok.address ? "selected" : ""}>${esc(t.symbol)} · ${esc(this.tokenAmount(t))}</option>`).join("")}</select>`)}
+        ${field(tr("Token"), `<select name="token">${tokens.map((t) => `<option value="${esc(t.address)}" ${t.address === tok.address ? "selected" : ""}>${esc(t.symbol)} · ${esc(this.tokenAmount(t))}</option>`).join("")}</select>`)}
         <label class="field"><span>To</span><div class="withbtn">${input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" })}${
           this.native
-            ? button(`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg><span class="sr-only">Scan a QR code</span>`, { action: "scan", mini: true, title: "Scan a QR code" })
+            ? button(`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg><span class="sr-only">Scan a QR code</span>`, { action: "scan", mini: true, title: tr("Scan a QR code") })
             : ""
         }</div></label>
         <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
-        <label class="field"><span id="amount-label">Amount (${esc(tok.symbol)})</span>${input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" })}</label>
-        <p class="fine">From ${esc(a?.label ?? "")} on ${esc(this.network.name)}, signed here with ML-DSA-44 (${a?.mode === "native" ? "3,733-byte native entry" : "2,420-byte signature"}). A first-time or look-alike recipient asks you to confirm it before anything is signed.</p>
-        <div class="row">${button("Sign and send", { variant: "primary" })}${button("Back", { action: "back-home", variant: "ghost" })}</div>
+        <label class="field"><span id="amount-label">${tr("Amount ({symbol})", { symbol: esc(tok.symbol) })}</span>${input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" })}</label>
+        <p class="fine">${tr("From {label} on {net}, signed here with ML-DSA-44 ({sig}). A first-time or look-alike recipient asks you to confirm it before anything is signed.", { label: esc(a?.label ?? ""), net: esc(this.network.name), sig: a?.mode === "native" ? tr("3,733-byte native entry") : tr("2,420-byte signature") })}</p>
+        <div class="row">${button(tr("Sign and send"), { variant: "primary" })}${button(tr("Back"), { action: "back-home", variant: "ghost" })}</div>
       </form>`;
   }
 
@@ -1725,23 +1731,23 @@ export class App {
     const t = this.s.sent!;
     const link = this.network.explorerTx?.(t.txId);
     return `
-      ${section("01", "Send", t.waiting ? "waiting" : t.block ? "mined" : "submitted")}
-      <h1>${t.waiting ? "Sent, waiting for a block" : t.block ? "Mined" : "Submitted"}</h1>
+      ${section("01", tr("Send"), t.waiting ? tr("waiting") : t.block ? tr("mined") : tr("submitted"))}
+      <h1>${t.waiting ? tr("Sent, waiting for a block") : t.block ? tr("Mined") : tr("Submitted")}</h1>
       ${card(`<span class="lbl">Sent</span><div class="bal" style="margin-bottom:12px"><span class="v" style="font-size:28px">${esc(fmtAmount(t.amount))}</span><span class="u">${esc(t.symbol)}</span></div><span class="lbl">Transaction</span><code class="address addr sm box" style="color:var(--ink)">${esc(t.txId)}</code>
-        <div style="margin-top:12px">${stat("Signature entry", `${esc(t.bytes)} B`)}${stat("Mana used", esc(t.rcUsed))}${t.block ? stat("Block", esc(fmtAmount(t.block))) : ""}</div>`)}
-      ${this.network.autoBlocks ? "" : `<p class="fine" style="margin-top:12px">This network only makes blocks when the devnet script produces one.</p>`}
+        <div style="margin-top:12px">${stat(tr("Signature entry"), `${esc(t.bytes)} B`)}${stat(tr("Mana used"), esc(t.rcUsed))}${t.block ? stat(tr("Block"), esc(fmtAmount(t.block))) : ""}</div>`)}
+      ${this.network.autoBlocks ? "" : `<p class="fine" style="margin-top:12px">${tr("This network only makes blocks when the devnet script produces one.")}</p>`}
       ${link ? `<p style="margin-top:12px"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Open in explorer</a></p>` : ""}
-      <div class="row">${button("Done", { action: "back-home", variant: "primary" })}</div>`;
+      <div class="row">${button(tr("Done"), { action: "back-home", variant: "primary" })}</div>`;
   }
 
   private vReceive() {
     const a = this.account();
     return `
-      ${section("01", "Receive", esc(a?.label ?? ""))}
+      ${section("01", tr("Receive"), esc(a?.label ?? ""))}
       ${card(`
         <canvas id="qr" class="qr" width="220" height="220" aria-label="QR code of the address"></canvas>
         ${addressStrip(a?.address ?? "", { box: true })}
-        <div class="row">${button("Copy address", { action: "copy", variant: "primary", data: { copy: a?.address ?? "" } })}${button("Back", { action: "back-home", variant: "ghost" })}</div>
+        <div class="row">${button(tr("Copy address"), { action: "copy", variant: "primary", data: { copy: a?.address ?? "" } })}${button(tr("Back"), { action: "back-home", variant: "ghost" })}</div>
         ${this.s.clipboardWipe ? `<p class="fine" style="margin-top:12px">The clipboard clears itself ${CLIPBOARD_WIPE_SECONDS} s after copying.</p>` : ""}`, `style="text-align:center"`)}`;
   }
 
@@ -1756,9 +1762,9 @@ export class App {
         if (i.direction && i.valueBase) {
           const t = i.contract ? findToken(tokens, i.contract) : undefined;
           const value = t ? fmtAmount(formatUnits(BigInt(i.valueBase), t.decimals)) : fmtAmount(i.valueBase);
-          const sym = t ? t.symbol : i.contract ? `units of ${shortAddr(i.contract)}` : "?";
+          const sym = t ? t.symbol : i.contract ? `${tr("units of")} ${shortAddr(i.contract)}` : "?";
           const who = i.counterparty ? this.s.book?.get(i.counterparty)?.name || shortAddr(i.counterparty) : "?";
-          main = `<span class="t">${i.direction === "out" ? "Sent" : "Received"} ${esc(value)} ${esc(sym)}</span> <span class="s">${i.direction === "out" ? "to" : "from"} ${esc(who)}${i.reverted ? " (reverted)" : ""}</span>`;
+          main = `<span class="t">${i.direction === "out" ? tr("Sent") : tr("Received")} ${esc(value)} ${esc(sym)}</span> <span class="s">${i.direction === "out" ? tr("to") : tr("from")} ${esc(who)}${i.reverted ? " " + tr("(reverted)") : ""}</span>`;
           amt = `<span class="amt">${i.direction === "out" ? "−" : "+"}${esc(value)}</span>`;
         }
         const meta = [i.txId ? esc(short(i.txId)) : "", i.blockHeight ? `block ${esc(fmtAmount(i.blockHeight))}` : ""].filter(Boolean).join(" · ");
@@ -1766,9 +1772,9 @@ export class App {
       })
       .join("");
     return `
-      ${section("02", "Activity", `<span class="mono">${esc(shortAddr(a?.address))}</span>`)}
-      ${!a ? `<p class="mute">No account on ${esc(this.network.name)} yet.</p>` : h.length ? list(rows) : `<p class="mute">Nothing yet.</p>`}
-      <div class="row tight">${button("Refresh", { action: "history", variant: "ghost", mini: true })}</div>`;
+      ${section("02", tr("Activity"), `<span class="mono">${esc(shortAddr(a?.address))}</span>`)}
+      ${!a ? `<p class="mute">${tr("No account on {net} yet.", { net: esc(this.network.name) })}</p>` : h.length ? list(rows) : `<p class="mute">${tr("Nothing yet.")}</p>`}
+      <div class="row tight">${button(tr("Refresh"), { action: "history", variant: "ghost", mini: true })}</div>`;
   }
 
   private vDapps() {
@@ -1776,34 +1782,34 @@ export class App {
     if (!d.open) {
       const sites = this.s.sites?.list() ?? [];
       return `
-        ${section("03", "Dapps", "curated")}
-        ${list((dappList as { dapps: Array<{ id: string; name: string; summary: string; url: string }> }).dapps.map((x) => `<li>${tile(x.name)}<span class="grow"><span class="t">${esc(x.name)}</span><br><span class="s">${esc(x.summary)}</span></span>${button("Open", { action: "dapp-open", mini: true, data: { url: x.url } })}</li>`).join(""))}
+        ${section("03", tr("Dapps"), tr("curated"))}
+        ${list((dappList as { dapps: Array<{ id: string; name: string; summary: string; url: string }> }).dapps.map((x) => `<li>${tile(x.name)}<span class="grow"><span class="t">${esc(x.name)}</span><br><span class="s">${esc(x.summary)}</span></span>${button(tr("Open"), { action: "dapp-open", mini: true, data: { url: x.url } })}</li>`).join(""))}
         <form data-form="dapp-open" class="field inline">
           <label><span>Or any address</span>${input({ name: "url", class: "mono", inputmode: "url", autocomplete: "off", placeholder: "https://…", required: true })}</label>
-          ${button("Go", { mini: true })}
+          ${button(tr("Go"), { mini: true })}
         </form>
-        <p class="fine">Sites see your account address only after you allow it, and every signature is approved here in the wallet, never on the page. The list is this wallet's own.</p>
-        ${sites.length ? `${section(null, "Sites allowed to see your accounts")}${list(sites.map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">since ${esc(g.allowedAt.slice(0, 10))}</span>`, linkButton("forget", "site-revoke", { origin: g.origin }))).join(""))}` : ""}`;
+        <p class="fine">${tr("Sites see your account address only after you allow it, and every signature is approved here in the wallet, never on the page. The list is this wallet's own.")}</p>
+        ${sites.length ? `${section(null, tr("Sites allowed to see your accounts"))}${list(sites.map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">${tr("since {date}", { date: esc(g.allowedAt.slice(0, 10)) })}</span>`, linkButton(tr("forget"), "site-revoke", { origin: g.origin }))).join(""))}` : ""}`;
     }
     const a = d.approval;
     return `
       <div class="urlbar">
-        ${button("&larr;", { action: "dapp-back", mini: true, title: "Back", disabled: !d.canGoBack })}
+        ${button(tr("&larr;"), { action: "dapp-back", mini: true, title: tr("Back"), disabled: !d.canGoBack })}
         <form data-form="dapp-go" class="grow" style="flex:1 1 auto">${input({ name: "url", class: "in", inputmode: "url", autocomplete: "off", value: d.url, "aria-label": "Address" })}</form>
-        ${button("&times;", { action: "dapp-close", mini: true, title: "Close the page" })}
+        ${button(tr("&times;"), { action: "dapp-close", mini: true, title: tr("Close the page") })}
       </div>
       <div id="dapp-area" style="height:calc(100vh - 220px)"></div>
       ${
         a
           ? `<div class="scrim"></div><section class="sheet" role="dialog" aria-labelledby="req">
               <div class="grab" aria-hidden="true"></div>
-              ${section(">", "Request", esc(this.network.name))}
+              ${section(">", tr("Request"), esc(this.network.name))}
               <h1 id="req" style="font-size:22px">${esc(a.req.origin)}</h1>
               ${
                 a.plan
                   ? `${describePlan(a.plan)}
-                     ${a.status ? notice("busy", esc(a.status)) : `<div class="row">${button("Approve", { action: "dapp-approve", variant: "primary", data: { key: a.key } })}${button("Reject", { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`}`
-                  : `${notice("danger", `This site sent a request the wallet will not sign. ${esc(a.refused ?? "")}`)}<div class="row">${button("Close", { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
+                     ${a.status ? notice("busy", esc(a.status)) : `<div class="row">${button(tr("Approve"), { action: "dapp-approve", variant: "primary", data: { key: a.key } })}${button(tr("Reject"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`}`
+                  : `${notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}<div class="row">${button(tr("Close"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
               }
             </section>`
           : ""
@@ -1817,151 +1823,152 @@ export class App {
     const sel = (name: string, options: Array<[string, string]>, current: string) =>
       `<select name="${name}">${options.map(([v, l]) => `<option value="${esc(v)}" ${v === current ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
     return `
-      ${section("04", "Settings", esc(__APP_VERSION__))}
-      <h1>Settings</h1>
-      ${section(null, "Accounts")}
+      ${section("04", tr("Settings"), esc(__APP_VERSION__))}
+      <h1>${tr("Settings")}</h1>
+      ${section(null, tr("Accounts"))}
       ${
         items.length
-          ? list(items.map((a) => listRow(`<span class="t">${esc(a.label)}</span>${a.mode === "watch" ? ` <span class="s">watch-only</span>` : ""}<br><span class="s mono">${esc(a.address)}</span>`, a.derived ? `<span class="s">found from your 24 words</span>` : linkButton("remove", "remove-account", { index: a.index }))).join(""))
-          : `<p class="mute">No account on ${esc(net)} yet.</p>`
+          ? list(items.map((a) => listRow(`<span class="t">${esc(a.label)}</span>${a.mode === "watch" ? ` <span class="s">${tr("watch-only")}</span>` : ""}<br><span class="s mono">${esc(a.address)}</span>`, a.derived ? `<span class="s">${tr("found from your 24 words")}</span>` : linkButton(tr("remove"), "remove-account", { index: a.index }))).join(""))
+          : `<p class="mute">${tr("No account on {net} yet.", { net: esc(net) })}</p>`
       }
-      ${hasHere ? "" : `<div class="row tight">${button(`Activate your account on ${esc(net)}`, { action: "setup", variant: "primary" })}</div>`}
+      ${hasHere ? "" : `<div class="row tight">${button(tr("Activate your account on {net}", { net: esc(net) }), { action: "setup", variant: "primary" })}</div>`}
       <form data-form="watch" class="field inline">
         <label><span>Watch an address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
         <label><span>Label</span>${input({ name: "label", placeholder: "optional", autocomplete: "off" })}</label>
-        ${button("Watch")}
+        ${button(tr("Watch"))}
       </form>
-      <p class="fine">See the balance, mana and activity of any address (your cold account, a friend's). No key, no sending.</p>
+      <p class="fine">${tr("See the balance, mana and activity of any address (your cold account, a friend's). No key, no sending.")}</p>
 
-      ${section(null, "Security")}
+      ${section(null, tr("Security"))}
       ${
         this.native
           ? biometricsEnabled(this.bio.blobs)
-            ? `<p class="mute">Biometric unlock is on. It opens the wallet that turned it on last; the passphrase always works too.</p><div class="row tight">${button("Turn biometric unlock off", { action: "bio-disable" })}</div>`
-            : `<p class="mute">Unlock with fingerprint or face instead of typing the passphrase. The device keeps a wrapped copy of this wallet's key, never the passphrase or the words.</p><div class="row tight">${button("Turn biometric unlock on", { action: "bio-enable" })}</div>`
+            ? `<p class="mute">${tr("Biometric unlock is on. It opens the wallet that turned it on last; the passphrase always works too.")}</p><div class="row tight">${button(tr("Turn biometric unlock off"), { action: "bio-disable" })}</div>`
+            : `<p class="mute">${tr("Unlock with fingerprint or face instead of typing the passphrase. The device keeps a wrapped copy of this wallet's key, never the passphrase or the words.")}</p><div class="row tight">${button(tr("Turn biometric unlock on"), { action: "bio-enable" })}</div>`
           : ""
       }
       <form data-form="autolock">
-        ${check("lockOnHide", `Lock ${HIDDEN_LOCK_SECONDS} s after this tab is hidden or the screen goes off`, this.s.lockOnHide)}
-        ${check("clipboardWipe", `Clear the clipboard ${CLIPBOARD_WIPE_SECONDS} s after copying an address`, this.s.clipboardWipe)}
-        ${field("Auto-lock after minutes without activity", input({ name: "minutes", class: "mono", type: "number", min: 1, max: 120, value: this.s.autolockMinutes, style: "max-width:7em" }))}
-        <div class="row tight">${button("Save")}</div>
+        ${check("lockOnHide", tr("Lock {s} s after this tab is hidden or the screen goes off", { s: HIDDEN_LOCK_SECONDS }), this.s.lockOnHide)}
+        ${check("clipboardWipe", tr("Clear the clipboard {s} s after copying an address", { s: CLIPBOARD_WIPE_SECONDS }), this.s.clipboardWipe)}
+        ${field(tr("Auto-lock after minutes without activity"), input({ name: "minutes", class: "mono", type: "number", min: 1, max: 120, value: this.s.autolockMinutes, style: "max-width:7em" }))}
+        <div class="row tight">${button(tr("Save"))}</div>
       </form>
 
-      ${section(null, "Backup")}
-      <p class="mute">Show the 24 words again (asks for the passphrase).</p>
-      <div class="row tight">${button("Show recovery words", { action: "export" })}</div>
+      ${section(null, tr("Backup"))}
+      <p class="mute">${tr("Show the 24 words again (asks for the passphrase).")}</p>
+      <div class="row tight">${button(tr("Show recovery words"), { action: "export" })}</div>
 
-      ${section(null, "Contacts", `${this.s.book?.list().length ?? 0} saved`)}
-      <p class="mute">Sending to an address you have never used, or one that merely resembles one you have, asks you to check it first.</p>
-      <div class="row tight">${button("Open contacts", { action: "contacts" })}</div>
+      ${section(null, tr("Contacts"), tr("{n} saved", { n: this.s.book?.list().length ?? 0 }))}
+      <p class="mute">${tr("Sending to an address you have never used, or one that merely resembles one you have, asks you to check it first.")}</p>
+      <div class="row tight">${button(tr("Open contacts"), { action: "contacts" })}</div>
 
-      ${section(null, "Duress wallet", this.s.vault?.hasDecoy ? "set up" : "not set up")}
-      <p class="mute">${this.s.vault?.hasDecoy ? "Set up. A second passphrase opens a separate, small wallet." : "Not set up. A second passphrase would open a separate, small wallet to show under pressure."}</p>
-      <div class="row tight">${button(this.s.vault?.hasDecoy ? "Replace the duress wallet" : "Set up a duress wallet", { action: "duress" })}</div>
+      ${section(null, tr("Duress wallet"), this.s.vault?.hasDecoy ? tr("set up") : tr("not set up"))}
+      <p class="mute">${this.s.vault?.hasDecoy ? tr("Set up. A second passphrase opens a separate, small wallet.") : tr("Not set up. A second passphrase would open a separate, small wallet to show under pressure.")}</p>
+      <div class="row tight">${button(this.s.vault?.hasDecoy ? tr("Replace the duress wallet") : tr("Set up a duress wallet"), { action: "duress" })}</div>
 
-      ${section(null, "Network")}
-      ${field("Node", sel("network", Object.keys(NETWORKS).map((n) => [n, n === "testnet" ? "testnet (Harbinger)" : n]), this.s.networkName))}
-      ${net === "devnet" ? `<form data-form="devnet-rpc" class="field inline"><label><span>Devnet RPC</span>${input({ name: "rpc", class: "mono", value: pref.get(PREF_DEVNET_RPC) ?? "http://127.0.0.1:8080/" })}</label>${button("Save")}</form>` : ""}
+      ${section(null, tr("Network"))}
+      ${field(tr("Node"), sel("network", Object.keys(NETWORKS).map((n) => [n, n === "testnet" ? "testnet (Harbinger)" : n]), this.s.networkName))}
+      ${net === "devnet" ? `<form data-form="devnet-rpc" class="field inline"><label><span>Devnet RPC</span>${input({ name: "rpc", class: "mono", value: pref.get(PREF_DEVNET_RPC) ?? "http://127.0.0.1:8080/" })}</label>${button(tr("Save"))}</form>` : ""}
 
-      ${section(null, "Appearance")}
-      ${field("Theme", sel("theme", [["system", "Follow the system"], ["light", "Light"], ["dark", "Dark"]], this.s.theme))}
+      ${section(null, tr("Appearance"))}
+      ${field(tr("Theme"), sel("theme", [["system", tr("Follow the system")], ["light", tr("Light")], ["dark", tr("Dark")]], this.s.theme))}
+      ${field(tr("Language"), sel("lang", LANGUAGES.map((l) => [l.code, l.name]), currentLanguage()))}
 
-      ${section(null, "About")}
-      <p class="mute">Koinos PQ Wallet ${esc(__APP_VERSION__)}. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.</p>
+      ${section(null, tr("About"))}
+      <p class="mute">${tr("Koinos PQ Wallet {version}. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.", { version: esc(__APP_VERSION__) })}</p>
 
       <details class="adv"><summary>Advanced</summary>
-        ${section(null, "Add an account by address")}
-        <p class="fine">Only for an account set up with the koinos-pq command-line tool. Accounts this wallet activates are found automatically.</p>
+        ${section(null, tr("Add an account by address"))}
+        <p class="fine">${tr("Only for an account set up with the koinos-pq command-line tool. Accounts this wallet activates are found automatically.")}</p>
         <form data-form="add-account" class="field inline">
           <label><span>Address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
           <label><span>Label</span>${input({ name: "label", placeholder: "optional", autocomplete: "off" })}</label>
-          ${button("Add")}
+          ${button(tr("Add"))}
         </form>
-        ${section(null, "Native post-quantum address")}
-        <p class="fine">The address of the key itself. It needs nodes that verify ML-DSA-44 directly, a proposed node change that runs on the devnet only. On mainnet and Harbinger it can receive but cannot spend, so do not send to it.</p>
+        ${section(null, tr("Native post-quantum address"))}
+        <p class="fine">${tr("The address of the key itself. It needs nodes that verify ML-DSA-44 directly, a proposed node change that runs on the devnet only. On mainnet and Harbinger it can receive but cannot spend, so do not send to it.")}</p>
         ${addressStrip(this.s.keys?.address ?? "", { size: "sm", box: true })}
-        <div class="row tight">${button(`Check its balance on ${esc(net)}`, { action: "native-balance", mini: true })}</div>
+        <div class="row tight">${button(tr("Check its balance on {net}", { net: esc(net) }), { action: "native-balance", mini: true })}</div>
       </details>
 
-      ${(this.s.sites?.list().length ?? 0) > 0 ? `${section(null, "Sites allowed to see your accounts")}${list(this.s.sites!.list().map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">since ${esc(g.allowedAt.slice(0, 10))}</span>`, linkButton("forget", "site-revoke", { origin: g.origin }))).join(""))}` : ""}
+      ${(this.s.sites?.list().length ?? 0) > 0 ? `${section(null, tr("Sites allowed to see your accounts"))}${list(this.s.sites!.list().map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">${tr("since {date}", { date: esc(g.allowedAt.slice(0, 10)) })}</span>`, linkButton(tr("forget"), "site-revoke", { origin: g.origin }))).join(""))}` : ""}
 
-      ${section(null, "Danger")}
-      <div class="row tight">${button("Delete wallet from this device", { action: "delete-wallet", variant: "danger" })}</div>`;
+      ${section(null, tr("Danger"))}
+      <div class="row tight">${button(tr("Delete wallet from this device"), { action: "delete-wallet", variant: "danger" })}</div>`;
   }
 
   private vSetup() {
     const st = this.s.setup;
-    if (!st) return `<p>Nothing to activate.</p>`;
+    if (!st) return `<p>${tr("Nothing to activate.")}</p>`;
     const unit = this.unit();
     if (st.result) {
       const r = st.result;
       const link = (id: string | null) => (id && this.network.explorerTx ? `<a href="${esc(this.network.explorerTx(id))}" target="_blank" rel="noopener noreferrer">${esc(short(id))}</a>` : id ? `<code>${esc(short(id))}</code>` : "already done");
       return `
-        ${section("01", "Account", "ready")}
-        <h1>Account ready</h1>
+        ${section("01", tr("Account"), "ready")}
+        <h1>${tr("Account ready")}</h1>
         ${addressStrip(r.account, { box: true })}
-        <p style="margin-top:12px">${r.uploadTx && r.uploadTx === r.registerTx ? `Contract installed and key registered in one transaction, ${link(r.uploadTx)}.` : `Contract installed ${link(r.uploadTx)}, key registered ${link(r.registerTx)}.`} From now on only this wallet's post-quantum key can move this account.</p>
-        <div class="row">${button("Go to the account", { action: "setup-done", variant: "primary" })}</div>`;
+        <p style="margin-top:12px">${r.uploadTx && r.uploadTx === r.registerTx ? tr("Contract installed and key registered in one transaction, {tx}.", { tx: link(r.uploadTx) }) : tr("Contract installed {tx1}, key registered {tx2}.", { tx1: link(r.uploadTx), tx2: link(r.registerTx) })} ${tr("From now on only this wallet's post-quantum key can move this account.")}</p>
+        <div class="row">${button(tr("Go to the account"), { action: "setup-done", variant: "primary" })}</div>`;
     }
     if (st.running) {
       return `
-        ${section("01", "Account", "activating")}
-        <h1>Activating your account</h1>
+        ${section("01", tr("Account"), "activating")}
+        <h1>${tr("Activating your account")}</h1>
         ${addressStrip(st.account, { box: true })}
-        ${notice("busy", `${esc(st.status?.message ?? "Starting")}${st.status?.txId ? ` <code>${esc(short(st.status.txId))}</code>` : ""}`)}
-        <p class="fine">One transaction, waiting for its block; usually under a minute. Keep this page open.${this.network.autoBlocks ? "" : " On the devnet, produce blocks with devnet/produce-block.mjs."}</p>`;
+        ${notice("busy", `${esc(st.status?.message ?? tr("Starting"))}${st.status?.txId ? ` <code>${esc(short(st.status.txId))}</code>` : ""}`)}
+        <p class="fine">${tr("One transaction, waiting for its block; usually under a minute. Keep this page open.")}${this.network.autoBlocks ? "" : " " + tr("On the devnet, produce blocks with devnet/produce-block.mjs.")}</p>`;
     }
     const need = this.needed(st);
     const funded = need !== null && st.mana !== null && st.mana >= need;
     return `
-      ${section("01", "Account", "activate")}
-      <h1>Activate your account</h1>
-      <p>This is your account's address on <strong>${esc(this.network.name)}</strong>. Send at least <strong class="mono">${need === null ? "…" : esc(formatKoin(need, 2))} ${esc(unit)}</strong> to it.</p>
+      ${section("01", tr("Account"), "activate")}
+      <h1>${tr("Activate your account")}</h1>
+      <p>${tr("This is your account's address on <strong>{net}</strong>. Send at least <strong class=\"mono\">{need} {unit}</strong> to it.", { net: esc(this.network.name), need: need === null ? "…" : esc(formatKoin(need, 2)), unit: esc(unit) })}</p>
       ${card(`
         <canvas id="qr-setup" class="qr" width="180" height="180" aria-label="QR code of your account's address"></canvas>
         ${addressStrip(st.account, { box: true })}
-        <div class="row tight">${button("Copy address", { action: "copy", data: { copy: st.account } })}</div>`, `style="text-align:center"`)}
-      <p id="setup-mana" class="${funded ? "note ok" : "mute"}" style="margin-top:12px">${need !== null ? esc(this.manaLine(st.mana, need)) : "Pricing the activation from the node…"}</p>
-      ${st.failed ? `${notice("danger", `Activation stopped: ${esc(st.failed)}`)}<div class="row tight">${button("Try again", { action: "setup-retry", variant: "primary" })}</div>` : ""}
-      <p class="fine" style="margin-top:12px">As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here. From then on only your 24 words can move the account. The ${esc(unit)} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.</p>
-      <div class="row">${button("Settings", { action: "setup-cancel", variant: "ghost" })}</div>`;
+        <div class="row tight">${button(tr("Copy address"), { action: "copy", data: { copy: st.account } })}</div>`, `style="text-align:center"`)}
+      <p id="setup-mana" class="${funded ? "note ok" : "mute"}" style="margin-top:12px">${need !== null ? esc(this.manaLine(st.mana, need)) : tr("Pricing the activation from the node…")}</p>
+      ${st.failed ? `${notice("danger", tr("Activation stopped: {why}", { why: esc(st.failed) }))}<div class="row tight">${button(tr("Try again"), { action: "setup-retry", variant: "primary" })}</div>` : ""}
+      <p class="fine" style="margin-top:12px">${tr("As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here. From then on only your 24 words can move the account. The {unit} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.", { unit: esc(unit) })}</p>
+      <div class="row">${button(tr("Settings"), { action: "setup-cancel", variant: "ghost" })}</div>`;
   }
 
   private vSendConfirm() {
     const sc = this.s.sendCheck;
-    if (!sc) return `<p>Nothing to confirm.</p>`;
+    if (!sc) return `<p>${tr("Nothing to confirm.")}</p>`;
     const look = sc.assessment.kind === "lookalike";
     const m = sc.assessment.match;
     const unit = sc.token.symbol;
     return `
-      ${section("01", "Send", look ? "stop" : "first time")}
-      <h1>${look ? "Stop: this address looks like one you use" : "First time sending here"}</h1>
+      ${section("01", tr("Send"), look ? tr("stop") : tr("first time"))}
+      <h1>${look ? tr("Stop: this address looks like one you use") : tr("First time sending here")}</h1>
       ${
         look && m
-          ? notice("danger", `<p><strong>Typed</strong></p>${addressStrip(sc.to, { diffFrom: m.address })}
-               <p style="margin-top:8px"><strong>Known: ${esc(m.name || short(m.address))}</strong></p>${addressStrip(m.address)}
-               <p style="margin-top:8px">It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.</p>`)
-          : `${card(addressStrip(sc.to))}<p style="margin-top:12px">You have not sent to this address from this wallet before. Compare <em>every</em> character with the address the recipient gave you, not only the first and last few. Transfers cannot be undone.</p>`
+          ? notice("danger", `<p>${tr("<strong>Typed</strong>")}</p>${addressStrip(sc.to, { diffFrom: m.address })}
+               <p style="margin-top:8px"><strong>${tr("Known: {name}", { name: esc(m.name || short(m.address)) })}</strong></p>${addressStrip(m.address)}
+               <p style="margin-top:8px">${tr("It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.")}</p>`)
+          : `${card(addressStrip(sc.to))}<p style="margin-top:12px">${tr("You have not sent to this address from this wallet before. Compare <em>every</em> character with the address the recipient gave you, not only the first and last few. Transfers cannot be undone.")}</p>`
       }
-      <p class="mute" style="margin-top:8px">${sc.nft ? `Collectible <strong class="mono">${esc(unit)} #${esc(sc.nft.label)}</strong>` : `Amount <strong class="mono">${esc(sc.amount)} ${esc(unit)}</strong>`} on ${esc(this.network.name)}.</p>
+      <p class="mute" style="margin-top:8px">${sc.nft ? tr("Collectible <strong class=\"mono\">{unit} #{id}</strong>", { unit: esc(unit), id: esc(sc.nft.label) }) : tr("Amount <strong class=\"mono\">{amount} {unit}</strong>", { amount: esc(sc.amount), unit: esc(unit) })} ${tr("on {net}.", { net: esc(this.network.name) })}</p>
       <form data-form="send-confirm">
         ${
           look
-            ? field("If you are certain, type the last six characters of the address you want to pay", input({ name: "tail", class: "mono", autocomplete: "off", required: true, autofocus: true, maxlength: 6, style: "max-width:9em" }))
-            : `${check("checked", "I have compared the whole address", false, "required")}
-               ${field("Save as a contact (optional)", input({ name: "name", autocomplete: "off", placeholder: "name", maxlength: 40 }))}`
+            ? field(tr("If you are certain, type the last six characters of the address you want to pay"), input({ name: "tail", class: "mono", autocomplete: "off", required: true, autofocus: true, maxlength: 6, style: "max-width:9em" }))
+            : `${check("checked", tr("I have compared the whole address"), false, "required")}
+               ${field(tr("Save as a contact (optional)"), input({ name: "name", autocomplete: "off", placeholder: "name", maxlength: 40 }))}`
         }
-        <div class="row">${button(look ? "Send anyway" : "Sign and send", { variant: look ? "danger" : "primary" })}${button("Back", { action: "send-cancel", variant: "ghost" })}</div>
+        <div class="row">${button(look ? tr("Send anyway") : tr("Sign and send"), { variant: look ? "danger" : "primary" })}${button(tr("Back"), { action: "send-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vContacts() {
     const items = this.s.book?.list() ?? [];
     return `
-      ${section("04", "Settings", "contacts")}
-      <h1>Contacts</h1>
-      <p class="mute">Addresses this wallet has sent to, with the names you gave them. Kept on this device only, separately for each wallet.</p>
+      ${section("04", tr("Settings"), "contacts")}
+      <h1>${tr("Contacts")}</h1>
+      <p class="mute">${tr("Addresses this wallet has sent to, with the names you gave them. Kept on this device only, separately for each wallet.")}</p>
       ${
         items.length
           ? list(
@@ -1970,82 +1977,82 @@ export class App {
                   (c) =>
                     `<li><form data-form="contact-rename" class="grow"><input type="hidden" name="address" value="${esc(c.address)}">
                        ${addressStrip(c.address, { size: "sm" })}
-                       <div class="withbtn" style="margin-top:6px">${input({ name: "name", class: "in", value: c.name, placeholder: "name", maxlength: 40 })}${button("Save", { mini: true })}${button("Remove", { action: "contact-remove", variant: "ghost", mini: true, data: { address: c.address } })}</div>
-                       <span class="s">${c.sends} send${c.sends === 1 ? "" : "s"}${c.lastSentAt ? `, last ${esc(c.lastSentAt.slice(0, 10))}` : ""}</span></form></li>`,
+                       <div class="withbtn" style="margin-top:6px">${input({ name: "name", class: "in", value: c.name, placeholder: "name", maxlength: 40 })}${button(tr("Save"), { mini: true })}${button(tr("Remove"), { action: "contact-remove", variant: "ghost", mini: true, data: { address: c.address } })}</div>
+                       <span class="s">${c.sends === 1 ? tr("1 send") : tr("{n} sends", { n: c.sends })}${c.lastSentAt ? tr(", last {date}", { date: esc(c.lastSentAt.slice(0, 10)) }) : ""}</span></form></li>`,
                 )
                 .join(""),
             )
-          : `<p class="mute">No contacts yet. The first successful send to an address adds it.</p>`
+          : `<p class="mute">${tr("No contacts yet. The first successful send to an address adds it.")}</p>`
       }
-      <div class="row">${button("Back", { action: "settings", variant: "ghost" })}</div>`;
+      <div class="row">${button(tr("Back"), { action: "settings", variant: "ghost" })}</div>`;
   }
 
   private vDuress() {
     return `
-      ${section("04", "Settings", "duress")}
-      <h1>Duress wallet</h1>
-      <p>A second, separate wallet with its own 24 words and its own passphrase. If someone forces you to unlock, you type the duress passphrase and they see that wallet, with whatever small amount you keep in it. Nothing on this device shows that another wallet exists, and unlocking takes the same time either way.</p>
-      <p><strong>What it cannot do.</strong> Balances are public on the chain. Anyone who already knows your main address can look it up. The decoy protects you from someone who does not, and only if it looks lived-in: give it a little KOIN and use it now and then.</p>
-      <p class="fine">Setting it up asks for your main passphrase (so only you can), and a new passphrase for the decoy. The decoy's 24 words are shown once; write them down if you want to recover it, otherwise just note that losing them loses only the decoy.</p>
-      <div class="row">${button("Create the duress wallet", { action: "duress-create", variant: "primary" })}${button("Back", { action: "duress-cancel", variant: "ghost" })}</div>`;
+      ${section("04", tr("Settings"), "duress")}
+      <h1>${tr("Duress wallet")}</h1>
+      <p>${tr("A second, separate wallet with its own 24 words and its own passphrase. If someone forces you to unlock, you type the duress passphrase and they see that wallet, with whatever small amount you keep in it. Nothing on this device shows that another wallet exists, and unlocking takes the same time either way.")}</p>
+      <p>${tr("<strong>What it cannot do.</strong> Balances are public on the chain. Anyone who already knows your main address can look it up. The decoy protects you from someone who does not, and only if it looks lived-in: give it a little KOIN and use it now and then.")}</p>
+      <p class="fine">${tr("Setting it up asks for your main passphrase (so only you can), and a new passphrase for the decoy. The decoy's 24 words are shown once; write them down if you want to recover it, otherwise just note that losing them loses only the decoy.")}</p>
+      <div class="row">${button(tr("Create the duress wallet"), { action: "duress-create", variant: "primary" })}${button(tr("Back"), { action: "duress-cancel", variant: "ghost" })}</div>`;
   }
 
   private vDuressWords() {
     const w = (this.s.pendingDecoy ?? "").split(" ");
     return `
-      ${section("04", "Settings", "duress")}
-      <h1>The duress wallet's 24 words</h1>
+      ${section("04", tr("Settings"), "duress")}
+      <h1>${tr("The duress wallet's 24 words")}</h1>
       ${card(words(w))}
       <form data-form="duress-save">
-        ${field(`Duress passphrase (${MIN_PASSPHRASE_LENGTH}+ characters, different from your main one)`, input({ name: "d1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
-        ${field("Repeat it", input({ name: "d2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
-        ${field("Your main passphrase (to confirm)", input({ name: "main", type: "password", required: true, autocomplete: "off" }))}
-        <p class="fine">After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.</p>
-        <div class="row">${button("Save duress wallet", { variant: "danger" })}${button("Cancel", { action: "duress-cancel", variant: "ghost" })}</div>
+        ${field(tr("Duress passphrase ({n}+ characters, different from your main one)", { n: MIN_PASSPHRASE_LENGTH }), input({ name: "d1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
+        ${field(tr("Repeat it"), input({ name: "d2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
+        ${field(tr("Your main passphrase (to confirm)"), input({ name: "main", type: "password", required: true, autocomplete: "off" }))}
+        <p class="fine">${tr("After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.")}</p>
+        <div class="row">${button(tr("Save duress wallet"), { variant: "danger" })}${button(tr("Cancel"), { action: "duress-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vBioEnable() {
     return `
-      ${section("04", "Settings", "biometrics")}
-      <h1>Biometric unlock</h1>
-      <p>Your passphrase, once, so this wallet's key can be wrapped under a key kept by the device and released by its fingerprint or face check.</p>
-      <p class="fine">What is stored: the wrapped key, on this device only, never the passphrase or the 24 words. Biometrics open the wallet that turned them on last, whichever passphrase it has. Under pressure, turn them off or let the other wallet turn them on.</p>
+      ${section("04", tr("Settings"), "biometrics")}
+      <h1>${tr("Biometric unlock")}</h1>
+      <p>${tr("Your passphrase, once, so this wallet's key can be wrapped under a key kept by the device and released by its fingerprint or face check.")}</p>
+      <p class="fine">${tr("What is stored: the wrapped key, on this device only, never the passphrase or the 24 words. Biometrics open the wallet that turned them on last, whichever passphrase it has. Under pressure, turn them off or let the other wallet turn them on.")}</p>
       <form data-form="bio-enable">
-        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "current-password" }))}
-        <div class="row">${button("Turn on", { variant: "primary" })}${button("Cancel", { action: "bio-cancel", variant: "ghost" })}</div>
+        ${field(tr("Passphrase"), input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "current-password" }))}
+        <div class="row">${button(tr("Turn on"), { variant: "primary" })}${button(tr("Cancel"), { action: "bio-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vSave() {
     const c = this.s.change;
-    if (!c) return `<p>Nothing to save.</p>`;
+    if (!c) return `<p>${tr("Nothing to save.")}</p>`;
     return `
-      ${section("04", "Settings", "confirm")}
+      ${section("04", tr("Settings"), "confirm")}
       <h1>${esc(c.title)}</h1>
       <p>${esc(c.detail)}</p>
       <form data-form="save">
-        ${field("Passphrase (to save the change)", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}
-        <div class="row">${button("Save", { variant: "primary" })}${button("Cancel", { action: "change-cancel", variant: "ghost" })}</div>
+        ${field(tr("Passphrase (to save the change)"), input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}
+        <div class="row">${button(tr("Save"), { variant: "primary" })}${button(tr("Cancel"), { action: "change-cancel", variant: "ghost" })}</div>
       </form>`;
   }
 
   private vExport() {
     if (this.s.exportWords) {
       return `
-        ${section("04", "Settings", "backup")}
-        <h1>Your 24 words</h1>
+        ${section("04", tr("Settings"), "backup")}
+        <h1>${tr("Your 24 words")}</h1>
         ${card(words(this.s.exportWords.split(" ")))}
-        <p class="fine" style="margin-top:12px">Seed (hex, for the command-line tool's key file):</p>
+        <p class="fine" style="margin-top:12px">${tr("Seed (hex, for the command-line tool's key file):")}</p>
         <code class="address addr sm box">${esc(this.s.vault?.seedHex ?? "")}</code>
-        <div class="row">${button("Done", { action: "settings", variant: "primary" })}</div>`;
+        <div class="row">${button(tr("Done"), { action: "settings", variant: "primary" })}</div>`;
     }
     return `
-      ${section("04", "Settings", "backup")}
-      <h1>Show recovery words</h1>
+      ${section("04", tr("Settings"), "backup")}
+      <h1>${tr("Show recovery words")}</h1>
       <form data-form="export">
-        ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}
-        <div class="row">${button("Show", { variant: "primary" })}${button("Back", { action: "settings", variant: "ghost" })}</div>
+        ${field(tr("Passphrase"), input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}
+        <div class="row">${button(tr("Show"), { variant: "primary" })}${button(tr("Back"), { action: "settings", variant: "ghost" })}</div>
       </form>`;
   }
 }
