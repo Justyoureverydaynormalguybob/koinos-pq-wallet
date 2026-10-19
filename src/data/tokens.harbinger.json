@@ -1,0 +1,31 @@
+{
+  "chainId": "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==",
+  "network": "testnet",
+  "checked": "2026-10-19",
+  "tokens": [
+    {
+      "address": "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
+      "symbol": "tKOIN",
+      "name": "Test Koin",
+      "decimals": 8,
+      "logo": null,
+      "website": "https://koinos.io",
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": true
+    },
+    {
+      "address": "17n12ktwN79sR6ia9DDgCfmw77EgpbTyBi",
+      "symbol": "VHP",
+      "name": "Virtual Hash Power",
+      "decimals": 8,
+      "logo": null,
+      "website": "https://koinos.io",
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": true
+    }
+  ]
+}
