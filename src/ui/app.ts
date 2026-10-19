@@ -10,10 +10,17 @@ import {
   seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys, bootstrapAddress, estimateSetupCosts, pqwalletInfo, setupPqwalletAccount,
   type SetupCosts, type SetupResult, type SetupStatus,
 } from "koinos-pq-core";
-import { decryptVault, encryptVault, localVaultStore, MIN_PASSPHRASE_LENGTH, type AccountRecord, type EncryptedVault, type VaultData } from "../core/vault";
-import { detectAccount, displayLabel } from "../core/accounts";
+import {
+  decoySlotFor, decryptVault, encryptVault, localVaultStore, MIN_PASSPHRASE_LENGTH, newFile, openVault, roleOf, toFile, withSlot,
+  type AccountRecord, type VaultData, type VaultFile,
+} from "../core/vault";
+import { canSign, detectAccount, displayLabel } from "../core/accounts";
+import { AddressBook, addressBookNamespace, type Assessment } from "../core/addressbook";
+import { CLIPBOARD_WIPE_SECONDS, copyWithWipe } from "../core/clipboard";
 
-type Screen = "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "sent" | "receive" | "history" | "settings" | "export" | "setup" | "save";
+type Screen =
+  | "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "send-confirm" | "sent" | "receive" | "history"
+  | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words";
 
 interface SetupState {
   account: string;
@@ -43,10 +50,21 @@ interface PendingChange {
   apply: (v: VaultData) => void;
 }
 
+/** A send waiting for the user to confirm the recipient (first-time or look-alike address). */
+interface SendCheck {
+  to: string;
+  amount: string;
+  assessment: Assessment;
+}
+
 interface State {
   screen: Screen;
-  enc: EncryptedVault | null;
+  /** the stored file (all slots); null when no wallet is saved in this browser */
+  file: VaultFile | null;
+  /** which slot the current passphrase opened */
+  slot: number;
   vault: VaultData | null;
+  book: AddressBook | null;
   keys: PqKeys | null;
   networkName: string;
   accountIndex: number;
@@ -64,6 +82,11 @@ interface State {
   sent: { txId: string; bytes: number; rcUsed: string; block: string | null; waiting: boolean } | null;
   exportWords: string | null;
   autolockMinutes: number;
+  lockOnHide: boolean;
+  clipboardWipe: boolean;
+  /** 24 words of a decoy wallet being set up */
+  pendingDecoy: string | null;
+  sendCheck: SendCheck | null;
   setup: SetupState | null;
   /** per network: the activated account found from the seed (null: none; missing: not checked yet) */
   detected: Record<string, string | null>;
@@ -73,6 +96,10 @@ interface State {
 const PREF_NETWORK = "koinos-pq-wallet/network";
 const PREF_DEVNET_RPC = "koinos-pq-wallet/devnet-rpc";
 const PREF_AUTOLOCK = "koinos-pq-wallet/autolock-minutes";
+const PREF_LOCK_ON_HIDE = "koinos-pq-wallet/lock-on-hide";
+const PREF_CLIPBOARD_WIPE = "koinos-pq-wallet/clipboard-wipe";
+/** how long a hidden tab may stay unlocked */
+const HIDDEN_LOCK_SECONDS = 60;
 
 const pref = {
   get(k: string): string | null {
@@ -98,14 +125,17 @@ export class App {
   private s: State;
   private root: HTMLElement;
   private lockTimer: number | undefined;
+  private hideTimer: number | undefined;
 
   constructor(root: HTMLElement) {
     this.root = root;
-    const enc = localVaultStore.load();
+    const stored = localVaultStore.load();
     this.s = {
-      screen: enc ? "unlock" : "welcome",
-      enc,
+      screen: stored ? "unlock" : "welcome",
+      file: null,
+      slot: 0,
       vault: null,
+      book: null,
       keys: null,
       networkName: pref.get(PREF_NETWORK) ?? "testnet",
       accountIndex: 0,
@@ -123,6 +153,10 @@ export class App {
       sent: null,
       exportWords: null,
       autolockMinutes: Number(pref.get(PREF_AUTOLOCK) ?? 10) || 10,
+      lockOnHide: pref.get(PREF_LOCK_ON_HIDE) !== "0",
+      clipboardWipe: pref.get(PREF_CLIPBOARD_WIPE) !== "0",
+      pendingDecoy: null,
+      sendCheck: null,
       setup: null,
       detected: {},
       change: null,
@@ -132,7 +166,23 @@ export class App {
     root.addEventListener("submit", (e) => this.onSubmit(e));
     root.addEventListener("change", (e) => this.onChange(e));
     for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => this.touch(), { passive: true });
+    // a tab that is hidden (another tab, minimised, screen off) locks after HIDDEN_LOCK_SECONDS
+    document.addEventListener("visibilitychange", () => {
+      window.clearTimeout(this.hideTimer);
+      if (document.visibilityState === "hidden" && this.s.lockOnHide && this.unlocked()) {
+        this.hideTimer = window.setTimeout(() => {
+          if (document.visibilityState === "hidden" && !this.s.setup?.running) this.lock("Locked while the tab was hidden.");
+        }, HIDDEN_LOCK_SECONDS * 1000);
+      }
+    });
     this.render();
+  }
+  private unlocked(): boolean {
+    return !!(this.s.keys || this.s.pendingMnemonic || this.s.pendingSeed);
+  }
+  /** Addresses that belong to this wallet (for the recipient check). */
+  private ownAddresses(): string[] {
+    return this.accounts().map((a) => a.address);
   }
 
   // ---------- derived ----------
@@ -189,12 +239,16 @@ export class App {
     this.s.sent = null;
     this.s.detected = {};
     this.s.change = null;
+    this.s.book = null;
+    this.s.file = null;
+    this.s.pendingDecoy = null;
+    this.s.sendCheck = null;
     this.endSetup();
-    this.s.enc = localVaultStore.load();
-    this.s.screen = this.s.enc ? "unlock" : "welcome";
+    this.s.screen = localVaultStore.load() ? "unlock" : "welcome";
     this.s.notice = notice ?? null;
     this.s.error = null;
     window.clearTimeout(this.lockTimer);
+    window.clearTimeout(this.hideTimer);
     this.render();
   }
   private go(screen: Screen) {
@@ -254,12 +308,14 @@ export class App {
   private async finishSetup(passphrase: string) {
     const seed = this.s.pendingSeed;
     if (!seed) throw new Error("nothing to save");
-    const vault: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: this.s.pendingAccounts, createdAt: new Date().toISOString() };
-    const enc = await encryptVault(vault, passphrase);
-    if (!localVaultStore.save(enc)) throw new Error("this browser blocks local storage; the wallet cannot be saved here");
-    this.s.enc = enc;
+    const vault: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: this.s.pendingAccounts, createdAt: new Date().toISOString(), role: "main" };
+    const { file, slot } = await newFile(vault, passphrase);
+    if (!localVaultStore.save(file)) throw new Error("this browser blocks local storage; the wallet cannot be saved here");
+    this.s.file = file;
+    this.s.slot = slot;
     this.s.vault = vault;
     this.s.keys = deriveKeys(seed);
+    this.s.book = new AddressBook(addressBookNamespace(seed));
     wipe(seed);
     this.s.pendingSeed = null;
     this.s.pendingMnemonic = null;
@@ -269,18 +325,52 @@ export class App {
     this.touch();
     await this.enterHome();
   }
+  /** The passphrase must open the slot this session was unlocked from; anything else is "wrong". */
+  private async reopenCurrent(passphrase: string): Promise<VaultData> {
+    if (!this.s.file) throw new Error("no wallet");
+    return decryptVault(this.s.file.slots[this.s.slot]!, passphrase);
+  }
   private async saveChange(passphrase: string) {
     const change = this.s.change;
-    if (!change || !this.s.enc) throw new Error("nothing to save");
-    const vault = await decryptVault(this.s.enc, passphrase); // also checks the passphrase
+    if (!change || !this.s.file) throw new Error("nothing to save");
+    const vault = await this.reopenCurrent(passphrase); // also checks the passphrase
     change.apply(vault);
-    const enc = await encryptVault(vault, passphrase);
-    if (!localVaultStore.save(enc)) throw new Error("could not write to local storage");
-    this.s.enc = enc;
+    const file = withSlot(this.s.file, this.s.slot, await encryptVault(vault, passphrase));
+    if (!localVaultStore.save(file)) throw new Error("could not write to local storage");
+    this.s.file = file;
     this.s.vault = vault;
     this.s.change = null;
     this.s.screen = "settings";
     this.s.notice = "Saved.";
+  }
+  /**
+   * Duress mode: writes a decoy wallet (its own seed, its own passphrase) into the slot decoySlotFor()
+   * picks. The main passphrase is required so only the owner can do it; the decoy passphrase must open
+   * nothing that exists. The session locks afterwards so the same thing happens whichever wallet did it.
+   */
+  private async saveDecoy(mainPass: string, decoyPass: string) {
+    const file = this.s.file, words = this.s.pendingDecoy, vault = this.s.vault;
+    if (!file || !words || !vault) throw new Error("nothing to save");
+    const current = await this.reopenCurrent(mainPass);
+    let taken = false;
+    try {
+      await openVault(file, decoyPass);
+      taken = true;
+    } catch {
+      /* good: the decoy passphrase opens nothing yet */
+    }
+    if (taken) throw new Error("The duress passphrase must be different from any passphrase this wallet already uses.");
+    const seed = mnemonicToSeed(words);
+    const decoy: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: [], createdAt: new Date().toISOString(), role: "decoy" };
+    wipe(seed);
+    const target = decoySlotFor(this.s.slot, roleOf(current));
+    let next = withSlot(file, target, await encryptVault(decoy, decoyPass));
+    if (roleOf(current) === "main") {
+      current.hasDecoy = true;
+      next = withSlot(next, this.s.slot, await encryptVault(current, mainPass));
+    }
+    if (!localVaultStore.save(next)) throw new Error("could not write to local storage");
+    this.lock("Duress wallet saved. Unlock with either passphrase: each opens its own wallet.");
   }
 
   // ---------- account activation (the pqwallet contract on the seed's own address) ----------
@@ -366,6 +456,30 @@ export class App {
       throw e;
     } finally {
       st.running = false;
+    }
+  }
+
+  /** Signs and submits a KOIN transfer from the current account, then remembers the recipient. */
+  private async doSend(to: string, amount: string, name = "") {
+    const a = this.account();
+    if (!a || !this.s.keys || !canSign(a)) throw new Error("locked");
+    const valueBase = parseKoin(amount);
+    const chain = this.chain();
+    const res = await chain.sendKoin({ from: a.address, to, valueBase, keys: this.s.keys, mode: a.mode as "native" | "pqwallet" });
+    this.s.book?.recordSend(to, name);
+    this.s.sendCheck = null;
+    this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks };
+    this.s.screen = "sent";
+    this.render();
+    if (this.network.autoBlocks) {
+      try {
+        const block = await chain.waitMined(res.txId);
+        this.s.sent = { ...this.s.sent, block, waiting: false };
+      } catch (err) {
+        this.s.sent = { ...this.s.sent, waiting: false };
+        this.s.error = `Sent, but still waiting for a block: ${(err as Error).message}`;
+      }
+      await this.refresh();
     }
   }
 
@@ -459,14 +573,15 @@ export class App {
         break;
       case "copy": {
         const text = el.dataset.copy ?? "";
-        void navigator.clipboard?.writeText(text).then(
+        const secs = this.s.clipboardWipe ? CLIPBOARD_WIPE_SECONDS : 0;
+        void copyWithWipe(text, secs).then(
           () => {
-            this.s.notice = "Copied.";
+            this.s.notice = secs ? `Copied. The clipboard clears itself in ${secs} s.` : "Copied.";
             this.render();
             window.setTimeout(() => {
               this.s.notice = null;
               this.render();
-            }, 1500);
+            }, 2500);
           },
           () => {
             this.s.error = "Could not copy; select the text instead.";
@@ -475,11 +590,33 @@ export class App {
         );
         break;
       }
+      case "contacts":
+        this.go("contacts");
+        break;
+      case "contact-remove":
+        this.s.book?.remove(el.dataset.address ?? "");
+        this.render();
+        break;
+      case "duress":
+        this.go("duress");
+        break;
+      case "duress-create":
+        this.s.pendingDecoy = newMnemonic();
+        this.go("duress-words");
+        break;
+      case "duress-cancel":
+        this.s.pendingDecoy = null;
+        this.go("settings");
+        break;
+      case "send-cancel":
+        this.s.sendCheck = null;
+        this.go("send");
+        break;
       case "remove-account": {
         const acct = this.accounts().find((a) => a.index === Number(el.dataset.index));
         if (!acct || acct.derived || acct.mode === "native") break;
         this.s.change = {
-          title: "Remove account",
+          title: acct.mode === "watch" ? "Stop watching" : "Remove account",
           detail: `Remove ${acct.address} from this wallet's list. Nothing changes on chain, and you can add it back any time.`,
           apply: (v) => {
             v.accounts = v.accounts.filter((x) => x.address !== acct.address);
@@ -584,38 +721,111 @@ export class App {
       }
       case "unlock": {
         void this.run("Unlocking", async () => {
-          if (!this.s.enc) throw new Error("no wallet in this browser");
-          const vault = await decryptVault(this.s.enc, field("passphrase"));
-          this.s.vault = vault;
-          this.s.keys = deriveKeys(hexToBytes(vault.seedHex));
-          this.s.accountIndex = vault.accounts.length ? 1 : 0;
+          const stored = localVaultStore.load();
+          if (!stored) throw new Error("no wallet in this browser");
+          const file = await toFile(stored);
+          const opened = await openVault(file, field("passphrase"));
+          if (!("slots" in stored)) localVaultStore.save(file); // a pre-duress wallet: store it in the slot format from now on
+          this.s.file = file;
+          this.s.slot = opened.slot;
+          this.s.vault = opened.data;
+          const seed = hexToBytes(opened.data.seedHex);
+          this.s.keys = deriveKeys(seed);
+          this.s.book = new AddressBook(addressBookNamespace(seed));
+          this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
           this.touch();
           await this.enterHome();
         });
         break;
       }
       case "send": {
-        void this.run("Signing and sending", async () => {
-          const a = this.account();
-          if (!a || !this.s.keys) throw new Error("locked");
-          const to = field("to").trim();
-          const valueBase = parseKoin(field("amount"));
-          const chain = this.chain();
-          const res = await chain.sendKoin({ from: a.address, to, valueBase, keys: this.s.keys, mode: a.mode });
-          this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks };
-          this.s.screen = "sent";
+        // Step one: look at the recipient before anything is signed.
+        const to = field("to").trim();
+        const amount = field("amount").trim();
+        const a = this.account();
+        if (!a || !canSign(a)) {
+          this.s.error = "This account is watch-only; it has no key here.";
           this.render();
-          if (this.network.autoBlocks) {
-            try {
-              const block = await chain.waitMined(res.txId);
-              this.s.sent = { ...this.s.sent, block, waiting: false };
-            } catch (err) {
-              this.s.sent = { ...this.s.sent, waiting: false };
-              this.s.error = `Sent, but still waiting for a block: ${(err as Error).message}`;
-            }
-            await this.refresh();
+          return;
+        }
+        try {
+          parseKoin(amount);
+        } catch (err) {
+          this.s.error = (err as Error).message;
+          this.render();
+          return;
+        }
+        const assessment = this.s.book?.assess(to, this.ownAddresses()) ?? { kind: "new" as const };
+        if (assessment.kind === "invalid") {
+          this.s.error = "That is not a valid Koinos address (check every character; the checksum does not match).";
+          this.render();
+          return;
+        }
+        if (assessment.kind === "known" || assessment.kind === "own") {
+          void this.run("Signing and sending", () => this.doSend(to, amount));
+          return;
+        }
+        this.s.sendCheck = { to, amount, assessment };
+        this.go("send-confirm");
+        break;
+      }
+      case "send-confirm": {
+        const sc = this.s.sendCheck;
+        if (!sc) return;
+        if (sc.assessment.kind === "lookalike") {
+          const typed = field("tail").trim();
+          if (typed !== sc.to.slice(-6)) {
+            this.s.error = "The last six characters you typed do not match the address.";
+            this.render();
+            return;
           }
-        });
+        } else if (!data.get("checked")) {
+          this.s.error = "Tick the box once you have compared the whole address.";
+          this.render();
+          return;
+        }
+        const name = field("name").trim();
+        void this.run("Signing and sending", () => this.doSend(sc.to, sc.amount, name));
+        break;
+      }
+      case "contact-rename": {
+        const addr = field("address"), name = field("name");
+        if (this.s.book && addr) this.s.book.upsert(addr, name);
+        this.s.notice = "Saved.";
+        this.render();
+        break;
+      }
+      case "watch": {
+        const addr = field("address").trim();
+        if (!isAddress(addr)) {
+          this.s.error = "That is not a valid Koinos address.";
+          this.render();
+          return;
+        }
+        const label = field("label").trim().slice(0, 60) || "Watched address";
+        this.s.change = {
+          title: "Watch an address",
+          detail: `Show ${addr} (${label}) in this wallet: balance, mana and history only. This wallet holds no key for it and cannot spend from it.`,
+          apply: (v) => {
+            if (!v.accounts.some((x) => x.address === addr)) v.accounts.push({ label, mode: "watch", address: addr });
+          },
+        };
+        this.go("save");
+        break;
+      }
+      case "duress-save": {
+        const d1 = field("d1"), d2 = field("d2");
+        if (d1.length < MIN_PASSPHRASE_LENGTH) {
+          this.s.error = `Use at least ${MIN_PASSPHRASE_LENGTH} characters for the duress passphrase.`;
+          this.render();
+          return;
+        }
+        if (d1 !== d2) {
+          this.s.error = "The two duress passphrases differ.";
+          this.render();
+          return;
+        }
+        void this.run("Saving the duress wallet", () => this.saveDecoy(field("main"), d1));
         break;
       }
       case "add-account": {
@@ -641,8 +851,7 @@ export class App {
         break;
       case "export": {
         void this.run("Checking passphrase", async () => {
-          if (!this.s.enc) throw new Error("no vault");
-          const vault = await decryptVault(this.s.enc, field("passphrase"));
+          const vault = await this.reopenCurrent(field("passphrase"));
           this.s.exportWords = seedToMnemonic(hexToBytes(vault.seedHex));
         });
         break;
@@ -651,8 +860,12 @@ export class App {
         const m = Math.max(1, Math.min(120, Number(field("minutes")) || 10));
         this.s.autolockMinutes = m;
         pref.set(PREF_AUTOLOCK, String(m));
+        this.s.lockOnHide = !!data.get("lockOnHide");
+        pref.set(PREF_LOCK_ON_HIDE, this.s.lockOnHide ? "1" : "0");
+        this.s.clipboardWipe = !!data.get("clipboardWipe");
+        pref.set(PREF_CLIPBOARD_WIPE, this.s.clipboardWipe ? "1" : "0");
         this.touch();
-        this.s.notice = `Auto-lock set to ${m} minutes.`;
+        this.s.notice = `Auto-lock after ${m} minutes${this.s.lockOnHide ? `, and ${HIDDEN_LOCK_SECONDS} s after the tab is hidden` : ""}. Clipboard wipe ${this.s.clipboardWipe ? "on" : "off"}.`;
         this.render();
         break;
       }
@@ -679,6 +892,7 @@ export class App {
       unlock: () => this.vUnlock(),
       home: () => this.vHome(),
       send: () => this.vSend(),
+      "send-confirm": () => this.vSendConfirm(),
       sent: () => this.vSent(),
       receive: () => this.vReceive(),
       history: () => this.vHistory(),
@@ -686,6 +900,9 @@ export class App {
       export: () => this.vExport(),
       setup: () => this.vSetup(),
       save: () => this.vSave(),
+      contacts: () => this.vContacts(),
+      duress: () => this.vDuress(),
+      "duress-words": () => this.vDuressWords(),
     }[s.screen]();
     this.root.innerHTML = `
       <header class="top">
@@ -779,7 +996,7 @@ export class App {
     return `<fieldset class="accounts"><legend>Account</legend>${list
       .map(
         (a) =>
-          `<label class="acct"><input type="radio" name="account" value="${a.index}" ${cur && a.index === cur.index ? "checked" : ""}><span>${esc(a.label)} <code>${esc(short(a.address))}</code>${a.mode === "native" ? " <small>native</small>" : ""}</span></label>`,
+          `<label class="acct"><input type="radio" name="account" value="${a.index}" ${cur && a.index === cur.index ? "checked" : ""}><span>${esc(a.label)} <code>${esc(short(a.address))}</code>${a.mode === "native" ? " <small>native</small>" : a.mode === "watch" ? " <small>watch-only</small>" : ""}</span></label>`,
       )
       .join("")}</fieldset>`;
   }
@@ -791,7 +1008,7 @@ export class App {
       return `
         <h1>Activate your account</h1>
         <p>Your wallet has its post-quantum key. To use it on <strong>${esc(this.network.name)}</strong>, send some KOIN to your account's address and the wallet activates it.</p>
-        <div class="row"><button class="primary" data-action="setup">Show my account's address</button></div>
+        <div class="row"><button class="primary" data-action="setup">Show my account's address</button><button data-action="settings">Settings</button></div>
         <p class="muted">Head block ${s.head === null ? "…" : esc(s.head)}</p>`;
     }
     return `
@@ -806,7 +1023,7 @@ export class App {
         </div>
       </div>
       <div class="tiles">
-        <button class="primary" data-action="send">Send</button>
+        ${canSign(a) ? `<button class="primary" data-action="send">Send</button>` : `<button disabled title="Watch-only: this wallet has no key for this address">Watch-only</button>`}
         <button data-action="receive">Receive</button>
         <button data-action="history">History</button>
         <button data-action="settings">Settings</button>
@@ -820,7 +1037,8 @@ export class App {
       <h1>Send KOIN</h1>
       <p class="muted">From ${esc(a?.label ?? "")} <code>${esc(short(a?.address))}</code> on ${esc(this.network.name)}. Signed with ML-DSA-44 (${a?.mode === "native" ? "3,733-byte native entry" : "2,420-byte signature"}).</p>
       <form data-form="send">
-        <label>To<input name="to" autocomplete="off" required placeholder="1…" autofocus></label>
+        <label>To<input name="to" autocomplete="off" required placeholder="1…" autofocus list="contacts"></label>
+        <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
         <label>Amount (KOIN)<input name="amount" inputmode="decimal" autocomplete="off" required placeholder="0.5"></label>
         <div class="row"><button class="primary" type="submit">Sign and send</button><button class="ghost" type="button" data-action="back-home">Back</button></div>
       </form>`;
@@ -870,8 +1088,22 @@ export class App {
       <h2>Backup</h2>
       <p class="muted">Show the 24 words again (asks for the passphrase).</p>
       <div class="row"><button data-action="export">Show recovery words</button></div>
-      <h2>Auto-lock</h2>
-      <form data-form="autolock" class="inline"><input name="minutes" type="number" min="1" max="120" value="${esc(this.s.autolockMinutes)}"> minutes <button type="submit">Save</button></form>
+      <h2>Contacts</h2>
+      <p class="muted">${this.s.book?.list().length ?? 0} saved. Sending to an address you have never used, or one that merely resembles one you have, asks you to check it first.</p>
+      <div class="row"><button data-action="contacts">Open contacts</button></div>
+      <h2>Watch an address</h2>
+      <p class="muted">See the balance, mana and history of any address (your cold account, a friend's). No key, no sending.</p>
+      <form data-form="watch" class="inline"><input name="address" placeholder="1…" autocomplete="off" required><input name="label" placeholder="label (optional)" autocomplete="off"><button type="submit">Watch</button></form>
+      <h2>Duress wallet</h2>
+      <p class="muted">${this.s.vault?.hasDecoy ? "Set up. A second passphrase opens a separate, small wallet." : "Not set up. A second passphrase would open a separate, small wallet to show under pressure."}</p>
+      <div class="row"><button data-action="duress">${this.s.vault?.hasDecoy ? "Replace the duress wallet" : "Set up a duress wallet"}</button></div>
+      <h2>Locking and clipboard</h2>
+      <form data-form="autolock">
+        <label class="check">Auto-lock after <input name="minutes" type="number" min="1" max="120" value="${esc(this.s.autolockMinutes)}" style="width:5em"> minutes without activity</label>
+        <label class="check"><input type="checkbox" name="lockOnHide" ${this.s.lockOnHide ? "checked" : ""}> Lock ${HIDDEN_LOCK_SECONDS} s after this tab is hidden or the screen goes off</label>
+        <label class="check"><input type="checkbox" name="clipboardWipe" ${this.s.clipboardWipe ? "checked" : ""}> Clear the clipboard ${CLIPBOARD_WIPE_SECONDS} s after copying an address</label>
+        <div class="row"><button type="submit">Save</button></div>
+      </form>
       <details class="adv"><summary>Advanced</summary>
         <h2>Add an account by address</h2>
         <p class="muted">Only for an account set up with the koinos-pq command-line tool. Accounts this wallet activates are found automatically.</p>
@@ -921,6 +1153,78 @@ export class App {
       ${st.failed ? `<p class="error">Activation stopped: ${esc(st.failed)}</p><div class="row"><button class="primary" data-action="setup-retry">Try again</button></div>` : ""}
       <p class="muted">As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here in this page. From then on only your 24 words can move the account. The ${unit} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.</p>
       <div class="row"><button class="ghost" data-action="setup-cancel">Settings</button></div>`;
+  }
+
+  /** Characters of `addr` that differ from `ref` are marked, so the eye lands on them. */
+  private diffMarked(addr: string, ref: string): string {
+    return [...addr].map((ch, i) => (ch === ref[i] ? esc(ch) : `<mark>${esc(ch)}</mark>`)).join("");
+  }
+
+  private vSendConfirm() {
+    const sc = this.s.sendCheck;
+    if (!sc) return `<p>Nothing to confirm.</p>`;
+    const look = sc.assessment.kind === "lookalike";
+    const m = sc.assessment.match;
+    return `
+      <h1>${look ? "Stop: this address looks like one you use" : "First time sending here"}</h1>
+      ${
+        look && m
+          ? `<div class="error" role="alert">
+               <p><strong>${esc(sc.to)}</strong> is not <strong>${esc(m.name || short(m.address))}</strong>. It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.</p>
+               <p class="muted">Typed: <code class="address">${this.diffMarked(sc.to, m.address)}</code><br>Known: <code class="address">${esc(m.address)}</code></p>
+             </div>`
+          : `<p>You have not sent to <code class="address">${esc(sc.to)}</code> from this wallet before. Compare <em>every</em> character with the address the recipient gave you, not only the first and last few. Transfers cannot be undone.</p>`
+      }
+      <p class="muted">Amount: <strong>${esc(sc.amount)} KOIN</strong> on ${esc(this.network.name)}.</p>
+      <form data-form="send-confirm">
+        ${
+          look
+            ? `<label>If you are certain, type the last six characters of the address you want to pay: <input name="tail" autocomplete="off" required autofocus maxlength="6" style="width:8em"></label>`
+            : `<label class="check"><input type="checkbox" name="checked" required> I have compared the whole address</label>
+               <label>Save as a contact (optional)<input name="name" autocomplete="off" placeholder="name" maxlength="40"></label>`
+        }
+        <div class="row"><button class="${look ? "danger" : "primary"}" type="submit">${look ? "Send anyway" : "Sign and send"}</button><button class="ghost" type="button" data-action="send-cancel">Back</button></div>
+      </form>`;
+  }
+
+  private vContacts() {
+    const list = this.s.book?.list() ?? [];
+    return `
+      <h1>Contacts</h1>
+      <p class="muted">Addresses this wallet has sent to, with the names you gave them. Kept in this browser only, separately for each wallet.</p>
+      ${
+        list.length
+          ? `<ul class="plain">${list
+              .map(
+                (c) => `<li><form data-form="contact-rename" class="inline"><input type="hidden" name="address" value="${esc(c.address)}"><code>${esc(short(c.address))}</code><input name="name" value="${esc(c.name)}" placeholder="name" maxlength="40"><button type="submit">Save</button><button type="button" class="link" data-action="contact-remove" data-address="${esc(c.address)}">remove</button></form><small>${c.sends} send${c.sends === 1 ? "" : "s"}${c.lastSentAt ? `, last ${esc(c.lastSentAt.slice(0, 10))}` : ""}</small></li>`,
+              )
+              .join("")}</ul>`
+          : "<p class='muted'>No contacts yet. The first successful send to an address adds it.</p>"
+      }
+      <div class="row"><button class="ghost" data-action="settings">Back</button></div>`;
+  }
+
+  private vDuress() {
+    return `
+      <h1>Duress wallet</h1>
+      <p>A second, separate wallet with its own 24 words and its own passphrase. If someone forces you to unlock, you type the duress passphrase and they see that wallet, with whatever small amount you keep in it. Nothing on this device shows that another wallet exists, and unlocking takes the same time either way.</p>
+      <p><strong>What it cannot do.</strong> Balances are public on the chain. Anyone who already knows your main address can look it up. The decoy protects you from someone who does not, and only if it looks lived-in: give it a little KOIN and use it now and then.</p>
+      <p class="muted">Setting it up asks for your main passphrase (so only you can), and a new passphrase for the decoy. The decoy's 24 words are shown once; write them down if you want to recover it, otherwise just note that losing them loses only the decoy.</p>
+      <div class="row"><button class="primary" data-action="duress-create">Create the duress wallet</button><button class="ghost" data-action="duress-cancel">Back</button></div>`;
+  }
+
+  private vDuressWords() {
+    const words = (this.s.pendingDecoy ?? "").split(" ");
+    return `
+      <h1>The duress wallet's 24 words</h1>
+      <ol class="words">${words.map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
+      <form data-form="duress-save">
+        <label>Duress passphrase (${MIN_PASSPHRASE_LENGTH}+ characters, different from your main one)<input name="d1" type="password" minlength="${MIN_PASSPHRASE_LENGTH}" required autofocus autocomplete="new-password"></label>
+        <label>Repeat it<input name="d2" type="password" minlength="${MIN_PASSPHRASE_LENGTH}" required autocomplete="new-password"></label>
+        <label>Your main passphrase (to confirm)<input name="main" type="password" required autocomplete="off"></label>
+        <p class="muted">After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.</p>
+        <div class="row"><button class="primary" type="submit">Save duress wallet</button><button class="ghost" type="button" data-action="duress-cancel">Cancel</button></div>
+      </form>`;
   }
 
   private vSave() {

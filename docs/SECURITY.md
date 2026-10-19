@@ -79,3 +79,48 @@ npm run smoke:web        # the built site on Harbinger and mainnet: CSP, onboard
 
 `E2E_KEEP_GOING=1 EXT_DIR=<folder>` runs the extension checks against any build, for example an
 unzipped older release, and lists every failure instead of stopping at the first.
+
+
+## Added 2026-10-19 (wallet 0.4.0): duress mode, recipient checks, watch-only, locking
+
+Design notes, so a reviewer knows what each feature promises and what it does not.
+
+**Duress mode** (`src/core/vault.ts`). The stored value is now a file of exactly two slots. Every slot
+is AES-256-GCM under a PBKDF2 key with its own salt, over a plaintext padded to a 4 KiB multiple, so
+all slots are the same size and shape. A fresh wallet goes into a random slot; the other holds
+random bytes encrypted under a 32-byte passphrase that is forgotten at once. Setting up a decoy
+replaces that filler with a second wallet (its own 24 words, its own passphrase, `role: "decoy"`).
+Unlocking derives a key for every slot whatever happens and opens whichever one authenticates, so
+neither the bytes at rest nor the time to unlock reveal whether a decoy exists or where it is. The
+extension's approval window opens the file the same way, so a dapp signature requested under duress
+is made with the decoy's key. From inside a decoy, "set up a duress wallet" writes to the decoy's own
+slot, never the main one (`decoySlotFor`). Limits: balances are public on chain, so the decoy only
+helps against someone who does not already know the main address; a decoy must be funded and used
+to be believable; an attacker who copies the stored file before and after setup can see that one
+slot changed (not which wallet it is); the main slot records `hasDecoy` so Settings can show it,
+which an attacker in possession of the main passphrase can read, but then they already have
+everything. Pre-0.4.0 wallets are wrapped into the two-slot file on their next unlock.
+
+**Address-poisoning protection** (`src/core/addressbook.ts`). The wallet keeps, per wallet (namespace
+derived from the seed, so a decoy sees only its own), the addresses it has sent to. Before signing:
+an invalid checksum is refused; a first-time recipient must be ticked as compared; a recipient that
+matches a used address (or one of the wallet's own) in 4+ leading and 4+ trailing characters, or 7+
+at either end, is shown next to the real one with the differing characters marked and needs its last
+six characters typed. Contacts live in localStorage in the clear (addresses are public; names are
+yours), not in the encrypted vault, because recording a send must not require the passphrase.
+
+**Watch-only accounts** (`src/core/accounts.ts`). Stored in the vault with `mode: "watch"`; shown
+with balance, mana and history; excluded from everything that signs, including the extension's
+`getAccounts` answer to dapps (`walletAccounts` filters them, `canSign` guards the send path).
+
+**Locking and clipboard** (`src/ui/app.ts`, `src/core/clipboard.ts`). Besides the inactivity timer,
+an unlocked tab that becomes hidden (another tab, minimised, screen off) locks after 60 s, unless an
+activation is mid-flight. Copying an address schedules a wipe after 60 s: the clipboard is cleared
+if it still holds what the wallet put there, or, where the browser refuses to read it back,
+regardless. Both are switches in Settings, on by default.
+
+Tests: `test/vault.test.ts` (slots, padding, filler, decoy targeting, legacy upgrade),
+`test/addressbook.test.ts`, `test/accounts.test.ts`, and `test/app.test.ts`, which drives the real
+screens in jsdom: create, duress setup and both unlocks, watch-only, recipient challenges,
+lock-on-hide, clipboard wipe. The browser end-to-end suites (`e2e:ext`, `smoke:web`) still need a
+real browser and were not run from the phone session that wrote this.

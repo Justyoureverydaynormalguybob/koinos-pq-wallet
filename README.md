@@ -12,10 +12,19 @@ developer are welcome to use it, share it or build on it. Companion to
 [koinos-pq](https://github.com/Justyoureverydaynormalguybob/koinos-pq) (the account contract, the
 native node change, the measurements).
 
+Since 0.4.0 (2026-10-19): **duress mode** (a second passphrase opens a separate decoy wallet; the stored
+file always has two same-sized slots, so nothing shows whether a decoy exists), **address-poisoning
+protection** (first-time recipients must be confirmed; an address that merely resembles one you have used
+is flagged with the differing characters marked and needs its last six characters typed), **watch-only
+accounts**, **lock when the tab is hidden**, and a **timed clipboard wipe** after copying an address.
+`docs/SECURITY.md` has the design notes and limits of each.
+
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
                         account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)
-src/core/vault.ts       encrypted at rest: PBKDF2-SHA256 (600k) + AES-256-GCM, WebCrypto only
+src/core/vault.ts       encrypted at rest: PBKDF2-SHA256 (600k) + AES-256-GCM, WebCrypto only; two fixed slots (duress)
+src/core/addressbook.ts contacts per wallet, address-poisoning (look-alike) detection
+src/core/clipboard.ts   copy with a timed wipe
 src/ui/app.ts           the screens, no framework (web app and extension popup alike)
 src/ext/inpage.ts       window.kondor for web pages (kondor-js, MIT)
 src/ext/content.ts      relays page <-> extension messages

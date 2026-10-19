@@ -160,3 +160,6 @@ label.check input { width: auto; margin: 3px 0 0; }
 details.adv { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 12px; }
 details.adv summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 details.adv[open] summary { margin-bottom: 4px; }
+
+mark { background: #ffd166; color: #000; border-radius: 2px; padding: 0 1px; }
+.acct small, .tiles button[disabled] { opacity: .75; }

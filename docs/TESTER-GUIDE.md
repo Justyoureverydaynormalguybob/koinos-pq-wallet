@@ -108,3 +108,16 @@ opens, you read what is being signed, type your passphrase, and your post-quantu
 Download it from https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/releases/latest
 and follow [EXTENSION-TESTING.md](EXTENSION-TESTING.md). The extension keeps its own wallet: import
 your 24 words into it and it finds your account.
+
+
+## New in 0.4.0: things to try
+
+- **Duress wallet.** Settings → Duress wallet → create. Then lock and unlock with the duress passphrase:
+  you should see a different, empty wallet with no mention of the main one. Activate and fund it a little
+  if you want it to look real.
+- **Sending to a new address** asks you to tick that you compared the whole address. Sending to an address
+  that looks like one you used before (same start and end) shows both with the differences marked and
+  asks for its last six characters.
+- **Watch an address** (Settings) to keep an eye on an account without its key.
+- The tab now locks 60 s after you switch away from it, and the clipboard clears 60 s after you copy an
+  address. Both can be turned off in Settings → Locking and clipboard.

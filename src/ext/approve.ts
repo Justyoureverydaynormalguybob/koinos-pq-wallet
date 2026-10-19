@@ -18,7 +18,7 @@ import "../style.css";
 import { Transaction, utils } from "koilib";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { Chain, NETWORKS, PqSigner, bootstrapAddress, deriveKeys, decodeFields, formatKoin, wipe, TOKEN_ENTRY, type Network, type PqKeys } from "koinos-pq-core";
-import { decryptVault, localVaultStore } from "../core/vault";
+import { localVaultStore, openVault, toFile } from "../core/vault";
 import { detectAccount, walletAccounts } from "../core/accounts";
 
 interface Request {
@@ -285,9 +285,9 @@ async function approve(p: Plan, passphrase: string) {
   if (button) button.disabled = true;
   try {
     status.textContent = "Unlocking…";
-    const enc = localVaultStore.load();
-    if (!enc) throw new Error("no wallet in this extension");
-    const vault = await decryptVault(enc, passphrase);
+    const stored = localVaultStore.load();
+    if (!stored) throw new Error("no wallet in this extension");
+    const { data: vault } = await openVault(await toFile(stored), passphrase); // whichever wallet this passphrase opens (duress mode)
     keys = deriveKeys(hexToBytes(vault.seedHex));
     const chain = new Chain(p.net);
     const detected = await detectAccount(chain, keys).catch(() => null);

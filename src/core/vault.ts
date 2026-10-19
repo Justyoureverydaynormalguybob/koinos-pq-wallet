@@ -1,26 +1,42 @@
 // The vault: the seed and the account list, encrypted at rest with a passphrase.
 //
 //   key  = PBKDF2-SHA256(passphrase, salt, 600,000 iterations) -> 256-bit AES key
-//   blob = AES-256-GCM(key, iv, JSON(vault))
+//   blob = AES-256-GCM(key, iv, JSON(vault) padded to a 4 KiB multiple)
+//
+// Storage holds a FILE of exactly SLOT_COUNT slots, each a blob of the same shape and size. One slot is
+// your wallet. The other is either random filler encrypted under a key nobody knows, or a DECOY wallet
+// with its own seed and passphrase (duress mode). Unlocking tries every slot with the passphrase typed,
+// always doing all the key derivations, so neither the stored bytes nor the unlock time say whether a
+// decoy exists or which slot it is. What opens is whatever the passphrase opens.
 //
 // WebCrypto only, no custom crypto. The decrypted seed lives in memory while unlocked and is wiped on lock.
 import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { AccountMode } from "koinos-pq-core";
 
+/** "watch" is an address the wallet shows but cannot sign for. */
+export type WalletMode = AccountMode | "watch";
+
 export interface AccountRecord {
   label: string;
-  mode: AccountMode;
-  /** native: the key's own address; pqwallet: the account that runs the contract with this key */
+  mode: WalletMode;
+  /** native: the key's own address; pqwallet: the account that runs the contract with this key; watch: any address */
   address: string;
 }
+
+export type VaultRole = "main" | "decoy";
 
 export interface VaultData {
   version: 1;
   seedHex: string;
   accounts: AccountRecord[];
   createdAt: string;
+  /** absent in wallets saved before duress mode existed: treated as "main" */
+  role?: VaultRole;
+  /** main wallet only: a decoy has been written to the other slot (shown in Settings; a decoy never has this) */
+  hasDecoy?: boolean;
 }
 
+/** One encrypted slot (also the whole stored value in the pre-duress format, v1). */
 export interface EncryptedVault {
   v: 1;
   kdf: "PBKDF2-SHA256";
@@ -30,8 +46,17 @@ export interface EncryptedVault {
   ciphertextHex: string;
 }
 
+/** What is stored: a fixed number of same-shaped slots. */
+export interface VaultFile {
+  v: 2;
+  slots: EncryptedVault[];
+}
+
 export const PBKDF2_ITERATIONS = 600_000;
 export const MIN_PASSPHRASE_LENGTH = 10;
+export const SLOT_COUNT = 2;
+/** Plaintexts are padded to a multiple of this before encryption, so slot sizes reveal nothing. */
+export const PAD_BLOCK = 4096;
 
 const subtle = () => {
   const s = globalThis.crypto?.subtle;
@@ -50,15 +75,36 @@ async function deriveAesKey(passphrase: string, salt: Uint8Array, iterations: nu
   );
 }
 
-export async function encryptVault(data: VaultData, passphrase: string, iterations = PBKDF2_ITERATIONS): Promise<EncryptedVault> {
-  if (passphrase.length < MIN_PASSPHRASE_LENGTH) throw new Error(`passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
+/** JSON followed by spaces up to a PAD_BLOCK multiple; JSON.parse ignores trailing whitespace. */
+function padded(json: string): Uint8Array {
+  const raw = utf8ToBytes(json);
+  const total = Math.ceil((raw.length + 1) / PAD_BLOCK) * PAD_BLOCK;
+  const out = new Uint8Array(total).fill(0x20);
+  out.set(raw, 0);
+  return out;
+}
+
+async function encryptBytes(plaintext: Uint8Array, passphrase: string, iterations: number): Promise<EncryptedVault> {
   const salt = randomBytes(16);
   const iv = randomBytes(12);
   const key = await deriveAesKey(passphrase, salt, iterations);
-  const plaintext = utf8ToBytes(JSON.stringify(data));
   const ct = new Uint8Array(await subtle().encrypt({ name: "AES-GCM", iv: iv as BufferSource }, key, plaintext as BufferSource));
   plaintext.fill(0);
   return { v: 1, kdf: "PBKDF2-SHA256", iterations, saltHex: bytesToHex(salt), ivHex: bytesToHex(iv), ciphertextHex: bytesToHex(ct) };
+}
+
+export async function encryptVault(data: VaultData, passphrase: string, iterations = PBKDF2_ITERATIONS): Promise<EncryptedVault> {
+  if (passphrase.length < MIN_PASSPHRASE_LENGTH) throw new Error(`passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
+  return encryptBytes(padded(JSON.stringify(data)), passphrase, iterations);
+}
+
+/**
+ * A slot that opens with no passphrase anyone knows: random bytes of a vault's padded size, encrypted
+ * under a random 32-byte passphrase that is forgotten at once. Indistinguishable from a real slot.
+ */
+export async function fillerSlot(iterations = PBKDF2_ITERATIONS): Promise<EncryptedVault> {
+  const throwaway = bytesToHex(randomBytes(32));
+  return encryptBytes(randomBytes(PAD_BLOCK), throwaway, iterations);
 }
 
 /** Throws on a wrong passphrase (GCM authentication fails). */
@@ -71,17 +117,87 @@ export async function decryptVault(enc: EncryptedVault, passphrase: string): Pro
   } catch {
     throw new Error("wrong passphrase");
   }
-  const data = JSON.parse(new TextDecoder().decode(pt)) as VaultData;
+  let data: VaultData;
+  try {
+    data = JSON.parse(new TextDecoder().decode(pt)) as VaultData;
+  } catch {
+    throw new Error("wrong passphrase"); // filler decrypts under its own key only; anything else is not JSON
+  }
   if (data.version !== 1 || typeof data.seedHex !== "string" || !Array.isArray(data.accounts)) throw new Error("vault contents are not valid");
   return data;
+}
+
+export const roleOf = (v: VaultData): VaultRole => v.role ?? "main";
+
+/** A legacy single-slot store value becomes a file by adding filler for the missing slots. */
+export async function toFile(stored: VaultFile | EncryptedVault): Promise<VaultFile> {
+  if ("slots" in stored && stored.v === 2) return stored;
+  const legacy = stored as EncryptedVault;
+  const slots: EncryptedVault[] = [legacy];
+  while (slots.length < SLOT_COUNT) slots.push(await fillerSlot(legacy.iterations));
+  return { v: 2, slots };
+}
+
+export interface Opened {
+  data: VaultData;
+  /** which slot the passphrase opened */
+  slot: number;
+}
+
+/**
+ * Tries the passphrase on every slot. All derivations run whatever happens, so the time taken does not
+ * depend on which slot matched (or on none matching). Throws "wrong passphrase" when nothing opens.
+ */
+export async function openVault(file: VaultFile, passphrase: string): Promise<Opened> {
+  const results = await Promise.allSettled(file.slots.map((s) => decryptVault(s, passphrase)));
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i]!;
+    if (r.status === "fulfilled") return { data: r.value, slot: i };
+  }
+  throw new Error("wrong passphrase");
+}
+
+/** A new file for a fresh wallet: the wallet in a random slot, filler in the others. */
+export async function newFile(data: VaultData, passphrase: string, iterations = PBKDF2_ITERATIONS): Promise<{ file: VaultFile; slot: number }> {
+  const slot = randomBytes(1)[0]! % SLOT_COUNT;
+  const slots: EncryptedVault[] = [];
+  for (let i = 0; i < SLOT_COUNT; i++) slots.push(i === slot ? await encryptVault(data, passphrase, iterations) : await fillerSlot(iterations));
+  return { file: { v: 2, slots }, slot };
+}
+
+/** The same file with one slot replaced (the others are untouched: their passphrases are not known here). */
+export function withSlot(file: VaultFile, index: number, slot: EncryptedVault): VaultFile {
+  if (index < 0 || index >= file.slots.length) throw new Error("no such slot");
+  return { v: 2, slots: file.slots.map((s, i) => (i === index ? slot : s)) };
+}
+
+/**
+ * Which slot a decoy goes into. From the main wallet: the other slot (never its own). From a decoy: its
+ * own slot, so a "set up duress wallet" done under duress looks and works the same but can never touch
+ * the main wallet.
+ */
+export function decoySlotFor(openedSlot: number, role: VaultRole): number {
+  if (role === "decoy") return openedSlot;
+  return (openedSlot + 1) % SLOT_COUNT;
+}
+
+/** True when the passphrase opens the given slot (used to refuse a decoy passphrase equal to the main one). */
+export async function opens(slot: EncryptedVault, passphrase: string): Promise<boolean> {
+  try {
+    await decryptVault(slot, passphrase);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---- storage (browser localStorage; every call guarded so a blocked store degrades to "no vault") ----
 const STORAGE_KEY = "koinos-pq-wallet/vault";
 
 export interface VaultStore {
-  load(): EncryptedVault | null;
-  save(enc: EncryptedVault): boolean;
+  /** v2 file, or a v1 single slot from a wallet saved before duress mode */
+  load(): VaultFile | EncryptedVault | null;
+  save(file: VaultFile): boolean;
   clear(): void;
 }
 
@@ -89,14 +205,14 @@ export const localVaultStore: VaultStore = {
   load() {
     try {
       const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as EncryptedVault) : null;
+      return raw ? (JSON.parse(raw) as VaultFile | EncryptedVault) : null;
     } catch {
       return null;
     }
   },
-  save(enc) {
+  save(file) {
     try {
-      globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(enc));
+      globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(file));
       return true;
     } catch {
       return false;
