@@ -38,8 +38,9 @@ Since 0.15.0: **WalletConnect**. Dapps on another device or browser (KoinDX, Vor
 the Koinos WalletConnect SDK) pair by QR code or a pasted `wc:` link from the Dapps tab; a `wc:` link
 opened on the phone lands in the app. Every request a session sends goes through the same approval
 sheet and the same rules as the in-app browser. It needs a WalletConnect project id, free from
-cloud.reown.com: paste it under Settings › WalletConnect, or bake one into a build with
-`VITE_WC_PROJECT_ID=… npm run build`. Also since 0.15.0 the side stores (contacts, added tokens,
+cloud.reown.com. The repo's `.env` bakes one in (a public identifier, not a secret); Settings ›
+WalletConnect overrides it. `WC_PROJECT_ID=… WC_LIVE_DIR=$(mktemp -d) npx vitest run test/wc-live.test.ts`
+in one shell and `… test/wc-live-dapp.test.ts` in another run a real round trip over the relay. Also since 0.15.0 the side stores (contacts, added tokens,
 allowed sites, collections) are sealed under the open wallet's slot key.
 
 Since 0.9.0, on Android and iOS: an **in-app dapp browser** (the Dapps tab). It is the wallet's own
