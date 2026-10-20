@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.net.Uri;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -126,6 +127,24 @@ public class PqBrowserPlugin extends Plugin {
                 view.reload();
             }
             call.resolve();
+        });
+    }
+
+    /** FLAG_SECURE on the app's window: no screenshots, no screen recording or casting, a blank recents thumbnail. */
+    @PluginMethod
+    public void setSecure(PluginCall call) {
+        final boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        getActivity().runOnUiThread(() -> {
+            try {
+                if (on) {
+                    getActivity().getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
+                } else {
+                    getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                }
+                call.resolve();
+            } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()));
+            }
         });
     }
 

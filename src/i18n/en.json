@@ -319,5 +319,6 @@
   "The dapp asks for: {chains}.": "The dapp asks for: {chains}.",
   "Connects dapps on other devices (KoinDX, Vortex Bridge) through the WalletConnect relay. It needs a project id: create a free one at cloud.reown.com and paste it here. The id is a public identifier, not a secret.": "Connects dapps on other devices (KoinDX, Vortex Bridge) through the WalletConnect relay. It needs a project id: create a free one at cloud.reown.com and paste it here. The id is a public identifier, not a secret.",
   "Project id": "Project id",
-  "built-in id in use": "built-in id in use"
+  "built-in id in use": "built-in id in use",
+  "Block screenshots and screen recording of the whole app (the 24 words are always blocked)": "Block screenshots and screen recording of the whole app (the 24 words are always blocked)"
 }

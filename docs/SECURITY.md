@@ -301,7 +301,9 @@ Send that cannot be resolved is an error, never a silent fall-back to KOIN; a ma
 indexer cannot blank the activity list.
 
 **Native shells.** Android: `allowBackup=false` with backup and data-extraction rules that exclude
-everything, `FLAG_SECURE` (no screenshots, no recents thumbnail), biometrics restricted to class 3
+everything, `FLAG_SECURE` (no screenshots, no recents thumbnail) while the 24 words are on screen and,
+when the "Block screenshots" setting is on, all the time (0.15.1; before that it was always on and
+would not let the owner screenshot their own address), biometrics restricted to class 3
 ("strong"), the Keychain item `whenUnlockedThisDeviceOnly` on iOS, a blur cover when the app resigns
 active on iOS. Collectible pictures load from ipfs.io, dweb.link and arweave.net only (cloudflare's
 gateway was retired); the site sends `Referrer-Policy: no-referrer`.

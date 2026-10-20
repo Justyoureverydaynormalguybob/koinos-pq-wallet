@@ -1,6 +1,6 @@
 {
   "name": "koinos-pq-wallet",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "private": true,
   "description": "Post-quantum (ML-DSA-44) wallet for Koinos: web app and browser extension (window.kondor compatible) on one signing core",
   "type": "module",

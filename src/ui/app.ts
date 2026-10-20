@@ -158,6 +158,8 @@ interface State {
   autolockMinutes: number;
   lockOnHide: boolean;
   clipboardWipe: boolean;
+  /** Android: FLAG_SECURE all the time (off by default); the 24-words screens are always covered */
+  blockCapture: boolean;
   theme: Theme;
   /** 24 words of a decoy wallet being set up */
   pendingDecoy: string | null;
@@ -173,6 +175,7 @@ const PREF_DEVNET_RPC = "koinos-pq-wallet/devnet-rpc";
 const PREF_AUTOLOCK = "koinos-pq-wallet/autolock-minutes";
 const PREF_LOCK_ON_HIDE = "koinos-pq-wallet/lock-on-hide";
 const PREF_CLIPBOARD_WIPE = "koinos-pq-wallet/clipboard-wipe";
+const PREF_BLOCK_CAPTURE = "koinos-pq-wallet/block-capture";
 const PREF_THEME = "koinos-pq-wallet/theme";
 const PREF_HIDE_ZERO = "koinos-pq-wallet/hide-zero";
 const PREF_WC_PROJECT = "koinos-pq-wallet/wc-project-id";
@@ -292,6 +295,8 @@ export class App {
   /** the approval the sheet currently shows and when it appeared */
   private sheetKey = "";
   private sheetShownAt = 0;
+  /** what the window flag was last set to (null = never set) */
+  private secureOn: boolean | null = null;
 
   constructor(root: HTMLElement, opts: AppOptions = {}) {
     this.root = root;
@@ -337,6 +342,7 @@ export class App {
       autolockMinutes: Number(pref.get(PREF_AUTOLOCK) ?? 10) || 10,
       lockOnHide: pref.get(PREF_LOCK_ON_HIDE) !== "0",
       clipboardWipe: pref.get(PREF_CLIPBOARD_WIPE) !== "0",
+      blockCapture: pref.get(PREF_BLOCK_CAPTURE) === "1",
       theme: ["light", "dark"].includes(theme) ? theme : "system",
       pendingDecoy: null,
       sendCheck: null,
@@ -1653,6 +1659,10 @@ export class App {
         pref.set(PREF_LOCK_ON_HIDE, this.s.lockOnHide ? "1" : "0");
         this.s.clipboardWipe = !!data.get("clipboardWipe");
         pref.set(PREF_CLIPBOARD_WIPE, this.s.clipboardWipe ? "1" : "0");
+        if (this.native) {
+          this.s.blockCapture = !!data.get("blockCapture");
+          pref.set(PREF_BLOCK_CAPTURE, this.s.blockCapture ? "1" : "0");
+        }
         this.touch();
         this.s.notice = tr("Auto-lock after {m} minutes{hide}. Clipboard wipe {wipe}.", { m, hide: this.s.lockOnHide ? tr(", and {s} s after the tab is hidden", { s: HIDDEN_LOCK_SECONDS }) : "", wipe: this.s.clipboardWipe ? tr("on") : tr("off") });
         this.render();
@@ -1680,7 +1690,19 @@ export class App {
     return t;
   }
 
+  /** Android FLAG_SECURE: on while the 24 words are on screen, or all the time when the setting says so. */
+  private applyCapture() {
+    if (!this.native) return;
+    const s = this.s;
+    const words = s.screen === "create" || s.screen === "duress-words" || (s.screen === "export" && !!s.exportWords);
+    const on = s.blockCapture || words;
+    if (on === this.secureOn) return;
+    this.secureOn = on;
+    void this.browser.setSecure?.({ on }).catch(() => undefined);
+  }
+
   private render() {
+    this.applyCapture();
     const s = this.s;
     const body = {
       welcome: () => this.vWelcome(),
@@ -2135,6 +2157,7 @@ export class App {
       <form data-form="autolock">
         ${check("lockOnHide", tr("Lock {s} s after this tab is hidden or the screen goes off", { s: HIDDEN_LOCK_SECONDS }), this.s.lockOnHide)}
         ${check("clipboardWipe", tr("Clear the clipboard {s} s after copying an address", { s: CLIPBOARD_WIPE_SECONDS }), this.s.clipboardWipe)}
+        ${this.native ? check("blockCapture", tr("Block screenshots and screen recording of the whole app (the 24 words are always blocked)"), this.s.blockCapture) : ""}
         ${field(tr("Auto-lock after minutes without activity"), input({ name: "minutes", class: "mono", type: "number", min: 1, max: 120, value: this.s.autolockMinutes, style: "max-width:7em" }))}
         <div class="row tight">${button(tr("Save"))}</div>
       </form>

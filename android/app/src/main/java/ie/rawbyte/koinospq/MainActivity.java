@@ -1,16 +1,9 @@
 package ie.rawbyte.koinospq;
 
-import android.os.Bundle;
-import android.view.WindowManager;
-
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
-    @Override
-    public void onCreate(Bundle savedInstanceState) {
-        // The 24 words and the seed are shown on screen: no screenshots, no screen recording, no casting,
-        // and a blank thumbnail in the app switcher.
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
-        super.onCreate(savedInstanceState);
-    }
+    // Screenshot / screen-recording blocking (FLAG_SECURE) is no longer set here for the whole app.
+    // The wallet switches it on from JavaScript (PqBrowser.setSecure) while the 24 words are on
+    // screen, and all the time when the "Block screenshots" setting is on.
 }

@@ -20,6 +20,8 @@ export interface PqBrowserPlugin {
   setFrame(o: { top: number; bottom: number }): Promise<void>;
   /** Desktop layout (a wide viewport, a desktop user agent) and a reload; the way out of a page whose phone layout cannot be used. */
   setDesktop(o: { on: boolean }): Promise<void>;
+  /** Android FLAG_SECURE on the whole app window (no screenshots, recording, casting or recents thumbnail). A no-op on iOS, which cannot refuse a screenshot. */
+  setSecure(o: { on: boolean }): Promise<void>;
   /** Hands an answer to the page (window.__pqDeliver). */
   reply(o: { json: string }): Promise<void>;
   /** `origin` and `mainFrame` come from the WebView itself (WebMessageListener / WKFrameInfo), never from the page. */

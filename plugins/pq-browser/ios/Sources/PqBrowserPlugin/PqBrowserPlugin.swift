@@ -20,6 +20,7 @@ public class PqBrowserPlugin: CAPPlugin, CAPBridgedPlugin, WKScriptMessageHandle
         CAPPluginMethod(name: "hide", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setFrame", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setDesktop", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setSecure", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "reply", returnType: CAPPluginReturnPromise)
     ]
 
@@ -98,6 +99,11 @@ public class PqBrowserPlugin: CAPPlugin, CAPBridgedPlugin, WKScriptMessageHandle
             }
             call.resolve()
         }
+    }
+
+    /// iOS has no way to refuse a screenshot or a recording; the blur cover on resign-active is the equivalent. Accepted so the app can call it on both platforms.
+    @objc func setSecure(_ call: CAPPluginCall) {
+        call.resolve()
     }
 
     @objc func setFrame(_ call: CAPPluginCall) {

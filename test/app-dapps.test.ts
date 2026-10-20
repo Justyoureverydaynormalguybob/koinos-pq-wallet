@@ -51,6 +51,7 @@ function fakeBrowser() {
     async setFrame(o) {
       calls.push(`frame top=${o.top} bottom=${o.bottom}`);
     },
+    async setSecure() {},
     async reply(o) {
       replies.push(JSON.parse(o.json));
     },
