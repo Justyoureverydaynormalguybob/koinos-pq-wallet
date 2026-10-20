@@ -1,5 +1,5 @@
 {
-  "checked": "2026-10-19",
+  "checked": "2026-10-20",
   "dapps": [
     {
       "id": "pq-demo",
@@ -10,6 +10,18 @@
       "url": "https://wallet.koinosproof.com/demo/",
       "tags": [
         "test"
+      ]
+    },
+    {
+      "id": "kfs",
+      "icon": null,
+      "name": "Koinos Fund System",
+      "summary": "Proposals and votes",
+      "description": "The community fund: read the proposals asking for KOIN, see how the vote stands, and vote with your account's KOIN and VHP. The site connects to this wallet through window.kondor.",
+      "url": "https://kfs.koinos.io/",
+      "tags": [
+        "governance",
+        "proposals"
       ]
     },
     {
@@ -45,6 +57,17 @@
       "tags": [
         "mining",
         "pool"
+      ]
+    },
+    {
+      "id": "koinos",
+      "icon": null,
+      "name": "Koinos",
+      "summary": "The Koinos project site",
+      "description": "News, documentation and links for the Koinos blockchain.",
+      "url": "https://koinos.io/",
+      "tags": [
+        "info"
       ]
     }
   ]

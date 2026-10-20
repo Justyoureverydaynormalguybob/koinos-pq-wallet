@@ -1,7 +1,7 @@
 {
   "chainId": "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
   "network": "mainnet",
-  "checked": "2026-10-19",
+  "checked": "2026-10-20",
   "tokens": [
     {
       "address": "19GYjDBVXU7keLbYvMLazsGQn3GTWHjHkK",
@@ -356,6 +356,102 @@
       "priceUrl": null,
       "pricePath": null,
       "priceUnit": null
+    },
+    {
+      "address": "1Ee4FLRyLWEhmhGZzwiRe82yXtJmq5J7yJ",
+      "symbol": "RLE",
+      "name": "RL-ENERGY",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
+    },
+    {
+      "address": "1HMmpaijocfMvTXDZ6hchQdqDfg2YoFdca",
+      "symbol": "MK",
+      "name": "1000",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
+    },
+    {
+      "address": "1Mfor8Ym29er1pu3WEDCFLwnjQyTGisiYe",
+      "symbol": "ASS",
+      "name": "Acute Sith Saber",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
+    },
+    {
+      "address": "1NukkXJRYagDxqCt1RTDixAU7tq343g6Ea",
+      "symbol": "ALIEN",
+      "name": "Alienkoin",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
+    },
+    {
+      "address": "19gboDCAUprvxpmyic71Mka5EfWGeCKa6K",
+      "symbol": "RAD",
+      "name": "RAD",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
+    },
+    {
+      "address": "15YQgWLr1oNyT6PP2HtDMvku3A23UMMKrR",
+      "symbol": "JESUS",
+      "name": "Jesus Koin",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
+    },
+    {
+      "address": "1MMrHqnC1fXHg6z2jYPz9j4shHZotgtqrD",
+      "symbol": "TATE",
+      "name": "TateKOIN",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
+    },
+    {
+      "address": "18KGbsusLPrpj6x3VWwoeSxpMe1dudqBbC",
+      "symbol": "USDS",
+      "name": "USD STABLE",
+      "decimals": 8,
+      "logo": null,
+      "website": null,
+      "priceUrl": null,
+      "pricePath": null,
+      "priceUnit": null,
+      "system": false
     }
   ]
 }
