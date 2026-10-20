@@ -25,7 +25,7 @@ import { WcBridge, type WcSession } from "./wc-bridge";
 import { CLIPBOARD_WIPE_SECONDS, copyWithWipe } from "../core/clipboard";
 import { CustomTokens, allTokens, customTokensNamespace, findToken, formatUnits, parseUnits, type Token } from "../core/tokens";
 import {
-  addressStrip, balance, button, card, check, esc, field, fmtAmount, header, hexStrip, input, linkButton, list, listRow, notice, section, shortAddr, stat, tabBar,
+  addressStrip, balance, button, card, check, esc, field, fmtAmount, fmtInt, header, hexStrip, input, linkButton, list, listRow, notice, section, shortAddr, stat, tabBar,
   ticker, tile, words, type Tab,
 } from "./components";
 import { isNative } from "./platform";
@@ -238,6 +238,8 @@ function clearWalletStores() {
 }
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
+/** foreground poll of head, balance and mana (three ~400-byte reads); the activity list is re-read only when the balance moved */
+const LIVE_POLL_MS = 10_000;
 
 const pref = {
   get(k: string): string | null {
@@ -264,6 +266,8 @@ export function applyTheme(theme: Theme) {
 }
 
 export interface AppOptions {
+  /** live poll period in ms; 0 turns it off (tests) */
+  livePollMs?: number;
   /** the camera scanner to use (tests pass a fake); the plugin by default */
   scanner?: Scanner;
   /** the keystore and biometric prompt (tests pass fakes); the plugins by default */
@@ -282,6 +286,8 @@ export class App {
   private root: HTMLElement;
   private lockTimer: number | undefined;
   private hideTimer: number | undefined;
+  private liveTimer: number | undefined;
+  private liveBusy = false;
   private readonly scanner: Scanner | undefined;
   private readonly native: boolean;
   private readonly bio: BioDeps;
@@ -380,8 +386,11 @@ export class App {
     for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => this.touch(), { passive: true });
     window.addEventListener("resize", () => this.placeDapp());
     // a tab that is hidden (another tab, minimised, screen off) locks after HIDDEN_LOCK_SECONDS
+    const livePollMs = opts.livePollMs ?? LIVE_POLL_MS;
+    if (livePollMs > 0) this.liveTimer = window.setInterval(() => void this.liveTick(), livePollMs);
     document.addEventListener("visibilitychange", () => {
       window.clearTimeout(this.hideTimer);
+      if (document.visibilityState === "visible" && livePollMs > 0) void this.liveTick();
       if (document.visibilityState === "hidden" && this.s.lockOnHide && this.unlocked()) {
         this.hideTimer = window.setTimeout(() => {
           if (document.visibilityState === "hidden" && !this.s.setup?.running) this.lock("Locked while the tab was hidden.");
@@ -581,6 +590,63 @@ export class App {
     };
     await Promise.all([worker(), worker(), worker()]);
     if (this.s.balancesFor === key && this.s.screen === "home" && !this.s.busy) this.render();
+  }
+  /**
+   * The live poll: head, balance and mana every LIVE_POLL_MS while the wallet is unlocked and on screen,
+   * patched into the page in place (no re-render, so nothing being typed is lost). When the balance moved,
+   * the activity list and the token rows are re-read too; those are the heavy calls, so only then.
+   */
+  private async liveTick() {
+    if (this.liveBusy || !this.s.keys || this.s.busy || this.s.setup?.running) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    this.liveBusy = true;
+    try {
+      const chain = this.chain();
+      const a = this.account();
+      const net = this.network.name;
+      const before = this.s.balance;
+      const none = () => Promise.reject(new Error("no account"));
+      const [head, balance, mana] = await Promise.allSettled([chain.headHeight(), a ? chain.balance(a.address) : none(), a ? chain.mana(a.address) : none()]);
+      // locked, or the network / account changed while the reads were out: the answers belong to the old view
+      if (!this.s.keys || this.network.name !== net || this.account()?.address !== a?.address) return;
+      if (head.status === "fulfilled") this.s.head = head.value;
+      if (mana.status === "fulfilled") this.s.mana = mana.value;
+      let moved = false;
+      if (balance.status === "fulfilled") {
+        moved = balance.value !== before;
+        this.s.balance = balance.value;
+      }
+      this.patchLive();
+      if (moved && a) {
+        this.s.balancesFor = ""; // token rows are stale too
+        try {
+          this.s.history = await chain.history(a.address);
+        } catch {
+          /* next tick */
+        }
+        if (this.s.keys && !this.s.busy && (this.s.screen === "home" || this.s.screen === "history") && !this.typing()) this.render();
+        void this.fillTokenBalances(a.address);
+      }
+    } catch {
+      /* quiet: the next tick tries again */
+    } finally {
+      this.liveBusy = false;
+    }
+  }
+  /** Writes head, balance and mana into the elements already on screen. */
+  private patchLive() {
+    const s = this.s;
+    const headEl = this.root.querySelector<HTMLElement>("#ticker-head");
+    if (headEl && s.head !== null) headEl.textContent = `head ${fmtInt(s.head)}`;
+    const balEl = this.root.querySelector<HTMLElement>("#home-balance .bal .v");
+    if (balEl && s.balance !== null) balEl.textContent = fmtAmount(formatKoin(s.balance));
+    const manaEl = this.root.querySelector<HTMLElement>("#home-mana");
+    if (manaEl && s.mana !== null) manaEl.textContent = fmtAmount(formatKoin(s.mana, 2));
+  }
+  /** an input has focus: a full re-render would throw away what is being typed */
+  private typing(): boolean {
+    const el = typeof document !== "undefined" ? document.activeElement : null;
+    return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
   }
   /** Home, or straight to activation when this network has no account for the wallet yet. */
   private async enterHome() {
@@ -1871,9 +1937,9 @@ export class App {
         <span class="lbl">${esc(a.label)} · ${esc(this.network.name)}</span>
         ${addressStrip(a.address)}
         <div class="row tight">${button(tr("Copy"), { action: "copy", mini: true, data: { copy: a.address } })}${button(tr("Refresh"), { action: "refresh", variant: "ghost", mini: true })}${this.network.explorerAddress ? `<a class="btn ghost mini" href="${esc(this.network.explorerAddress(a.address))}" target="_blank" rel="noopener noreferrer">${tr("Explorer")}</a>` : ""}</div>
-        <div style="margin-top:20px">${balance(s.balance === null ? null : fmtAmount(formatKoin(s.balance)), unit)}</div>
+        <div style="margin-top:20px" id="home-balance">${balance(s.balance === null ? null : fmtAmount(formatKoin(s.balance)), unit)}</div>
         <div style="margin-top:12px">
-          ${stat(tr("Mana"), s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2))))}
+          ${stat(tr("Mana"), `<span id="home-mana">${s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2)))}</span>`)}
           ${stat(tr("Signature"), canSign(a) ? esc(sig) : "none here (watch-only)")}
         </div>
         <div class="actions">

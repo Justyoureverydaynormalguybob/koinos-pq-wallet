@@ -285,6 +285,9 @@ chain, because a step can succeed while the mempool still reports a hold.
   resume where they stopped.
 - **Finds the account again** from the 24 words on any network, with nothing stored.
 - Balance, mana and head block for mainnet, Harbinger or a devnet (RPC configurable); QR code.
+  While the wallet is unlocked and on screen they refresh every 10 s (three small reads, about
+  1 MB an hour); the activity list and token rows are re-read only when the balance moved. Nothing
+  runs in the background or while locked.
 - Sends KOIN, checks the signature locally before broadcasting, shows the transaction id, waits for
   the block, links to the explorer. History through the JSON-RPC gateway.
 - Settings: show the words again, auto-lock time, delete the wallet; under Advanced, accounts set
