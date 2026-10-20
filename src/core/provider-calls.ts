@@ -52,7 +52,7 @@ export async function handleProvider(command: string, a: Record<string, unknown>
       return p.invokeGetContractMetadata(a.contractId as string);
     case "provider:invokeSystemCall":
       // kondor-js passes a koilib Serializer, which cannot cross a JSON message boundary
-      throw new Error("invokeSystemCall is not supported by Koinos PQ Wallet; use provider.call");
+      throw new Error("invokeSystemCall is not supported by Sparán; use provider.call");
     default:
       throw new Error(`unsupported command ${command}`);
   }

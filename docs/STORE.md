@@ -23,7 +23,7 @@ in the publisher's legal name, which the stores show on the listing whatever the
 
 ## Google Play, internal testing track
 
-1. Play Console → Create app: name "Koinos PQ Wallet", default language English, app (not game),
+1. Play Console → Create app: name "Sparán", default language English, app (not game),
    free. Declarations: no ads, not aimed at children.
 2. Set up the app:
    - Privacy policy: the URL above.

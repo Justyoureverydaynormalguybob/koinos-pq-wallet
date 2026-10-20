@@ -4,7 +4,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 // the WebView's storage holds the encrypted vault exactly as a browser's localStorage would.
 const config: CapacitorConfig = {
   appId: "ie.rawbyte.koinospq",
-  appName: "Koinos PQ Wallet",
+  appName: "Sparán",
   webDir: "dist",
   android: { allowMixedContent: false },
   ios: { contentInset: "automatic" },

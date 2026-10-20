@@ -1,4 +1,4 @@
-# Testing the Koinos PQ Wallet browser extension
+# Testing the Sparán browser extension
 
 A developer preview. It is not on the Chrome Web Store yet and it has not been audited, so use
 small amounts and an account you would not mind losing.
@@ -25,7 +25,7 @@ you type your passphrase.
 1. Unzip the file somewhere you will keep it (Chrome loads it from that folder every time).
 2. Open `chrome://extensions`, turn on **Developer mode** (top right), click **Load unpacked**, and
    pick the unzipped folder (the one that contains `manifest.json`).
-3. Click the puzzle-piece icon in the toolbar and pin **Koinos PQ Wallet**.
+3. Click the puzzle-piece icon in the toolbar and pin **Sparán**.
 
 ## Set up the wallet inside the extension
 
@@ -45,7 +45,7 @@ The test page is a plain web page with no wallet code of its own, so it shows ex
 dapp sees. It is at https://wallet.koinosproof.com/demo/ (or locally with `npm run dev` at
 http://localhost:5173/demo/).
 
-1. The page should say "Koinos PQ Wallet extension found". If it says no wallet was found, reload
+1. The page should say "Sparán extension found". If it says no wallet was found, reload
    the page once after loading the extension.
 2. **Connect wallet.** A small window opens naming the page and asking for your passphrase. After
    it, the page lists your addresses. This is what a dapp's "connect" button does.

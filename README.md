@@ -1,5 +1,8 @@
 # koinos-pq-wallet
 
+The app is called **Sparán** (spuh-RAWN, the Irish word for a purse). The repository, package and application
+id keep their original names so existing installs update in place.
+
 A post-quantum wallet for Koinos. The account is controlled by an **ML-DSA-44** key (NIST FIPS 204)
 instead of secp256k1. This repo is the browser app and the browser extension, both built on
 [koinos-pq-core](https://github.com/Justyoureverydaynormalguybob/koinos-pq-core), the signing rules

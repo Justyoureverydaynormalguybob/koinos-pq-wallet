@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Koinos PQ Wallet: test dapp</title>
+    <title>Sparán: test dapp</title>
     <style>
       :root { color-scheme: dark; --bg: #0a0f1c; --ink: #e8edf5; --card: #111a2c; --card-2: #0d1424; --line: #1f2b42; --muted: #8d9ab0; --ok: #86efac; --bad: #fca5a5; --accent: #2dd4bf; --accent-ink: #052620; }
       html, body { margin: 0; background: radial-gradient(900px 420px at 50% -120px, rgba(45, 212, 191, 0.14), transparent 70%), var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
@@ -27,7 +27,7 @@
   </head>
   <body>
     <main>
-      <h1>Test dapp for Koinos PQ Wallet</h1>
+      <h1>Test dapp for Sparán</h1>
       <p>
         This page has no wallet code of its own. It uses <code>window.kondor</code>, the interface every Koinos dapp
         uses, so what works here works on a real dapp. Nothing is signed or sent without your approval in the
@@ -140,12 +140,12 @@
       const probe = setInterval(() => {
         if (window.kondor) {
           clearInterval(probe);
-          if (window.koinosPq) show($("status"), `Koinos PQ Wallet extension found (version ${window.koinosPq.version}).`, "ok");
-          else show($("status"), "A Kondor-compatible wallet was found, but the Koinos PQ Wallet did not announce itself. If Kondor is on, switch it off for this test and reload.", "bad");
+          if (window.koinosPq) show($("status"), `Sparán extension found (version ${window.koinosPq.version}).`, "ok");
+          else show($("status"), "A Kondor-compatible wallet was found, but the Sparán did not announce itself. If Kondor is on, switch it off for this test and reload.", "bad");
           $("connect").disabled = false;
         } else if (++tries > 20) {
           clearInterval(probe);
-          show($("status"), "No wallet extension found. Load the Koinos PQ Wallet extension, then reload this page.", "bad");
+          show($("status"), "No wallet extension found. Load the Sparán extension, then reload this page.", "bad");
         }
       }, 150);
 

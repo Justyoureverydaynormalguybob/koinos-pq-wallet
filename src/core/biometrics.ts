@@ -232,7 +232,7 @@ export const nativeBiometry: Biometry = {
         cancelTitle: "Use passphrase",
         allowDeviceCredential: false, // the device PIN is not the wallet's passphrase
         iosFallbackTitle: "",
-        androidTitle: "Koinos PQ Wallet",
+        androidTitle: "Sparán",
         androidSubtitle: reason,
         androidConfirmationRequired: false,
       });
