@@ -1914,7 +1914,7 @@ export class App {
       ${field(tr("Language"), sel("lang", LANGUAGES.map((l) => [l.code, l.name]), currentLanguage()))}
 
       ${section(null, tr("About"))}
-      <p class="mute">${tr("Sparán {version}. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.", { version: esc(__APP_VERSION__) })}</p>
+      <p class="mute">${tr("Sparán {version}, a post-quantum wallet for Koinos. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.", { version: esc(__APP_VERSION__) })}</p>
       <p class="fine"><a href="https://wallet.koinosproof.com/privacy.html" target="_blank" rel="noopener noreferrer">${tr("Privacy")}</a> · <a href="https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet" target="_blank" rel="noopener noreferrer">${tr("Source code")}</a></p>
 
       <details class="adv"><summary>Advanced</summary>

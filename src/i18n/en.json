@@ -116,7 +116,7 @@
   "It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.": "It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.",
   "Known: {name}": "Known: {name}",
   "Sparán · open source, MIT · a test build, not audited": "Sparán · open source, MIT · a test build, not audited",
-  "Sparán {version}. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.": "Sparán {version}, a post-quantum wallet for Koinos. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.",
+  "Sparán {version}, a post-quantum wallet for Koinos. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.": "Sparán {version}, a post-quantum wallet for Koinos. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.",
   "Language": "Language",
   "Light": "Light",
   "Lock": "Lock",

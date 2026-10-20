@@ -116,7 +116,7 @@
   "It shares its first and last characters, which is how address-poisoning attacks work: the attacker hopes you copied theirs from your history by mistake.": "Comparte sus primeros y últimos caracteres, que es como funcionan los ataques de envenenamiento de direcciones: el atacante espera que copiaras la suya de tu historial por error.",
   "Known: {name}": "Conocida: {name}",
   "Sparán · open source, MIT · a test build, not audited": "Sparán · código abierto, MIT · versión de prueba, sin auditar",
-  "Sparán {version}. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.": "Sparán {version}, una billetera poscuántica para Koinos. Código abierto, MIT. Las cuentas se controlan con una clave ML-DSA-44 (FIPS 204). Las claves nunca salen de este dispositivo. Versión de prueba, sin auditar.",
+  "Sparán {version}, a post-quantum wallet for Koinos. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.": "Sparán {version}, una billetera poscuántica para Koinos. Código abierto, MIT. Las cuentas se controlan con una clave ML-DSA-44 (FIPS 204). Las claves nunca salen de este dispositivo. Versión de prueba, sin auditar.",
   "Language": "Idioma",
   "Light": "Claro",
   "Lock": "Bloquear",
