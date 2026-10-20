@@ -129,6 +129,8 @@ interface State {
   hideZero: boolean;
   /** the token picked on the Send screen (contract address), "" for KOIN */
   sendToken: string;
+  /** recipient pre-filled from the activity list ("send back"); cleared when the Send tab is opened normally */
+  sendTo: string | null;
   /** sites allowed to see this wallet's accounts (in-app browser) */
   sites: SitePermissions | null;
   dapp: DappState;
@@ -319,6 +321,7 @@ export class App {
       balancesFor: "",
       hideZero: pref.get(PREF_HIDE_ZERO) !== "0",
       sendToken: "",
+      sendTo: null,
       sites: null,
       dapp: emptyDapp(),
       collections: null,
@@ -479,6 +482,7 @@ export class App {
     this.s.balances = {};
     this.s.balancesFor = "";
     this.s.sendToken = "";
+    this.s.sendTo = null;
     this.s.sites = null;
     this.s.collections = null;
     this.s.nft = emptyNft();
@@ -1123,8 +1127,16 @@ export class App {
         break;
       case "send":
         this.s.sent = null;
+        this.s.sendTo = null;
         this.go("send");
         break;
+      case "send-to": {
+        // "send back" from the activity list: the counterparty becomes the recipient, nothing else changes
+        this.s.sent = null;
+        this.s.sendTo = el.dataset.address ?? null;
+        this.go("send");
+        break;
+      }
       case "receive":
         this.go("receive");
         break;
@@ -1973,7 +1985,7 @@ export class App {
       <h1>Send <span id="send-sym">${esc(tok.symbol)}</span></h1>
       <form data-form="send">
         ${field(tr("Token"), `<select name="token">${tokens.map((t) => `<option value="${esc(t.address)}" ${t.address === tok.address ? "selected" : ""}>${esc(t.symbol)} · ${esc(this.tokenAmount(t))}</option>`).join("")}</select>`)}
-        <label class="field"><span>To</span><div class="withbtn">${input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: true, list: "contacts" })}${
+        <label class="field"><span>To</span><div class="withbtn">${input({ name: "to", class: "mono", autocomplete: "off", required: true, placeholder: "1…", autofocus: !this.s.sendTo, list: "contacts", value: this.s.sendTo ?? "" })}${
           this.native
             ? button(`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg><span class="sr-only">Scan a QR code</span>`, { action: "scan", mini: true, title: tr("Scan a QR code") })
             : ""
@@ -2031,7 +2043,13 @@ export class App {
           amt = `<span class="amt">${i.direction === "out" ? "−" : "+"}${esc(value)}</span>`;
         }
         const meta = [i.txId ? esc(short(i.txId)) : "", i.blockHeight ? `block ${esc(fmtAmount(i.blockHeight))}` : ""].filter(Boolean).join(" · ");
-        return listRow(`${main}<br><span class="s mono">${meta}</span>`, amt);
+        const explorer = i.txId && this.network.explorerTx ? this.network.explorerTx(i.txId) : null;
+        const acts = [
+          i.counterparty ? linkButton(tr("copy address"), "copy", { copy: i.counterparty }) : "",
+          i.counterparty && i.direction === "in" && a?.mode === "pqwallet" ? linkButton(tr("send back"), "send-to", { address: i.counterparty }) : "",
+          explorer ? `<a class="link" href="${esc(explorer)}" target="_blank" rel="noopener noreferrer">${tr("explorer")}</a>` : "",
+        ].filter(Boolean);
+        return listRow(`${main}<br><span class="s mono">${meta}</span>${acts.length ? `<br><span class="s acts">${acts.join(" · ")}</span>` : ""}`, amt);
       })
       .join("");
     return `
