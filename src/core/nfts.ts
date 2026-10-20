@@ -134,9 +134,18 @@ export const IPFS_GATEWAYS = ["https://ipfs.io/ipfs/", "https://dweb.link/ipfs/"
 /** Exactly the hosts the CSP allows (index.html, deploy/headers.conf). Keep the three in step. */
 export const ALLOWED_HOSTS = ["ipfs.io", "dweb.link", "arweave.net"] as const;
 
-/** ipfs://CID/path -> the first gateway; an https URL on an allowed host as is; anything else null. */
+/** an inline picture: a base64 data URI of a raster or SVG type, at most this many characters */
+const DATA_IMAGE = /^data:image\/(?:png|jpeg|jpg|gif|webp|avif|svg\+xml);base64,[A-Za-z0-9+/=\s]+$/;
+export const MAX_DATA_IMAGE = 512_000;
+
+/**
+ * ipfs://CID/path -> the first gateway; an https URL on an allowed host as is; an inline base64
+ * image (data:image/...) as is, which is how on-chain collections carry their art (an <img> never
+ * runs script, SVG included, and the CSP allows data: for images only); anything else null.
+ */
 export function resolveAssetUrl(u: string): string | null {
   const t = u.trim();
+  if (t.startsWith("data:")) return t.length <= MAX_DATA_IMAGE && DATA_IMAGE.test(t) ? t : null;
   const ipfs = /^ipfs:\/\/(?:ipfs\/)?([A-Za-z0-9]+)(\/.*)?$/.exec(t);
   if (ipfs) return `${IPFS_GATEWAYS[0]}${ipfs[1]}${ipfs[2] ?? ""}`;
   try {

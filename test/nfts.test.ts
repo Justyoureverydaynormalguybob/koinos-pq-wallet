@@ -64,6 +64,13 @@ describe("labels, assets and metadata", () => {
     expect(resolveAssetUrl("http://ipfs.io/ipfs/Qm123")).toBeNull();
     expect(resolveAssetUrl("https://evil.example/x.png")).toBeNull();
     expect(resolveAssetUrl("javascript:alert(1)")).toBeNull();
+    // on-chain art: Discover Koinos Paint (1NgV8Jjr2YokXWSZ6a3Kddk4patYRDF8pU) puts a base64 SVG in metadata_of
+    const svg = "data:image/svg+xml;base64," + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString("base64");
+    expect(resolveAssetUrl(svg)).toBe(svg);
+    expect(resolveAssetUrl("data:image/png;base64,iVBORw0KGgo=")).toBe("data:image/png;base64,iVBORw0KGgo=");
+    expect(resolveAssetUrl("data:text/html;base64,PHNjcmlwdD4=")).toBeNull();
+    expect(resolveAssetUrl("data:image/svg+xml,<svg onload=alert(1)/>")).toBeNull();
+    expect(resolveAssetUrl("data:image/png;base64," + "A".repeat(600_000))).toBeNull();
     expect(resolveAssetUrl("")).toBeNull();
   });
   it("metadata: name, description and an allowed image; junk gives empty fields", async () => {
