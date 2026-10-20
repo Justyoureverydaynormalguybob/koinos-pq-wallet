@@ -72,7 +72,8 @@ export interface BookStore {
   set(key: string, value: string): void;
 }
 
-const localStore: BookStore = {
+/** The raw local store (the app wraps it in a SealedStore before handing it to any of the stores). */
+export const localBookStore: BookStore = {
   get(k) {
     try {
       return globalThis.localStorage?.getItem(k) ?? null;
@@ -88,6 +89,7 @@ const localStore: BookStore = {
     }
   },
 };
+const localStore = localBookStore;
 
 export class AddressBook {
   private readonly key: string;

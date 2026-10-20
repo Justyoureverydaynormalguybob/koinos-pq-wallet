@@ -29,9 +29,18 @@ a token transfer is the same signed operation as a KOIN transfer with a differen
 
 Since 0.8.0, on Android and iOS: **QR scanning** of a recipient address on Send (the code must be a
 checksum-valid Koinos address or a `koinos:` URI, nothing else is pasted), and **biometric unlock**: the
-wallet's slot key wrapped under a key the device keystore holds and releases after the fingerprint or
-face check; the passphrase is never stored and always works. See `docs/SECURITY.md` for what that
-protects against and what it does not.
+wallet's slot key wrapped under a key the device keystore releases only to a strong biometric that
+passes (since 0.15.0 through the wallet's own `plugins/pq-bio`: bound to the enrolment, so a new
+fingerprint or face kills the key); the passphrase is never stored and always works. See
+`docs/SECURITY.md` for what that protects against and what it does not.
+
+Since 0.15.0: **WalletConnect**. Dapps on another device or browser (KoinDX, Vortex Bridge, anything on
+the Koinos WalletConnect SDK) pair by QR code or a pasted `wc:` link from the Dapps tab; a `wc:` link
+opened on the phone lands in the app. Every request a session sends goes through the same approval
+sheet and the same rules as the in-app browser. It needs a WalletConnect project id, free from
+cloud.reown.com: paste it under Settings › WalletConnect, or bake one into a build with
+`VITE_WC_PROJECT_ID=… npm run build`. Also since 0.15.0 the side stores (contacts, added tokens,
+allowed sites, collections) are sealed under the open wallet's slot key.
 
 Since 0.9.0, on Android and iOS: an **in-app dapp browser** (the Dapps tab). It is the wallet's own
 Capacitor plugin (`plugins/pq-browser`, about 150 lines of Java and of Swift, no third-party code): a

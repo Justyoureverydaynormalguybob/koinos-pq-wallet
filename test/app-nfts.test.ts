@@ -116,7 +116,9 @@ describe("collectibles (jsdom, a fake node over HTTP)", () => {
     await submit(root, "add-collection", { address: COLLECTION });
     expect(text(root)).toMatch(/Added Koinos Garden/);
     expect(text(root)).toMatch(/GOAT/);
-    expect(Object.keys(localStorage).filter((k) => k.startsWith("koinos-pq-wallet/collections/")).map((k) => localStorage.getItem(k)!).join("\n")).toMatch(/Koinos Garden/);
+    const stored = Object.keys(localStorage).filter((k) => k.startsWith("koinos-pq-wallet/collections/")).map((k) => localStorage.getItem(k)!);
+    expect(stored.every((v) => v.startsWith("sealed1:"))).toBe(true); // sealed under the slot key
+    expect(stored.join("\n")).not.toMatch(/Koinos Garden/);
     // open: two tokens, then their names arrive from the metadata
     click(root, "nft-collection", { address: COLLECTION });
     await settle();

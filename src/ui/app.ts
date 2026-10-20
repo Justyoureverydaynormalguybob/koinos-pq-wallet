@@ -18,8 +18,10 @@ import {
   decoySlotFor, decryptVault, encryptVault, localVaultStore, MAX_ACCOUNTS, MIN_PASSPHRASE_LENGTH, newFile, openVault, roleOf, SLOT_COUNT, toFile, withSlot,
   type AccountRecord, type VaultData, type VaultFile,
 } from "../core/vault";
-import { canSign, detectAccount, displayLabel } from "../core/accounts";
-import { AddressBook, addressBookNamespace, type Assessment } from "../core/addressbook";
+import { canSign, detectAccount, displayLabel, walletAccounts } from "../core/accounts";
+import { AddressBook, addressBookNamespace, localBookStore, type Assessment } from "../core/addressbook";
+import { SealedStore, fillerValue, storeKeyFrom } from "../core/sealed-store";
+import { WcBridge, type WcSession } from "./wc-bridge";
 import { CLIPBOARD_WIPE_SECONDS, copyWithWipe } from "../core/clipboard";
 import { CustomTokens, allTokens, customTokensNamespace, findToken, formatUnits, parseUnits, type Token } from "../core/tokens";
 import {
@@ -130,6 +132,10 @@ interface State {
   /** sites allowed to see this wallet's accounts (in-app browser) */
   sites: SitePermissions | null;
   dapp: DappState;
+  /** WalletConnect sessions of the open wallet (for the Dapps tab) */
+  wcSessions: WcSession[];
+  /** the key the side stores are sealed under (from the slot key); wiped on lock */
+  storeKey: Uint8Array | null;
   /** NFT collections added by address on this wallet */
   collections: Collections | null;
   nft: NftState;
@@ -169,16 +175,20 @@ const PREF_LOCK_ON_HIDE = "koinos-pq-wallet/lock-on-hide";
 const PREF_CLIPBOARD_WIPE = "koinos-pq-wallet/clipboard-wipe";
 const PREF_THEME = "koinos-pq-wallet/theme";
 const PREF_HIDE_ZERO = "koinos-pq-wallet/hide-zero";
+const PREF_WC_PROJECT = "koinos-pq-wallet/wc-project-id";
+/** a project id baked in at build time (VITE_WC_PROJECT_ID), overridable in Settings; empty means WalletConnect is off */
+const WC_PROJECT_DEFAULT = (import.meta.env?.VITE_WC_PROJECT_ID as string | undefined) ?? "";
 /** how long after the approval sheet appears before Approve accepts a tap (a tap meant for the page must not land on it) */
 const APPROVE_DELAY_MS = 800;
 
 // The per-wallet side stores (contacts, added tokens, allowed sites, collections) are kept per vault slot,
-// and every slot's entries exist from the first unlock on, so local storage looks the same whether one
-// wallet lives on the device or two. (Until 0.14 they were keyed by a hash of the seed: a second key set
-// appearing was a tell that a duress wallet had been made.)
+// sealed under that slot's key (src/core/sealed-store.ts), and every slot's entries exist from the first
+// unlock on as filler of the same size, so local storage looks the same whether one wallet lives on the
+// device or two, and says nothing about either. (Until 0.14 they were plain JSON keyed by a hash of the
+// seed: readable by anyone with the storage, and a second key set was a tell that a duress wallet existed.)
 type StoreKind = "book" | "tokens" | "sites" | "collections";
 const STORE_KINDS: StoreKind[] = ["book", "tokens", "sites", "collections"];
-const emptyStore = (kind: StoreKind) => (kind === "book" || kind === "sites" ? "[]" : "{}");
+const emptyStore = (_kind: StoreKind) => fillerValue();
 const storeKey = (kind: StoreKind, ns: string) => `koinos-pq-wallet/${kind}/${ns}`;
 function ensureStored(key: string, empty: string) {
   try {
@@ -275,6 +285,9 @@ export class App {
   private readonly browser: PqBrowserPlugin;
   private readonly bridgeScript: (() => Promise<string>) | undefined;
   private host: DappHost | null = null;
+  private readonly wc = new WcBridge();
+  /** a wc: link that arrived while locked, paired once the wallet opens */
+  private pendingWcUri: string | null = null;
   private approveDelayMs: number;
   /** the approval the sheet currently shows and when it appeared */
   private sheetKey = "";
@@ -328,6 +341,8 @@ export class App {
       pendingDecoy: null,
       sendCheck: null,
       setup: null,
+      wcSessions: [],
+      storeKey: null,
       detected: {},
       change: null,
     };
@@ -336,13 +351,19 @@ export class App {
     initLanguage();
     if (this.native) {
       // the hardware back button on Android (no-op elsewhere); the plugin is loaded on demand
-      void import("@capacitor/app").then(({ App: CapApp }) =>
-        CapApp.addListener("backButton", () => {
+      void import("@capacitor/app").then(({ App: CapApp }) => {
+        void CapApp.addListener("backButton", () => {
           void this.handleBack().then((r) => {
             if (r === "minimize") void CapApp.minimizeApp();
           });
-        }),
-      ).catch(() => undefined);
+        });
+        // a WalletConnect link from a dapp or a QR app: paired now, or right after the next unlock
+        void CapApp.addListener("appUrlOpen", ({ url }) => {
+          if (!/^wc:/i.test(url)) return;
+          if (this.unlocked() && this.s.keys) void this.run("Connecting", () => this.pairWc(url));
+          else this.pendingWcUri = url;
+        });
+      }).catch(() => undefined);
     }
     root.addEventListener("click", (e) => this.onClick(e));
     root.addEventListener("submit", (e) => this.onSubmit(e));
@@ -429,7 +450,11 @@ export class App {
     }, this.s.autolockMinutes * 60_000);
   }
   private lock(notice?: string) {
+    this.wc.detach();
     if (this.s.keys) wipe(this.s.keys.secretKey, this.s.keys.seed);
+    if (this.s.storeKey) wipe(this.s.storeKey);
+    this.s.storeKey = null;
+    this.s.wcSessions = [];
     if (this.s.pendingSeed) wipe(this.s.pendingSeed);
     this.s.keys = null;
     this.s.vault = null;
@@ -556,12 +581,12 @@ export class App {
     const seed = this.s.pendingSeed;
     if (!seed) throw new Error(tr("nothing to save"));
     const vault: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: this.s.pendingAccounts, createdAt: new Date().toISOString(), role: "main" };
-    const { file, slot } = await newFile(vault, passphrase);
+    const { file, slot, key } = await newFile(vault, passphrase);
     if (!localVaultStore.save(file)) throw new Error(tr("this browser blocks local storage; the wallet cannot be saved here"));
     this.s.file = file;
     this.s.slot = slot;
     this.s.vault = vault;
-    this.startSession(seed);
+    this.startSession(seed, key);
     this.s.pendingSeed = null;
     this.s.pendingMnemonic = null;
     this.s.pendingAccounts = [];
@@ -575,17 +600,58 @@ export class App {
    * to the slot's keys once. The seed buffer is wiped unless the keys alias it (koinos-pq-core before
    * 2026-10-19 shared it; wiping then zeroed keys.seed and every wallet collided on one address).
    */
-  private startSession(seed: Uint8Array) {
+  private startSession(seed: Uint8Array, slotKey: Uint8Array) {
     this.s.keys = deriveKeys(seed);
     const ns = `slot${this.s.slot}`;
     const legacy: Record<StoreKind, string> = { book: addressBookNamespace(seed), tokens: customTokensNamespace(seed), sites: permissionsNamespace(seed), collections: collectionsNamespace(seed) };
     for (const kind of STORE_KINDS) moveStored(storeKey(kind, legacy[kind]), storeKey(kind, ns));
     for (let i = 0; i < SLOT_COUNT; i++) for (const kind of STORE_KINDS) ensureStored(storeKey(kind, `slot${i}`), emptyStore(kind));
-    this.s.book = new AddressBook(ns);
-    this.s.tokens = new CustomTokens(ns);
-    this.s.sites = new SitePermissions(ns);
-    this.s.collections = new Collections(ns);
+    this.s.storeKey = storeKeyFrom(slotKey);
+    wipe(slotKey);
+    const sealed = new SealedStore(this.s.storeKey, localBookStore);
+    this.s.book = new AddressBook(ns, sealed);
+    this.s.tokens = new CustomTokens(ns, sealed);
+    this.s.sites = new SitePermissions(ns, sealed);
+    this.s.collections = new Collections(ns, sealed);
     if (this.s.keys.seed !== seed) wipe(seed);
+    this.wc.attach(this.dappHost(), {
+      projectId: () => this.wcProjectId(),
+      network: () => this.network,
+      keys: () => this.s.keys,
+      accounts: () => this.s.vault?.accounts ?? [],
+      signingAddresses: async () => {
+        const keys = this.s.keys;
+        if (!keys) return [];
+        const detected = await detectAccount(this.chain(), keys).catch(() => null);
+        return walletAccounts(keys, this.s.vault?.accounts ?? [], this.network.name, detected).map((a) => a.address);
+      },
+      onSessionsChanged: () => {
+        void this.wc.sessions().then((list) => {
+          this.s.wcSessions = list;
+          if (this.s.screen === "dapps") this.render();
+        });
+      },
+      notify: (text) => {
+        this.s.notice = text;
+        this.render();
+      },
+    });
+    void this.wc.resume();
+    if (this.pendingWcUri) {
+      const uri = this.pendingWcUri;
+      this.pendingWcUri = null;
+      void this.run("Connecting", () => this.pairWc(uri));
+    }
+  }
+  private wcProjectId(): string {
+    return (pref.get(PREF_WC_PROJECT) ?? "").trim() || WC_PROJECT_DEFAULT;
+  }
+  /** Pairs with a dapp from a wc: URI; the proposal then arrives on the approval sheet. */
+  private async pairWc(uri: string) {
+    if (!this.wcProjectId()) throw new Error(tr("WalletConnect needs a project id first: Settings › WalletConnect."));
+    await this.wc.pair(uri);
+    this.s.screen = "dapps";
+    this.s.notice = tr("Connected to the relay. The dapp's request appears here in a moment.");
   }
   /** The passphrase must open the slot this session was unlocked from; anything else is "wrong". */
   private async reopenCurrent(passphrase: string): Promise<VaultData> {
@@ -597,9 +663,10 @@ export class App {
     if (!change || !this.s.file) throw new Error(tr("nothing to save"));
     const vault = await this.reopenCurrent(passphrase); // also checks the passphrase
     change.apply(vault);
+    const previous = this.s.file;
     const file = withSlot(this.s.file, this.s.slot, await encryptVault(vault, passphrase));
     if (!localVaultStore.save(file)) throw new Error(tr("could not write to local storage"));
-    await refreshWrappedKey(file, this.s.slot, passphrase, this.bio).catch(() => undefined); // biometrics, if on for this slot, follow the new salt
+    await refreshWrappedKey(file, this.s.slot, passphrase, this.bio, previous).catch(() => undefined); // biometrics, if on for this slot, follow the new salt (no prompt)
     this.s.file = file;
     this.s.vault = vault;
     this.s.change = null;
@@ -763,7 +830,7 @@ export class App {
     this.s.slot = opened.slot;
     this.s.vault = opened.data;
     const seed = hexToBytes(opened.data.seedHex);
-          this.startSession(seed);
+          this.startSession(seed, opened.key);
     this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
     this.touch();
     await this.enterHome();
@@ -1116,6 +1183,19 @@ export class App {
       case "dapp-back":
         void this.dappHost().back();
         break;
+      case "wc-scan":
+        void this.run("Scanning", async () => {
+          const text = await this.scanner?.();
+          if (!text) return;
+          await this.pairWc(text.trim());
+        });
+        break;
+      case "wc-disconnect":
+        void this.run("Disconnecting", async () => {
+          await this.wc.disconnect(el.dataset.topic ?? "");
+          this.s.notice = tr("Disconnected.");
+        });
+        break;
       case "dapp-desktop":
         this.s.dapp.desktop = !this.s.dapp.desktop;
         void this.dappHost().setDesktop(this.s.dapp.desktop).catch(() => undefined);
@@ -1319,7 +1399,7 @@ export class App {
           this.s.slot = opened.slot;
           this.s.vault = opened.data;
           const seed = hexToBytes(opened.data.seedHex);
-          this.startSession(seed);
+          this.startSession(seed, opened.key);
           this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
           this.touch();
           await this.enterHome();
@@ -1522,6 +1602,21 @@ export class App {
       case "dapp-open":
         void this.run("Opening", () => this.openDapp(field("url").trim()));
         break;
+      case "wc-pair":
+        void this.run("Connecting", () => this.pairWc(field("uri")));
+        break;
+      case "wc-project": {
+        const id = field("projectId").trim();
+        if (id && !/^[0-9a-f]{32}$/i.test(id)) {
+          this.s.error = tr("A project id is 32 hexadecimal characters.");
+          this.render();
+          return;
+        }
+        pref.set(PREF_WC_PROJECT, id);
+        this.s.notice = id ? tr("Saved. WalletConnect is on.") : tr("Saved. WalletConnect is off.");
+        this.render();
+        break;
+      }
       case "dapp-go":
         void this.run("Loading", async () => {
           let url = field("url").trim();
@@ -1918,6 +2013,49 @@ export class App {
       <div class="row tight">${button(tr("Refresh"), { action: "history", variant: "ghost", mini: true })}</div>`;
   }
 
+  private vWalletConnect(): string {
+    const on = !!this.wcProjectId();
+    const sessions = this.s.wcSessions;
+    const scanBtn = this.native && this.scanner ? button(`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="stroke:currentColor;fill:none;stroke-width:1.75"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="8" y="8" width="8" height="8"/></svg><span class="sr-only">${tr("Scan a WalletConnect code")}</span>`, { action: "wc-scan", mini: true, title: tr("Scan a WalletConnect code") }) : "";
+    return `
+      ${section(null, tr("WalletConnect"), on ? tr("on") : tr("off"))}
+      <p class="fine">${tr("For dapps on another device or in another browser (KoinDX, Vortex Bridge): choose WalletConnect on the dapp, then scan its code here or paste the wc: link. Every request still comes to this wallet's approval sheet.")}</p>
+      ${
+        on
+          ? `<form data-form="wc-pair" class="field inline">
+              <label><span>${tr("Pairing link")}</span>${input({ name: "uri", class: "mono", autocomplete: "off", placeholder: "wc:…", required: true })}</label>
+              ${scanBtn}${button(tr("Connect"), { mini: true })}
+            </form>
+            ${sessions.length ? `${section(null, tr("Connected dapps"))}${list(sessions.map((w) => listRow(`<span class="t">${esc(w.name)}</span><br><span class="s mono">${esc(w.origin)}</span>`, linkButton(tr("disconnect"), "wc-disconnect", { topic: w.topic }))).join(""))}` : `<p class="mute">${tr("No dapp connected through WalletConnect.")}</p>`}`
+          : `<p class="mute">${tr("Needs a free project id from cloud.reown.com, entered once under Settings › WalletConnect.")}</p>`
+      }`;
+  }
+  /** The approval sheet, on top of whatever the Dapps tab shows (a page, or the list when a WalletConnect request comes in). */
+  private approvalSheet(): string {
+    const a = this.s.dapp.approval;
+    if (!a) return "";
+    const wc = (a.req.args?.wc ?? null) as { name?: string; chains?: string[] } | null;
+    return `<div class="scrim" data-action="dapp-reject" data-key="${esc(a.key)}"></div><section class="sheet" role="dialog" aria-labelledby="req">
+              <div class="grab" aria-hidden="true"></div>
+              <div class="sheet-body">
+                ${section(">", tr("Request"), esc(this.network.name))}
+                ${this.originHeading(a.req.origin)}
+                ${a.source === "wc" ? `<p class="fine">${tr("Through WalletConnect, as <strong>{name}</strong>.", { name: esc(a.via ?? "") })}${a.unverified ? ` <span class="warn-inline">${tr("The relay could not verify that this request really comes from that site. Check the address above against the dapp you are using.")}</span>` : ""}</p>` : ""}
+                ${wc?.chains?.length ? `<p class="fine">${tr("The dapp asks for: {chains}.", { chains: esc(wc.chains.join(", ")) })}</p>` : ""}
+                ${a.plan ? describePlan(a.plan, this.s.tokens) : notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}
+              </div>
+              <div class="sheet-actions">
+                ${
+                  a.plan
+                    ? a.status
+                      ? notice("busy", esc(a.status))
+                      : `<div class="row">${button(tr("Approve"), { action: "dapp-approve", variant: "primary", data: { key: a.key }, disabled: Date.now() - this.sheetShownAt < this.approveDelayMs })}${button(tr("Reject"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
+                    : `<div class="row">${button(tr("Close"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
+                }
+              </div>
+            </section>`;
+  }
+
   private vDapps() {
     const d = this.s.dapp;
     if (!d.open) {
@@ -1930,9 +2068,10 @@ export class App {
           ${button(tr("Go"), { mini: true })}
         </form>
         <p class="fine">${tr("Sites see your account address only after you allow it, and every signature is approved here in the wallet, never on the page. The list is this wallet's own.")}</p>
-        ${sites.length ? `${section(null, tr("Sites allowed to see your accounts"))}${list(sites.map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">${tr("since {date}", { date: esc(g.allowedAt.slice(0, 10)) })}</span>`, linkButton(tr("forget"), "site-revoke", { origin: g.origin }))).join(""))}` : ""}`;
+        ${this.vWalletConnect()}
+        ${sites.length ? `${section(null, tr("Sites allowed to see your accounts"))}${list(sites.map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">${tr("since {date}", { date: esc(g.allowedAt.slice(0, 10)) })}</span>`, linkButton(tr("forget"), "site-revoke", { origin: g.origin }))).join(""))}` : ""}
+        ${this.approvalSheet()}`;
     }
-    const a = d.approval;
     return `
       <div class="urlbar">
         ${button(tr("&larr;"), { action: "dapp-back", mini: true, title: tr("Back"), disabled: !d.canGoBack })}
@@ -1941,27 +2080,7 @@ export class App {
         ${button(tr("&times;"), { action: "dapp-close", mini: true, title: tr("Close the page") })}
       </div>
       <div id="dapp-area" style="height:calc(100vh - 220px)"></div>
-      ${
-        a
-          ? `<div class="scrim" data-action="dapp-reject" data-key="${esc(a.key)}"></div><section class="sheet" role="dialog" aria-labelledby="req">
-              <div class="grab" aria-hidden="true"></div>
-              <div class="sheet-body">
-                ${section(">", tr("Request"), esc(this.network.name))}
-                ${this.originHeading(a.req.origin)}
-                ${a.plan ? describePlan(a.plan, this.s.tokens) : notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}
-              </div>
-              <div class="sheet-actions">
-                ${
-                  a.plan
-                    ? a.status
-                      ? notice("busy", esc(a.status))
-                      : `<div class="row">${button(tr("Approve"), { action: "dapp-approve", variant: "primary", data: { key: a.key }, disabled: Date.now() - this.sheetShownAt < this.approveDelayMs })}${button(tr("Reject"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
-                    : `<div class="row">${button(tr("Close"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
-                }
-              </div>
-            </section>`
-          : ""
-      }`;
+      ${this.approvalSheet()}`;
   }
 
   /** The requesting site: its host in bold, the scheme muted, and a badge when it is not encrypted. */
@@ -2026,6 +2145,13 @@ export class App {
       ${section(null, tr("Duress wallet"))}
       <p class="mute">${tr("A second passphrase opens a separate, small wallet to show under pressure. This screen never says whether one exists.")}${this.native ? ` ${tr("Setting one up turns biometric unlock off for every wallet on this device.")}` : ""}</p>
       <div class="row tight">${button(tr("Set up or replace the duress wallet"), { action: "duress" })}</div>
+
+      ${section(null, tr("WalletConnect"), this.wcProjectId() ? tr("on") : tr("off"))}
+      <p class="mute">${tr("Connects dapps on other devices (KoinDX, Vortex Bridge) through the WalletConnect relay. It needs a project id: create a free one at cloud.reown.com and paste it here. The id is a public identifier, not a secret.")}</p>
+      <form data-form="wc-project" class="field inline">
+        <label><span>${tr("Project id")}</span>${input({ name: "projectId", class: "mono", autocomplete: "off", spellcheck: "false", value: pref.get(PREF_WC_PROJECT) ?? "", placeholder: WC_PROJECT_DEFAULT ? tr("built-in id in use") : "" })}</label>
+        ${button(tr("Save"), { mini: true })}
+      </form>
 
       ${section(null, tr("Network"))}
       ${field(tr("Node"), sel("network", Object.keys(NETWORKS).map((n) => [n, n === "testnet" ? "testnet (Harbinger)" : n]), this.s.networkName))}

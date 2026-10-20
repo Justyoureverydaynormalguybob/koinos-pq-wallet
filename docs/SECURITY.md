@@ -311,14 +311,56 @@ step that decodes it; every action is pinned by commit SHA.
 
 ### Accepted for now (documented, not fixed)
 
-- Biometric unlock wraps the slot key under a keystore key that is handed over after the OS prompt;
-  it is not bound to the biometric enrolment itself (`setUserAuthenticationRequired` / `CryptoObject`
-  on Android, `SecAccessControl .biometryCurrentSet` on iOS). A rooted device with the app's keystore
-  can unwrap without a finger. Needs an own plugin; listed in the hand-over.
-- Side stores (contacts, added tokens, allowed sites, collections) are plaintext in local storage,
-  keyed by slot. They hold no secrets, but a duress wallet's contacts are readable without its
-  passphrase. Encrypting them under the slot key is the next step.
+- ~~Biometric unlock not bound to the enrolment~~ and ~~side stores in plaintext~~: both done in
+  0.15.0, see the next section.
 - The in-app browser's "desktop site" mode (added for pages whose phone layout cannot be used)
   changes the user agent and layout only; it does not change what the page may ask for.
 - Development-only advisories remain in vitest's dependency tree; they do not ship.
+
+
+## Added 2026-10-20 (wallet 0.15.0): WalletConnect, enrolment-bound biometrics, sealed side stores
+
+**WalletConnect** (`src/core/walletconnect.ts` pure, `src/ui/wc-bridge.ts` the relay side). Dapps
+built on `@armana/walletconnect-koinos-sdk-js` (KoinDX, Vortex Bridge) pair through the Reown relay
+from a scanned or pasted `wc:` URI, or a `wc:` link opened on the phone. Nothing new is trusted: a
+session proposal becomes the same `getAccounts` request the in-app browser makes (always shown, never
+remembered), every `koinos_*` method is translated into the DappRequest the wallet already validates,
+describes and signs, reads go through the same denylist and per-origin rate limit, and
+`koinos_signHash` / `koinos_submitBlock` are refused with the reason. The sheet names the dapp and
+shows a warning when the relay's verify step could not confirm the request's origin; a proposal the
+relay flags as a scam is refused before any sheet. A request may only name a signer the session was
+approved with, and only on the chain the wallet is currently on (the SDK's Harbinger id, from before
+the testnet reset, is accepted as this wallet's testnet because it is what dapps send). On every
+unlock the sessions on the device are checked against the open wallet's addresses; any session that is
+not this wallet's is ended, so a duress wallet neither serves nor shows the main wallet's dapps. The
+relay needs a project id (public, free at cloud.reown.com); the wallet does nothing over WalletConnect
+until one is entered in Settings or baked in with `VITE_WC_PROJECT_ID`. The WalletConnect packages
+(`@reown/walletkit`, `@walletconnect/core`, `@walletconnect/utils`) are loaded on demand and sit
+outside the signing path: they see requests and answers, never a key.
+
+**Biometrics bound to the enrolment** (`plugins/pq-bio`, replacing the two third-party plugins).
+Android: the key-wrapping key is encrypted under an RSA-2048 key in the AndroidKeyStore created with
+user authentication required for every use, `AUTH_BIOMETRIC_STRONG` only (no weak face unlock, no
+device PIN) and `setInvalidatedByBiometricEnrollment(true)`; decryption runs only inside a
+`BiometricPrompt` `CryptoObject`, so the OS decides whether the finger passed, and a rooted device with
+the app's files still cannot unwrap. iOS: a Keychain item under
+`kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` with `.biometryCurrentSet`, read with the system
+prompt. Enrolling or removing a fingerprint or face kills the key on both platforms; the wallet says so
+and asks for the passphrase. Each wrapped blob now carries an HMAC of its slot key, so a saved change
+(new salt) renews the wrap under a fresh device key without a prompt; filler blobs carry random tags of
+the same length. Blobs from before 0.15 are not readable: biometrics are simply off until turned on
+again.
+
+**Side stores sealed** (`src/core/sealed-store.ts`). Contacts, added tokens, allowed sites and
+collections are AES-256-GCM under a key derived (HKDF-SHA256) from the open slot's own key, padded to
+1 KiB blocks with a fresh nonce per write. Every slot has an entry for every store from the first
+unlock on; the slots whose key is not at hand hold random filler of exactly a sealed empty store's
+size. Someone with the storage but not a passphrase reads nothing: not a contact, not which sites were
+allowed, not whether a second wallet exists. Records from 0.14 (plain JSON) are sealed on first read.
+Deleting the wallet removes every slot's entries.
+
+**Hand-over items now open.** None of the audit's findings remain. What is left is product work:
+the koinos-chain pull request (`~/koinos-pq/docs/PR-koinos-chain.md`), store listings
+(`docs/STORE.md`), and a WalletConnect project id of the wallet's own.
+
 

@@ -132,10 +132,14 @@ describe("tokens on the Account tab and in Send (jsdom, a fake node over HTTP)",
     await settle();
     expect(rowAmount(root, ZERO)).toBe("0");
     expect(localStorage.getItem("koinos-pq-wallet/hide-zero")).toBe("0");
-    // the additions are stored under this wallet's slot; every slot has an entry, so storage never says how many wallets exist
+    // the additions are stored under this wallet's slot, sealed; every slot has an entry of the same size, so
+    // storage says neither what was added nor how many wallets exist
     const keys = Object.keys(localStorage).filter((k) => k.startsWith("koinos-pq-wallet/tokens/")).sort();
     expect(keys).toEqual(["koinos-pq-wallet/tokens/slot0", "koinos-pq-wallet/tokens/slot1"]);
-    expect(keys.map((k) => localStorage.getItem(k)!).join("\n")).toMatch(/19G2Vrmo/);
+    const values = keys.map((k) => localStorage.getItem(k)!);
+    expect(values.every((v) => v.startsWith("sealed1:"))).toBe(true);
+    expect(values[0]!.length).toBe(values[1]!.length);
+    expect(values.join("\n")).not.toMatch(/19G2Vrmo/);
     // a bad address is refused before any read
     await submit(root, "add-token", { address: "nonsense" });
     expect(text(root)).toMatch(/not a valid Koinos contract address/);

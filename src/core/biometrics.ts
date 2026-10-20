@@ -1,6 +1,9 @@
 // Biometric unlock (native shells): the slot's AES key, wrapped under a random 32-byte key-wrapping key
-// (KWK) that lives in the platform keystore and is handed over only after the OS biometric prompt. The
-// passphrase is never stored; biometrics open the slot with the same key the passphrase derives.
+// (KWK) that the platform keystore releases only to a biometric that passes: the KWK sits behind a
+// keystore key with user authentication required and invalidation on enrolment change (Android: an RSA
+// key that decrypts only inside a BiometricPrompt CryptoObject; iOS: a Keychain item guarded by
+// biometryCurrentSet). The passphrase is never stored; biometrics open the slot with the same key the
+// passphrase derives. A new fingerprint or face enrolled on the device kills the key: back to the passphrase.
 //
 // Duress mode stays indistinguishable: the stored blobs cover every slot, one real wrap and the others
 // random bytes of the same length. Enabling biometrics from a wallet wraps that wallet's slot and
@@ -9,19 +12,21 @@
 // (every saved change) gets its wrap refreshed with the passphrase that saved it.
 //
 // Fail closed: any error, missing key or unknown blob falls back to the passphrase.
-import { bytesToHex, hexToBytes, randomBytes } from "@noble/hashes/utils.js";
+import { hmac } from "@noble/hashes/hmac.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { SLOT_COUNT, decryptVaultWithKeyBytes, deriveSlotKeyBytes, type EncryptedVault, type Opened, type VaultFile } from "./vault";
 
-/** Where the KWK lives: the device keystore behind the biometric prompt (the plugins on native; fakes in tests). */
+/** Where the KWK lives: the device keystore, which shows the biometric prompt itself on get() (the plugin on native; fakes in tests). */
 export interface KeyStore {
-  get(): Promise<Uint8Array | null>;
+  /** null when no key is stored; rejects with a readable message when the prompt fails or the key was invalidated */
+  get(reason: string): Promise<Uint8Array | null>;
   set(kwk: Uint8Array): Promise<void>;
   remove(): Promise<void>;
 }
 export interface Biometry {
+  /** whether the device has a strong biometric enrolled that the keystore can bind to */
   available(): Promise<boolean>;
-  /** resolves when the user passed the OS prompt; rejects (with a readable message) otherwise */
-  authenticate(reason: string): Promise<void>;
 }
 /** The wrapped blobs, next to the vault in localStorage. */
 export interface BlobStore {
@@ -30,9 +35,11 @@ export interface BlobStore {
   clear(): void;
 }
 
-const IV = 12, KEY = 32, TAG = 16;
-const BLOB_BYTES = IV + KEY + TAG;
+const IV = 12, KEY = 32, TAG = 16, SLOT_TAG = 32;
+/** iv + wrapped key + GCM tag, then an HMAC of the slot key (says "this wrap is for this slot" to whoever holds the slot key, nothing to anyone else) */
+const BLOB_BYTES = IV + KEY + TAG + SLOT_TAG;
 const BLOBS_KEY = "koinos-pq-wallet/bio";
+const slotTag = (slotKey: Uint8Array): Uint8Array => hmac(sha256, slotKey, utf8ToBytes("koinos-pq-wallet/bio-tag/1"));
 
 const subtle = () => {
   const s = globalThis.crypto?.subtle;
@@ -73,20 +80,30 @@ async function kwkKey(kwk: Uint8Array, usage: KeyUsage): Promise<CryptoKey> {
 async function wrap(kwk: Uint8Array, slotKey: Uint8Array): Promise<string> {
   const iv = randomBytes(IV);
   const ct = new Uint8Array(await subtle().encrypt({ name: "AES-GCM", iv: iv as BufferSource }, await kwkKey(kwk, "encrypt"), slotKey as BufferSource));
-  const out = new Uint8Array(IV + ct.length);
+  const out = new Uint8Array(BLOB_BYTES);
   out.set(iv);
   out.set(ct, IV);
+  out.set(slotTag(slotKey), IV + ct.length);
   return bytesToHex(out);
 }
 async function unwrap(kwk: Uint8Array, blobHex: string): Promise<Uint8Array | null> {
   try {
     const b = hexToBytes(blobHex);
     if (b.length !== BLOB_BYTES) return null;
-    const pt = await subtle().decrypt({ name: "AES-GCM", iv: b.subarray(0, IV) as BufferSource }, await kwkKey(kwk, "decrypt"), b.subarray(IV) as BufferSource);
+    const pt = await subtle().decrypt({ name: "AES-GCM", iv: b.subarray(0, IV) as BufferSource }, await kwkKey(kwk, "decrypt"), b.subarray(IV, IV + KEY + TAG) as BufferSource);
     return new Uint8Array(pt);
   } catch {
     return null; // filler, or a blob from another KWK
   }
+}
+/** Whether a blob's tag is the one this slot key makes (constant-time compare). */
+function tagged(blobHex: string, slotKey: Uint8Array): boolean {
+  const b = hexToBytes(blobHex);
+  if (b.length !== BLOB_BYTES) return false;
+  const want = slotTag(slotKey), got = b.subarray(IV + KEY + TAG);
+  let diff = 0;
+  for (let i = 0; i < SLOT_TAG; i++) diff |= want[i]! ^ got[i]!;
+  return diff === 0;
 }
 const filler = (): string => bytesToHex(randomBytes(BLOB_BYTES));
 
@@ -109,11 +126,9 @@ export async function enableBiometrics(file: VaultFile, slot: number, passphrase
   const slotKey = await deriveSlotKeyBytes(enc, passphrase);
   try {
     await decryptVaultWithKeyBytes(enc, slotKey); // the passphrase must open this slot, not merely derive something
-    let kwk = await deps.keys.get();
-    if (!kwk || kwk.length !== KEY) {
-      kwk = randomBytes(KEY);
-      await deps.keys.set(kwk);
-    }
+    // a fresh KWK every time biometrics are turned on: no prompt here, and whatever an older enrolment held is gone
+    const kwk = randomBytes(KEY);
+    await deps.keys.set(kwk);
     const blobs: string[] = [];
     for (let i = 0; i < file.slots.length; i++) blobs.push(i === slot ? await wrap(kwk, slotKey) : filler());
     deps.blobs.save(blobs);
@@ -136,11 +151,22 @@ export async function disableBiometrics(deps: Omit<BioDeps, "biometry">): Promis
 /**
  * After a slot was re-encrypted (new salt) with the passphrase that opened it: if biometrics are on for
  * that slot, wrap the new key, else leave everything as it is. Never enables anything by itself.
+ * With `previous` (the file as it was before the change) the question "are biometrics this slot's?" is
+ * answered by the old slot key's tag and the wrap is renewed under a fresh device key, so no prompt;
+ * without it the device key is fetched, which prompts.
  */
-export async function refreshWrappedKey(file: VaultFile, slot: number, passphrase: string, deps: Omit<BioDeps, "biometry">): Promise<void> {
+export async function refreshWrappedKey(file: VaultFile, slot: number, passphrase: string, deps: Omit<BioDeps, "biometry">, previous?: VaultFile): Promise<void> {
   const blobs = deps.blobs.load();
-  const kwk = blobs ? await deps.keys.get().catch(() => null) : null;
-  if (!blobs || !kwk) return;
+  if (!blobs) return;
+  if (previous?.slots[slot]) {
+    const oldKey = await deriveSlotKeyBytes(previous.slots[slot]!, passphrase);
+    const mine = tagged(blobs[slot]!, oldKey);
+    oldKey.fill(0);
+    if (mine) await enableBiometrics(file, slot, passphrase, deps);
+    return;
+  }
+  const kwk = await deps.keys.get("Keep biometric unlock working after this change").catch(() => null);
+  if (!kwk) return;
   try {
     const current = await unwrap(kwk, blobs[slot]!);
     if (!current) return; // biometrics belong to another slot: nothing to refresh
@@ -171,8 +197,7 @@ export function forgetSlot(slot: number, blobs: BlobStore): void {
 export async function biometricUnlock(file: VaultFile, deps: BioDeps, reason = "Unlock the wallet"): Promise<Opened | null> {
   const blobs = deps.blobs.load();
   if (!blobs) return null;
-  await deps.biometry.authenticate(reason);
-  const kwk = await deps.keys.get();
+  const kwk = await deps.keys.get(reason); // the OS prompt happens in here; a key the enrolment no longer matches is gone
   if (!kwk) throw new Error("The device key is gone; unlock with your passphrase and turn biometrics on again.");
   try {
     const results = await Promise.allSettled(
@@ -180,68 +205,46 @@ export async function biometricUnlock(file: VaultFile, deps: BioDeps, reason = "
         const key = await unwrap(kwk, blobs[i]!);
         if (!key) throw new Error("filler");
         try {
-          return await decryptVaultWithKeyBytes(enc, key);
+          return { data: await decryptVaultWithKeyBytes(enc, key), key: Uint8Array.from(key) };
         } finally {
           key.fill(0);
         }
       }),
     );
+    let opened: Opened | null = null;
     for (let i = 0; i < results.length; i++) {
       const r = results[i]!;
-      if (r.status === "fulfilled") return { data: r.value, slot: i };
+      if (r.status !== "fulfilled") continue;
+      if (!opened) opened = { data: r.value.data, slot: i, key: r.value.key };
+      else r.value.key.fill(0);
     }
+    if (opened) return opened;
     throw new Error("Biometrics no longer match this wallet; unlock with your passphrase and turn them on again.");
   } finally {
     kwk.fill(0);
   }
 }
 
-// ---- the native plugins, loaded on demand so web bundles never carry them ----
-const KWK_ITEM = "kwk";
-
+// ---- the native plugin (plugins/pq-bio), loaded on demand so web bundles never carry it ----
 export const nativeKeyStore: KeyStore = {
-  async get() {
-    const { SecureStorage, KeychainAccess } = await import("@aparajita/capacitor-secure-storage");
-    await SecureStorage.setSynchronize(false); // never to iCloud
-    await SecureStorage.setDefaultKeychainAccess(KeychainAccess.whenUnlockedThisDeviceOnly); // never into a backup restored elsewhere
-    const v = await SecureStorage.get(KWK_ITEM);
-    return typeof v === "string" && /^[0-9a-f]{64}$/.test(v) ? hexToBytes(v) : null;
+  async get(reason) {
+    const { PqBio } = await import("../native/pq-bio");
+    const r = await PqBio.get({ reason, title: "Sparán", cancel: "Use passphrase" });
+    return typeof r.hex === "string" && /^[0-9a-f]{64}$/.test(r.hex) ? hexToBytes(r.hex) : null;
   },
   async set(kwk) {
-    const { SecureStorage } = await import("@aparajita/capacitor-secure-storage");
-    await SecureStorage.setSynchronize(false);
-    await SecureStorage.set(KWK_ITEM, bytesToHex(kwk));
+    const { PqBio } = await import("../native/pq-bio");
+    await PqBio.set({ hex: bytesToHex(kwk) });
   },
   async remove() {
-    const { SecureStorage } = await import("@aparajita/capacitor-secure-storage");
-    await SecureStorage.setSynchronize(false);
-    await SecureStorage.remove(KWK_ITEM);
+    const { PqBio } = await import("../native/pq-bio");
+    await PqBio.remove();
   },
 };
 
 export const nativeBiometry: Biometry = {
   async available() {
-    const { BiometricAuth } = await import("@aparajita/capacitor-biometric-auth");
-    const r = await BiometricAuth.checkBiometry();
-    return r.isAvailable;
-  },
-  async authenticate(reason) {
-    const { BiometricAuth, BiometryErrorType, AndroidBiometryStrength } = await import("@aparajita/capacitor-biometric-auth");
-    try {
-      await BiometricAuth.authenticate({
-        reason,
-        cancelTitle: "Use passphrase",
-        allowDeviceCredential: false, // the device PIN is not the wallet's passphrase
-        androidBiometryStrength: AndroidBiometryStrength.strong, // class 3 only: no camera-only face unlock
-        iosFallbackTitle: "",
-        androidTitle: "Sparán",
-        androidSubtitle: reason,
-        androidConfirmationRequired: false,
-      });
-    } catch (e) {
-      const code = (e as { code?: string }).code;
-      if (code === BiometryErrorType.userCancel || code === BiometryErrorType.systemCancel || code === BiometryErrorType.appCancel) throw new Error("Cancelled; use your passphrase.");
-      throw new Error(`Biometrics did not succeed (${(e as Error).message || code || "unknown"}); use your passphrase.`);
-    }
+    const { PqBio } = await import("../native/pq-bio");
+    return (await PqBio.available()).available;
   },
 };

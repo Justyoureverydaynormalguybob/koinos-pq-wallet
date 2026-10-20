@@ -1,6 +1,8 @@
 // The app's side of the in-app dapp browser: drives the native plugin (open, navigate, close, frame),
 // answers the kondor protocol like the extension's background worker does (provider:* straight away,
 // approvals one at a time through the app's sheet), and keeps the page from ever seeing a key.
+// It is also the one queue every other source of requests goes through (WalletConnect sessions submit
+// theirs with submit()), so there is one sheet, one order, one set of rules whoever is asking.
 import type { PluginListenerHandle } from "@capacitor/core";
 import type { Network, PqKeys } from "koinos-pq-core";
 import { APPROVAL_COMMANDS, executePlan, planRequest, type DappRequest, type Plan } from "../core/approval";
@@ -10,9 +12,18 @@ import type { AccountRecord } from "../core/vault";
 import { buildBridgeScript, serialiseResult } from "./dapp-bridge";
 import type { NavigationEvent, PqBrowserPlugin } from "../native/pq-browser";
 
+export type Outcome = { result?: unknown; error?: string };
+export type Respond = (o: Outcome) => Promise<void> | void;
+
 export interface PendingApproval {
   key: string;
   req: DappRequest;
+  /** where the request came from: the page in the browser, or a WalletConnect session */
+  source: "page" | "wc";
+  /** a short label for the sheet when the source is not the page (the dapp's name) */
+  via?: string;
+  /** shown on the sheet when the source could not be verified (WalletConnect's verify result) */
+  unverified?: boolean;
   /** what will be done if approved; null when the request was refused (see `refused`) */
   plan: Plan | null;
   refused: string | null;
@@ -66,12 +77,17 @@ interface Queued {
   key: string;
   req: DappRequest;
   createdAt: number;
+  source: "page" | "wc";
+  respond?: Respond;
+  alwaysAsk?: boolean;
+  via?: string;
+  unverified?: boolean;
 }
 
 export class DappHost {
   private handles: PluginListenerHandle[] = [];
   private queue: Queued[] = [];
-  private current: PendingApproval | null = null;
+  private current: (PendingApproval & { respond?: Respond }) | null = null;
   private opened = false;
   /** bumped by close(): work that was awaiting something when the page closed must not touch the new session */
   private generation = 0;
@@ -137,9 +153,9 @@ export class DappHost {
   /** Closes the page; everything still waiting is answered "rejected". */
   async close(): Promise<void> {
     this.generation++;
-    for (const q of this.queue) void this.reply(q.req.id, { error: "rejected by the user" });
-    this.queue = [];
-    if (this.current) {
+    for (const q of this.queue) if (q.source === "page") void this.reply(q.req.id, { error: "rejected by the user" });
+    this.queue = this.queue.filter((q) => q.source !== "page");
+    if (this.current?.source === "page") {
       void this.reply(this.current.req.id, { error: "rejected by the user" });
       this.current = null;
       this.events.onApproval(null);
@@ -152,9 +168,59 @@ export class DappHost {
   }
 
   // ---- the protocol ----
-  private async reply(id: string, outcome: { result?: unknown; error?: string }) {
+  private async reply(id: string, outcome: Outcome) {
     const json = JSON.stringify(outcome.error !== undefined ? { id, error: outcome.error } : { id, result: serialiseResult(outcome.result ?? null) });
     await this.plugin.reply({ json }).catch(() => undefined);
+  }
+  /** Answers whoever asked: the page through the plugin, another source through its own callback. */
+  private async answer(q: { req: DappRequest; respond?: Respond }, outcome: Outcome) {
+    if (q.respond) {
+      try {
+        await q.respond(outcome);
+      } catch {
+        /* the session may be gone; nothing else to do */
+      }
+    } else await this.reply(q.req.id, outcome);
+  }
+
+  /**
+   * A request from outside the page (a WalletConnect session): same queue, same rules, same sheet.
+   * `respond` carries the answer back. `alwaysAsk` shows the sheet even for a site already allowed
+   * (a new pairing is always a decision). Resolves once queued; the answer comes through `respond`.
+   */
+  async submit(req: DappRequest, respond: Respond, o: { alwaysAsk?: boolean; via?: string; unverified?: boolean } = {}): Promise<void> {
+    if (!APPROVAL_COMMANDS.has(req.command)) {
+      await respond({ error: `unsupported command ${req.command}` });
+      return;
+    }
+    const waiting = this.queue.filter((q) => q.req.origin === req.origin).length + (this.current?.req.origin === req.origin ? 1 : 0);
+    if (waiting >= MAX_WAITING_PER_ORIGIN) {
+      await respond({ error: "too many requests waiting for approval from this site" });
+      return;
+    }
+    this.queue.push({ key: crypto.randomUUID(), req, createdAt: Date.now(), source: "wc", respond, alwaysAsk: o.alwaysAsk, via: o.via, unverified: o.unverified });
+    void this.pump();
+  }
+  /** A read for another source, under the page's denylist and rate limit. */
+  async provider(origin: string, command: string, args: Record<string, unknown>): Promise<Outcome> {
+    if (PROVIDER_DENIED.has(command)) return { error: `${command} is not available to dapps` };
+    if (!this.providerAllowed(origin)) return { error: "too many requests; slow down" };
+    try {
+      return { result: (await handleProvider(command, args, this.deps.rpcOverride?.())) ?? null };
+    } catch (e) {
+      return { error: (e as Error).message || "request failed" };
+    }
+  }
+  /** Answers everything a source has waiting (its session ended) without touching the page's requests. */
+  dropSource(source: "wc", error = "the session ended") {
+    for (const q of this.queue) if (q.source === source) void this.answer(q, { error });
+    this.queue = this.queue.filter((q) => q.source !== source);
+    if (this.current?.source === source && this.current.status !== "Working…") {
+      void this.answer(this.current, { error });
+      this.current = null;
+      this.events.onApproval(null);
+      void this.pump();
+    }
   }
 
   private async onMessage(json: string, nativeOrigin: string, mainFrame: boolean) {
@@ -200,7 +266,7 @@ export class DappHost {
         await this.reply(req.id, { error: "too many requests waiting for approval from this site" });
         return;
       }
-      this.queue.push({ key: crypto.randomUUID(), req, createdAt: Date.now() });
+      this.queue.push({ key: crypto.randomUUID(), req, createdAt: Date.now(), source: "page" });
       void this.pump();
       return;
     }
@@ -225,7 +291,7 @@ export class DappHost {
     const now = Date.now();
     this.queue = this.queue.filter((q) => {
       if (now - q.createdAt > EXPIRY_MS) {
-        void this.reply(q.req.id, { error: "request expired" });
+        void this.answer(q, { error: "request expired" });
         return false;
       }
       return true;
@@ -234,10 +300,11 @@ export class DappHost {
     if (!next) return; // idle: the app re-renders on onApproval(null) and places the page view itself
     // Claim the slot before anything asynchronous: a second message arriving while this one is being
     // planned must queue behind it, never replace the sheet under the user's finger.
-    const claim: PendingApproval = { key: next.key, req: next.req, plan: null, refused: null, status: "planning" };
+    const claim: PendingApproval & { respond?: Respond } = { key: next.key, req: next.req, source: next.source, via: next.via, unverified: next.unverified, respond: next.respond, plan: null, refused: null, status: "planning" };
     this.current = claim;
     const gen = this.generation;
-    await this.plugin.hide().catch(() => undefined);
+    const closedMeanwhile = () => (next.source === "page" ? gen !== this.generation : false) || this.current !== claim;
+    if (this.opened) await this.plugin.hide().catch(() => undefined);
     const net = this.deps.network();
     let plan: Plan | null = null, refused: string | null = null;
     try {
@@ -245,11 +312,11 @@ export class DappHost {
     } catch (e) {
       refused = (e as Error).message || String(e);
     }
-    if (gen !== this.generation || this.current !== claim) return; // the page closed meanwhile; close() already answered it
+    if (closedMeanwhile()) return; // the page closed meanwhile; close() already answered it
     // a site already allowed to see the accounts is answered without asking again
-    if (plan && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin)) {
-      await this.execute(next.req, plan);
-      if (gen !== this.generation) return;
+    if (plan && !next.alwaysAsk && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin)) {
+      await this.execute(claim, plan);
+      if (closedMeanwhile()) return;
       this.current = null;
       this.events.onApproval(null);
       void this.pump();
@@ -261,25 +328,21 @@ export class DappHost {
     this.events.onApproval(claim);
   }
 
-  private async execute(req: DappRequest, plan: Plan) {
+  private async execute(q: { req: DappRequest; respond?: Respond }, plan: Plan) {
+    const req = q.req;
     const keys = this.deps.keys();
     if (!keys) {
-      await this.reply(req.id, { error: "the wallet is locked" });
+      await this.answer(q, { error: "the wallet is locked" });
       return;
     }
-    try {
-      const outcome = await executePlan(plan, keys, this.deps.accounts(), (s) => {
-        if (this.current?.req.id === req.id) {
-          this.current.status = s;
-          this.events.onApproval(this.current);
-        }
-      });
-      await this.reply(req.id, "error" in outcome ? { error: outcome.error } : { result: outcome.result });
-      if ("error" in outcome && outcome.status) throw new Error(outcome.status);
-    } catch (e) {
-      // the page got its answer; the user sees why it failed
-      throw e;
-    }
+    const outcome = await executePlan(plan, keys, this.deps.accounts(), (s) => {
+      if (this.current?.req.id === req.id) {
+        this.current.status = s;
+        this.events.onApproval(this.current);
+      }
+    });
+    await this.answer(q, "error" in outcome ? { error: outcome.error } : { result: outcome.result });
+    if ("error" in outcome && outcome.status) throw new Error(outcome.status); // the asker got its answer; the user sees why it failed
   }
 
   /** The user's decision on the request the sheet shows. Resolves when the page has been answered. */
@@ -289,7 +352,7 @@ export class DappHost {
     if (c.status === "planning") return; // nothing to decide yet
     if (c.status !== null) return; // already executing: a late Reject cannot undo a broadcast, so it is ignored rather than lied about
     if (!approve || !c.plan) {
-      await this.reply(c.req.id, { error: c.refused ? "refused by the wallet" : "rejected by the user" });
+      await this.answer(c, { error: c.refused ? "refused by the wallet" : "rejected by the user" });
       this.current = null;
       this.events.onApproval(null);
       void this.pump();
@@ -298,11 +361,12 @@ export class DappHost {
     c.status = "Working…";
     this.events.onApproval(c);
     const gen = this.generation;
+    const stillHere = () => (c.source === "page" ? gen === this.generation : true);
     try {
-      await this.execute(c.req, c.plan);
-      if (gen === this.generation && c.req.command === "getAccounts") this.deps.permissions()?.allow(c.req.origin);
+      await this.execute(c, c.plan);
+      if (stillHere() && c.source === "page" && c.req.command === "getAccounts") this.deps.permissions()?.allow(c.req.origin);
     } finally {
-      if (gen === this.generation && this.current === c) {
+      if (stillHere() && this.current === c) {
         this.current = null;
         this.events.onApproval(null);
         void this.pump();

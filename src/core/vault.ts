@@ -167,6 +167,8 @@ export interface Opened {
   data: VaultData;
   /** which slot the passphrase opened */
   slot: number;
+  /** that slot's raw AES key (32 bytes): the sealed stores derive theirs from it. Wipe on lock. */
+  key: Uint8Array;
 }
 
 /**
@@ -174,20 +176,25 @@ export interface Opened {
  * depend on which slot matched (or on none matching). Throws "wrong passphrase" when nothing opens.
  */
 export async function openVault(file: VaultFile, passphrase: string): Promise<Opened> {
-  const results = await Promise.allSettled(file.slots.map((s) => decryptVault(s, passphrase)));
+  const keys = await Promise.all(file.slots.map((s) => deriveSlotKeyBytes(s, passphrase).catch(() => new Uint8Array(32))));
+  const results = await Promise.allSettled(file.slots.map((s, i) => decryptVaultWithKeyBytes(s, keys[i]!)));
+  let opened: Opened | null = null;
   for (let i = 0; i < results.length; i++) {
     const r = results[i]!;
-    if (r.status === "fulfilled") return { data: r.value, slot: i };
+    if (r.status === "fulfilled" && !opened) opened = { data: r.value, slot: i, key: keys[i]! };
+    else keys[i]!.fill(0);
   }
-  throw new Error("wrong passphrase");
+  if (!opened) throw new Error("wrong passphrase");
+  return opened;
 }
 
 /** A new file for a fresh wallet: the wallet in a random slot, filler in the others. */
-export async function newFile(data: VaultData, passphrase: string, iterations = PBKDF2_ITERATIONS): Promise<{ file: VaultFile; slot: number }> {
+export async function newFile(data: VaultData, passphrase: string, iterations = PBKDF2_ITERATIONS): Promise<{ file: VaultFile; slot: number; key: Uint8Array }> {
   const slot = randomBytes(1)[0]! % SLOT_COUNT;
   const slots: EncryptedVault[] = [];
   for (let i = 0; i < SLOT_COUNT; i++) slots.push(i === slot ? await encryptVault(data, passphrase, iterations) : await fillerSlot(iterations));
-  return { file: { v: 2, slots }, slot };
+  const key = await deriveSlotKeyBytes(slots[slot]!, passphrase);
+  return { file: { v: 2, slots }, slot, key };
 }
 
 /** The same file with one slot replaced (the others are untouched: their passphrases are not known here). */

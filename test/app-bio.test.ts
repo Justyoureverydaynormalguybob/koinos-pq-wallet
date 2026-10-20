@@ -39,14 +39,16 @@ function fakes() {
   let kwk: Uint8Array | null = null;
   let prompts = 0, pass = true;
   const blobStore: BlobStore = { load: () => (blobs ? [...blobs] : null), save: (b) => void (blobs = [...b]), clear: () => void (blobs = null) };
-  const keys: KeyStore = { get: async () => (kwk ? new Uint8Array(kwk) : null), set: async (k) => void (kwk = new Uint8Array(k)), remove: async () => void (kwk = null) };
-  const biometry: Biometry = {
-    available: async () => true,
-    authenticate: async () => {
-      prompts++;
+  const keys: KeyStore = {
+    get: async () => {
+      prompts++; // the keystore shows the prompt itself
       if (!pass) throw new Error("Cancelled; use your passphrase.");
+      return kwk ? new Uint8Array(kwk) : null;
     },
+    set: async (k) => void (kwk = new Uint8Array(k)),
+    remove: async () => void (kwk = null),
   };
+  const biometry: Biometry = { available: async () => true };
   return { blobs: blobStore, keys, biometry, state: { get prompts() { return prompts; }, set pass(v: boolean) { pass = v; }, get blobs() { return blobs; } } };
 }
 

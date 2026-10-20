@@ -1,0 +1,15 @@
+{
+  "name": "pq-bio",
+  "version": "0.15.0",
+  "private": true,
+  "description": "Biometric key store for Sparán: a key the platform keystore releases only to a strong biometric that passes, invalidated when the enrolment changes.",
+  "license": "MIT",
+  "author": "Sparán",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "capacitor": {
+    "ios": { "src": "ios" },
+    "android": { "src": "android" }
+  },
+  "files": ["android/src/main/", "android/build.gradle", "ios/Sources", "PqBio.podspec", "index.js", "index.d.ts"]
+}

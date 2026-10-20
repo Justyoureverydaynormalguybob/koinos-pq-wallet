@@ -17,14 +17,16 @@ function fakes(opts: { available?: boolean; passPrompt?: boolean } = {}) {
   let kwk: Uint8Array | null = null;
   let prompts = 0;
   const blobStore: BlobStore = { load: () => (blobs ? [...blobs] : null), save: (b) => void (blobs = [...b]), clear: () => void (blobs = null) };
-  const keys: KeyStore = { get: async () => (kwk ? new Uint8Array(kwk) : null), set: async (k) => void (kwk = new Uint8Array(k)), remove: async () => void (kwk = null) };
-  const biometry: Biometry = {
-    available: async () => opts.available ?? true,
-    authenticate: async () => {
-      prompts++;
+  const keys: KeyStore = {
+    get: async () => {
+      prompts++; // the keystore shows the prompt itself
       if (opts.passPrompt === false) throw new Error("Cancelled; use your passphrase.");
+      return kwk ? new Uint8Array(kwk) : null;
     },
+    set: async (k) => void (kwk = new Uint8Array(k)),
+    remove: async () => void (kwk = null),
   };
+  const biometry: Biometry = { available: async () => opts.available ?? true };
   return { blobs: blobStore, keys, biometry, state: { get blobs() { return blobs; }, get kwk() { return kwk; }, get prompts() { return prompts; } } };
 }
 
@@ -45,7 +47,8 @@ describe("biometric unlock", () => {
     const opened = await biometricUnlock(file, f);
     expect(opened?.slot).toBe(slot);
     expect(opened?.data.seedHex).toBe(mainData.seedHex);
-    expect(f.state.prompts).toBe(1);
+    expect(opened?.key.length).toBe(32);
+    expect(f.state.prompts).toBe(1); // enabling asked nothing; the unlock asked once
   });
 
   it("fails closed: a cancelled prompt, a missing device key or a foreign blob never opens anything", async () => {
