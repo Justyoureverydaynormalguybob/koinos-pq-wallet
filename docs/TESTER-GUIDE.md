@@ -68,7 +68,7 @@ post-quantum-signed transfer is transaction
    KOIN balance. You're done. The account answers only to your 24 words from here on.
 
 7. **Prove it to yourself.** **Send** 1 KOIN back to your Kondor address, then look the
-   transaction up on https://koinosblocks.com. You will see one signature of 2,420 bytes and no
+   transaction up on https://koinosscan.com. You will see one signature of 2,420 bytes and no
    secp256k1 anywhere.
 
 ## If something goes wrong

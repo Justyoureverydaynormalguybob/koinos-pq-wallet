@@ -1639,7 +1639,7 @@ export class App {
       ${card(`
         <span class="lbl">${esc(a.label)} · ${esc(this.network.name)}</span>
         ${addressStrip(a.address)}
-        <div class="row tight">${button(tr("Copy"), { action: "copy", mini: true, data: { copy: a.address } })}${button(tr("Refresh"), { action: "refresh", variant: "ghost", mini: true })}</div>
+        <div class="row tight">${button(tr("Copy"), { action: "copy", mini: true, data: { copy: a.address } })}${button(tr("Refresh"), { action: "refresh", variant: "ghost", mini: true })}${this.network.explorerAddress ? `<a class="btn ghost mini" href="${esc(this.network.explorerAddress(a.address))}" target="_blank" rel="noopener noreferrer">${tr("Explorer")}</a>` : ""}</div>
         <div style="margin-top:20px">${balance(s.balance === null ? null : fmtAmount(formatKoin(s.balance)), unit)}</div>
         <div style="margin-top:12px">
           ${stat(tr("Mana"), s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2))))}
@@ -1775,7 +1775,7 @@ export class App {
       ${card(`<span class="lbl">Sent</span><div class="bal" style="margin-bottom:12px"><span class="v" style="font-size:28px">${esc(fmtAmount(t.amount))}</span><span class="u">${esc(t.symbol)}</span></div><span class="lbl">Transaction</span><code class="address addr sm box" style="color:var(--ink)">${esc(t.txId)}</code>
         <div style="margin-top:12px">${stat(tr("Signature entry"), `${esc(t.bytes)} B`)}${stat(tr("Mana used"), esc(t.rcUsed))}${t.block ? stat(tr("Block"), esc(fmtAmount(t.block))) : ""}</div>`)}
       ${this.network.autoBlocks ? "" : `<p class="fine" style="margin-top:12px">${tr("This network only makes blocks when the devnet script produces one.")}</p>`}
-      ${link ? `<p style="margin-top:12px"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">Open in explorer</a></p>` : ""}
+      ${link ? `<p style="margin-top:12px"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${tr("Open in explorer")}</a></p>` : ""}
       <div class="row">${button(tr("Done"), { action: "back-home", variant: "primary" })}</div>`;
   }
 

@@ -8,7 +8,9 @@
       "summary": "Connect, read the head block, sign a message, send KOIN",
       "description": "The wallet's own test page. It has no wallet code of its own and uses window.kondor for everything, exactly as a Koinos dapp would.",
       "url": "https://wallet.koinosproof.com/demo/",
-      "tags": ["test"]
+      "tags": [
+        "test"
+      ]
     },
     {
       "id": "koindx",
@@ -17,16 +19,21 @@
       "summary": "Swap and pool tokens on Koinos",
       "description": "The decentralised exchange on Koinos.",
       "url": "https://app.koindx.com/",
-      "tags": ["defi", "swap"]
+      "tags": [
+        "defi",
+        "swap"
+      ]
     },
     {
-      "id": "koinosblocks",
+      "id": "koinosscan",
       "icon": null,
-      "name": "Koinos Blocks",
+      "name": "KoinosScan",
       "summary": "Block explorer",
-      "description": "Blocks, transactions, accounts and contracts on mainnet and Harbinger.",
-      "url": "https://koinosblocks.com/",
-      "tags": ["explorer"]
+      "description": "Transactions, accounts and tokens on mainnet. (Harbinger transactions still open on koinosblocks.)",
+      "url": "https://koinosscan.com/",
+      "tags": [
+        "explorer"
+      ]
     },
     {
       "id": "burnkoin",
@@ -35,7 +42,10 @@
       "summary": "Pooled VHP for block production",
       "description": "Deposit KOIN or VHP into the pool and receive pVHP.",
       "url": "https://burnkoin.com/",
-      "tags": ["mining", "pool"]
+      "tags": [
+        "mining",
+        "pool"
+      ]
     }
   ]
 }

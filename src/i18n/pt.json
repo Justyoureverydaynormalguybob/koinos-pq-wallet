@@ -284,5 +284,7 @@
   "Your account is controlled by an <strong>ML-DSA-44</strong> key (the NIST post-quantum standard, FIPS 204) instead of secp256k1. The key lives only on this device, encrypted with a passphrase you choose, and is backed up by 24 words.": "A sua conta é controlada por uma chave <strong>ML-DSA-44</strong> (a norma pós-quântica do NIST, FIPS 204) em vez de secp256k1. A chave vive só neste dispositivo, cifrada com uma frase-passe que escolhe, e tem cópia de segurança em 24 palavras.",
   "Your main passphrase (to confirm)": "A sua frase-passe principal (para confirmar)",
   "Your passphrase, once, so this wallet's key can be wrapped under a key kept by the device and released by its fingerprint or face check.": "A sua frase-passe, uma vez, para que a chave desta carteira seja envolvida numa chave guardada pelo dispositivo e libertada pela sua impressão digital ou rosto.",
-  "Your wallet has its post-quantum key. To use it on <strong>{net}</strong>, send some {unit} to your account's address and the wallet activates it.": "A sua carteira tem a sua chave pós-quântica. Para a usar em <strong>{net}</strong>, envie algum {unit} para o endereço da sua conta e a carteira ativa-a."
+  "Your wallet has its post-quantum key. To use it on <strong>{net}</strong>, send some {unit} to your account's address and the wallet activates it.": "A sua carteira tem a sua chave pós-quântica. Para a usar em <strong>{net}</strong>, envie algum {unit} para o endereço da sua conta e a carteira ativa-a.",
+  "Open in explorer": "Abrir no explorador",
+  "Explorer": "Explorador"
 }
