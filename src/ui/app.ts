@@ -369,6 +369,7 @@ export class App {
     root.addEventListener("submit", (e) => this.onSubmit(e));
     root.addEventListener("change", (e) => this.onChange(e));
     for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => this.touch(), { passive: true });
+    window.addEventListener("resize", () => this.placeDapp());
     // a tab that is hidden (another tab, minimised, screen off) locks after HIDDEN_LOCK_SECONDS
     document.addEventListener("visibilitychange", () => {
       window.clearTimeout(this.hideTimer);
@@ -885,10 +886,14 @@ export class App {
   }
   /** Where the native page view goes: the empty area between the url bar and the tab bar, in CSS px from the viewport edges. */
   private dappFrame(): { top: number; bottom: number } {
-    const area = this.root.querySelector<HTMLElement>("#dapp-area");
-    if (!area) return { top: 0, bottom: 0 };
-    const r = area.getBoundingClientRect();
-    return { top: Math.max(0, Math.round(r.top)), bottom: Math.max(0, Math.round(window.innerHeight - r.bottom)) };
+    // measured from what is actually on screen: the url bar's bottom edge and the tab bar's top edge
+    // (header, ticker and url bar grow with the device's text size; the tab bar sits over the safe area)
+    const bar = this.root.querySelector<HTMLElement>(".urlbar");
+    const tabs = this.root.querySelector<HTMLElement>(".tabs");
+    if (!bar) return { top: 0, bottom: 0 };
+    const top = bar.getBoundingClientRect().bottom;
+    const bottom = tabs ? window.innerHeight - tabs.getBoundingClientRect().top : 0;
+    return { top: Math.max(0, Math.ceil(top)), bottom: Math.max(0, Math.ceil(bottom)) };
   }
   private async openDapp(url: string) {
     if (!/^https?:\/\//.test(url)) url = `https://${url}`;
@@ -2079,7 +2084,7 @@ export class App {
         ${button(tr("PC"), { action: "dapp-desktop", mini: true, title: tr("Desktop version of the page"), attrs: `aria-pressed="${d.desktop ? "true" : "false"}"` })}
         ${button(tr("&times;"), { action: "dapp-close", mini: true, title: tr("Close the page") })}
       </div>
-      <div id="dapp-area" style="height:calc(100vh - 220px)"></div>
+      <div id="dapp-area" aria-hidden="true"></div>
       ${this.approvalSheet()}`;
   }
 

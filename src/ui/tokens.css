@@ -264,6 +264,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ---- dapp browser chrome ---- */
 .urlbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+/* the native page view is laid over this area, which fills whatever is left above the tab bar */
+#dapp-area { min-height: 50vh; }
 .urlbar .in { min-height: 40px; font-family: var(--mono); font-size: 13px; }
 .urlbar .btn.mini { min-height: 40px; }
 .page { flex: 1 1 auto; background: var(--paper); }
