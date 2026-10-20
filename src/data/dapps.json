@@ -48,12 +48,12 @@
       ]
     },
     {
-      "id": "burnkoin",
+      "id": "fogata",
       "icon": null,
-      "name": "BurnKoin",
-      "summary": "Pooled VHP for block production",
-      "description": "Deposit KOIN or VHP into the pool and receive pVHP.",
-      "url": "https://burnkoin.com/",
+      "name": "Fogata v2",
+      "summary": "Mining pools: stake KOIN and VHP",
+      "description": "Community-run Koinos mining pools (version 2, hosted on KoinScan): stake KOIN or VHP into a pool, unstake, and swap KOIN and VHP in place. The v1 site is fogata.io.",
+      "url": "https://www.koinscan.com/fogata",
       "tags": [
         "mining",
         "pool"
@@ -68,6 +68,17 @@
       "url": "https://koinos.io/",
       "tags": [
         "info"
+      ]
+    },
+    {
+      "id": "koinosai",
+      "icon": null,
+      "name": "Koinos AI",
+      "summary": "KAI, a local-first AI with a Koinos network",
+      "description": "Chat, memory and agents that run locally or on the decentralised Koinos AI network. The app needs a Koinos AI account.",
+      "url": "https://koinosai.com/",
+      "tags": [
+        "ai"
       ]
     }
   ]
