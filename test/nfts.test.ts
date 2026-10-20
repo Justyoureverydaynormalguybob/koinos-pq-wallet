@@ -99,3 +99,19 @@ describe("collections added by address", () => {
     expect(c.list("mainnet")).toEqual([]);
   });
 });
+
+describe("collections found from the activity list", () => {
+  it("names each unknown contract once, in order, skipping listed tokens and collections", async () => {
+    const { collectionCandidates } = await import("../src/core/nfts");
+    const h = [
+      { contract: "1Koin", direction: "in" as const },
+      { contract: "1Nft", direction: "in" as const },
+      { contract: "1Nft", direction: "out" as const },
+      { contract: null, direction: null },
+      { contract: "1Other", direction: null },
+      { contract: "1Listed", direction: "in" as const },
+      { contract: "1More", direction: "out" as const },
+    ];
+    expect(collectionCandidates(h, ["1Koin", "1Listed"])).toEqual(["1Nft", "1More"]);
+  });
+});

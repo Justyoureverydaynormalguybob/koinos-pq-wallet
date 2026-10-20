@@ -33,7 +33,7 @@ import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr 
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
 import { SitePermissions, permissionsNamespace } from "../core/permissions";
-import { Collections, NFT_ENTRY, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
+import { Collections, NFT_ENTRY, collectionCandidates, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
 import { DappHost, type PendingApproval } from "./dapp-host";
 import { describePlan } from "./approval-view";
 import { PqBrowser, type PqBrowserPlugin } from "../native/pq-browser";
@@ -288,6 +288,9 @@ export class App {
   private hideTimer: number | undefined;
   private liveTimer: number | undefined;
   private liveBusy = false;
+  private liveTicks = 0;
+  /** "network:contract" already tried as a collection this session */
+  private probed = new Set<string>();
   private readonly scanner: Scanner | undefined;
   private readonly native: boolean;
   private readonly bio: BioDeps;
@@ -617,6 +620,18 @@ export class App {
         this.s.balance = balance.value;
       }
       this.patchLive();
+      // every sixth tick (a minute): one-row read of the activity list, so a collectible or a token that
+      // arrived without touching the KOIN balance is noticed too
+      this.liveTicks++;
+      if (!moved && a && this.s.history && this.liveTicks % 6 === 0) {
+        try {
+          const top = await chain.history(a.address, 1);
+          if (top[0] && top[0].seq !== this.s.history[0]?.seq) moved = true;
+        } catch {
+          /* next time */
+        }
+        if (!this.s.keys || this.network.name !== net || this.account()?.address !== a.address) return;
+      }
       if (moved && a) {
         this.s.balancesFor = ""; // token rows are stale too
         try {
@@ -626,6 +641,7 @@ export class App {
         }
         if (this.s.keys && !this.s.busy && (this.s.screen === "home" || this.s.screen === "history") && !this.typing()) this.render();
         void this.fillTokenBalances(a.address);
+        void this.discoverCollections();
       }
     } catch {
       /* quiet: the next tick tries again */
@@ -648,10 +664,56 @@ export class App {
     const el = typeof document !== "undefined" ? document.activeElement : null;
     return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
   }
+  /**
+   * Collections found from the activity list: any contract that moved something to or from this
+   * account and is not a listed token or collection is asked for this account's tokens; one that
+   * answers with at least one is added to the Collectibles list (per wallet, per network).
+   */
+  private async discoverCollections() {
+    const a = this.account();
+    const h = this.s.history;
+    if (!a || !h || !this.s.collections) return;
+    const net = this.network.name;
+    const chain = this.chain();
+    const known = [...this.tokenList().map((t) => t.address), ...this.collectionList().map((c) => c.address)];
+    let added = 0;
+    for (const c of collectionCandidates(h, known)) {
+      const k = `${net}:${c}`;
+      if (this.probed.has(k)) continue;
+      this.probed.add(k);
+      try {
+        const held = await tokensOf(chain, c, a.address);
+        if (!held.length) continue;
+        const info = await collectionInfo(chain, c);
+        if (!this.s.keys || this.network.name !== net || !this.s.collections) return;
+        this.s.collections.add(net, { address: c, ...info });
+        this.s.nft.tokens[c] = held;
+        added++;
+      } catch {
+        /* not a KCS-5 collection (or the node is unreachable): tried once, not again this session */
+      }
+    }
+    if (added && !this.s.busy && this.s.screen === "home" && !this.typing()) this.render();
+  }
+  /** The activity list in the background after unlock, so the Activity tab opens at once and collections are found. */
+  private async primeHistory() {
+    const a = this.account();
+    if (!a || this.s.history) return;
+    const net = this.network.name;
+    try {
+      const h = await this.chain().history(a.address);
+      if (!this.s.keys || this.network.name !== net || this.account()?.address !== a.address) return;
+      this.s.history = h;
+    } catch {
+      return;
+    }
+    await this.discoverCollections();
+  }
   /** Home, or straight to activation when this network has no account for the wallet yet. */
   private async enterHome() {
     this.s.screen = "home";
     await this.refresh();
+    void this.primeHistory();
     if (!this.account() && this.network.name !== "devnet" && this.s.detected[this.network.name] !== undefined) this.startSetup();
   }
   private async finishSetup(passphrase: string) {
@@ -1057,6 +1119,7 @@ export class App {
       this.s.screen = "history";
       if (!a) return;
       this.s.history = await this.chain().history(a.address);
+      void this.discoverCollections();
     });
   }
 
@@ -2095,7 +2158,12 @@ export class App {
       .map((i) => {
         let main = `<span class="t">${esc(i.summary)}</span>`;
         let amt = "";
-        if (i.direction && i.valueBase) {
+        if (i.direction && i.contract && !i.valueBase) {
+          const col = this.collectionList().find((c) => c.address === i.contract);
+          const who = i.counterparty ? this.s.book?.get(i.counterparty)?.name || shortAddr(i.counterparty) : "?";
+          const what = col ? esc(col.name || col.symbol) : `${tr("contract")} ${esc(shortAddr(i.contract))}`;
+          main = `<span class="t">${i.direction === "out" ? tr("Sent a collectible") : tr("Received a collectible")}</span> <span class="s">${i.direction === "out" ? tr("to") : tr("from")} ${esc(who)} · ${what}${i.reverted ? " " + tr("(reverted)") : ""}</span>`;
+        } else if (i.direction && i.valueBase) {
           const t = i.contract ? findToken(tokens, i.contract) : undefined;
           let value: string;
           try {

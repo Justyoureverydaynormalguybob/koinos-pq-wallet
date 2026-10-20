@@ -323,5 +323,8 @@
   "Block screenshots and screen recording of the whole app (the 24 words are always blocked)": "Bloquear capturas e gravação de ecrã em toda a app (as 24 palavras estão sempre bloqueadas)",
   "copy address": "copiar endereço",
   "send back": "devolver",
-  "explorer": "explorador"
+  "explorer": "explorador",
+  "Received a collectible": "Colecionável recebido",
+  "Sent a collectible": "Colecionável enviado",
+  "contract": "contrato"
 }

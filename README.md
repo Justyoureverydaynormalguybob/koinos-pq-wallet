@@ -287,7 +287,11 @@ chain, because a step can succeed while the mempool still reports a hold.
 - Balance, mana and head block for mainnet, Harbinger or a devnet (RPC configurable); QR code.
   While the wallet is unlocked and on screen they refresh every 10 s (three small reads, about
   1 MB an hour); the activity list and token rows are re-read only when the balance moved. Nothing
-  runs in the background or while locked.
+  runs in the background or while locked. Once a minute a one-row read of the activity list
+  notices anything that arrived without moving the KOIN balance (a token, a collectible).
+- **Collectibles find themselves.** Any contract that sent something to the account and is not a
+  listed token is asked for the account's tokens (KCS-5 `get_tokens_by_owner`); one that answers is
+  added to the Collectibles list. A collection can still be added by its contract address.
 - Sends KOIN, checks the signature locally before broadcasting, shows the transaction id, waits for
   the block, links to the explorer. History through the JSON-RPC gateway.
 - Settings: show the words again, auto-lock time, delete the wallet; under Advanced, accounts set

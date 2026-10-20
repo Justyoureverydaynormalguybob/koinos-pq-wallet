@@ -260,3 +260,19 @@ export class Collections {
     this.write();
   }
 }
+
+/**
+ * Contracts worth probing as collections: every contract that moved something to or from `me` in the
+ * activity list and is neither a listed token nor a listed collection. Each is tried once per session
+ * (get_tokens_by_owner for `me`); a KCS-4 token fails that call and is forgotten.
+ */
+export function collectionCandidates(history: ReadonlyArray<{ contract: string | null; direction: "in" | "out" | null }>, known: Iterable<string>): string[] {
+  const skip = new Set(known);
+  const out: string[] = [];
+  for (const i of history) {
+    if (!i.contract || !i.direction || skip.has(i.contract)) continue;
+    skip.add(i.contract);
+    out.push(i.contract);
+  }
+  return out;
+}
