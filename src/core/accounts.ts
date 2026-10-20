@@ -32,8 +32,10 @@ export const canSign = (a: { mode: WalletMode }): boolean => a.mode !== "watch";
  * Throws when the node cannot be reached, so "unreachable" is never mistaken for "no account".
  */
 export async function detectAccount(chain: Chain, keys: PqKeys): Promise<string | null> {
+  if (keysWiped(keys)) throw new Error("the wallet is locked");
+  const bootstrap = bootstrapAddress(keys); // before any await: a lock during the wait zeroes the seed
   await chain.headHeight();
-  for (const address of [bootstrapAddress(keys), LEGACY_COLLISION_ADDRESS]) {
+  for (const address of [bootstrap, LEGACY_COLLISION_ADDRESS]) {
     const info = await pqwalletInfo(chain, address);
     if (!info.deployed || !info.keyRegistered) continue;
     const pk = await registeredPublicKey(chain, address);
@@ -47,6 +49,11 @@ export async function detectAccount(chain: Chain, keys: PqKeys): Promise<string 
  * address only on the devnet (today's mainnet and Harbinger nodes cannot verify a native ML-DSA-44
  * signature, so it cannot spend there).
  */
+/** True once lock() has zeroed the key material; nothing may be derived or signed from it then. */
+export function keysWiped(keys: PqKeys): boolean {
+  return !keys.seed.some((b) => b !== 0) || !keys.secretKey.some((b) => b !== 0);
+}
+
 export function walletAccounts(keys: PqKeys, stored: Array<{ label: string; address: string; mode: WalletMode }>, networkName: string, detected: string | null): WalletAccount[] {
   const out: WalletAccount[] = [];
   if (networkName === "devnet") out.push({ name: "Post-quantum address (native)", address: keys.address, mode: "native" });

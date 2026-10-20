@@ -130,8 +130,9 @@ export async function ownerOf(chain: Chain, collection: string, idHex: string): 
 }
 
 // ---- metadata and images: only through gateways the wallet trusts ----
-export const IPFS_GATEWAYS = ["https://ipfs.io/ipfs/", "https://cloudflare-ipfs.com/ipfs/", "https://dweb.link/ipfs/"] as const;
-const ALLOWED_HOSTS = ["ipfs.io", "cloudflare-ipfs.com", "dweb.link", "arweave.net"];
+export const IPFS_GATEWAYS = ["https://ipfs.io/ipfs/", "https://dweb.link/ipfs/"] as const;
+/** Exactly the hosts the CSP allows (index.html, deploy/headers.conf). Keep the three in step. */
+export const ALLOWED_HOSTS = ["ipfs.io", "dweb.link", "arweave.net"] as const;
 
 /** ipfs://CID/path -> the first gateway; an https URL on an allowed host as is; anything else null. */
 export function resolveAssetUrl(u: string): string | null {
@@ -142,7 +143,7 @@ export function resolveAssetUrl(u: string): string | null {
     const url = new URL(t);
     if (url.protocol !== "https:") return null;
     const host = url.hostname;
-    const ok = ALLOWED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`)) || /(^|\.)ipfs\.[a-z.]+$/.test(host);
+    const ok = ALLOWED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
     return ok ? url.href : null;
   } catch {
     return null;

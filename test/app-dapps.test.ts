@@ -45,6 +45,9 @@ function fakeBrowser() {
     async hide() {
       calls.push("hide");
     },
+    async setDesktop(o) {
+      calls.push(`desktop ${o.on}`);
+    },
     async setFrame(o) {
       calls.push(`frame top=${o.top} bottom=${o.bottom}`);
     },
@@ -60,8 +63,9 @@ function fakeBrowser() {
   const emit = (event: string, e: unknown) => {
     for (const fn of listeners[event] ?? []) fn(e);
   };
-  /** what the relay would send for a page message */
-  const pageSends = (m: { id: string; command: string; args?: unknown; origin?: string }) => emit("message", { json: JSON.stringify({ id: m.id, command: m.command, args: m.args ?? null, origin: m.origin ?? ORIGIN }) });
+  /** what the relay would send for a page message, with the origin and frame the WebView itself attributes to it */
+  const pageSends = (m: { id: string; command: string; args?: unknown; origin?: string; mainFrame?: boolean }) =>
+    emit("message", { json: JSON.stringify({ id: m.id, command: m.command, args: m.args ?? null, origin: "https://whatever-the-page-claims.example" }), origin: m.origin ?? ORIGIN, mainFrame: m.mainFrame ?? true });
   return { plugin, calls, replies, pageSends, get script() { return script; } };
 }
 
@@ -95,7 +99,7 @@ describe("in-app dapp browser (jsdom, fake plugin)", () => {
     document.body.innerHTML = `<div id="app"></div>`;
     const root = document.getElementById("app")!;
     const fb = fakeBrowser();
-    new App(root, { native: true, browser: fb.plugin, bridgeScript: async () => "/* inpage */" });
+    new App(root, { native: true, browser: fb.plugin, bridgeScript: async () => "/* inpage */", approveDelayMs: 0 });
     click(root, "create");
     const words = [...root.querySelectorAll("ol.words li")].map((li) => li.textContent!.trim());
     click(root, "wrote-down");
@@ -145,11 +149,23 @@ describe("in-app dapp browser (jsdom, fake plugin)", () => {
     await settle();
     expect(fb.replies.find((r) => r.id === "h1")?.error).toBe("refused by the wallet");
 
-    // a message claiming another origin than the page shown is answered with an error and nothing else
-    fb.pageSends({ id: "x1", command: "getAccounts", origin: "https://evil.example" });
+    // a message from a frame inside the page, or from an unencrypted origin, is answered with an error and nothing else
+    fb.pageSends({ id: "x1", command: "getAccounts", mainFrame: false });
     await settle();
-    expect(fb.replies.find((r) => r.id === "x1")?.error).toMatch(/unexpected origin/);
+    expect(fb.replies.find((r) => r.id === "x1")?.error).toMatch(/frames/);
     expect(sheet(root)).toBeNull();
+    fb.pageSends({ id: "x2", command: "getAccounts", origin: "http://evil.example" });
+    await settle();
+    expect(fb.replies.find((r) => r.id === "x2")?.error).toMatch(/https/);
+    expect(sheet(root)).toBeNull();
+    // the sheet names the WebView's origin, whatever the message body claimed
+    fb.pageSends({ id: "x3", command: "signer:signMessage", args: { signerAddress: accounts[0]!.address, message: "hi" }, origin: "https://other.example" });
+    await settle();
+    expect(root.querySelector("#req")?.textContent).toMatch(/other\.example/);
+    expect(text(root)).not.toMatch(/whatever-the-page-claims/);
+    click(root, "dapp-reject");
+    await settle();
+    expect(fb.replies.find((r) => r.id === "x3")?.error).toBe("rejected by the user");
 
     // a signing request without a signer is refused; a reject answers "rejected by the user" for a real one
     fb.pageSends({ id: "s1", command: "signer:signMessage", args: { signerAddress: accounts[0]!.address, message: "hello" } });

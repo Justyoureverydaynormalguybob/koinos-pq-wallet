@@ -201,8 +201,9 @@ const KWK_ITEM = "kwk";
 
 export const nativeKeyStore: KeyStore = {
   async get() {
-    const { SecureStorage } = await import("@aparajita/capacitor-secure-storage");
+    const { SecureStorage, KeychainAccess } = await import("@aparajita/capacitor-secure-storage");
     await SecureStorage.setSynchronize(false); // never to iCloud
+    await SecureStorage.setDefaultKeychainAccess(KeychainAccess.whenUnlockedThisDeviceOnly); // never into a backup restored elsewhere
     const v = await SecureStorage.get(KWK_ITEM);
     return typeof v === "string" && /^[0-9a-f]{64}$/.test(v) ? hexToBytes(v) : null;
   },
@@ -225,12 +226,13 @@ export const nativeBiometry: Biometry = {
     return r.isAvailable;
   },
   async authenticate(reason) {
-    const { BiometricAuth, BiometryErrorType } = await import("@aparajita/capacitor-biometric-auth");
+    const { BiometricAuth, BiometryErrorType, AndroidBiometryStrength } = await import("@aparajita/capacitor-biometric-auth");
     try {
       await BiometricAuth.authenticate({
         reason,
         cancelTitle: "Use passphrase",
         allowDeviceCredential: false, // the device PIN is not the wallet's passphrase
+        androidBiometryStrength: AndroidBiometryStrength.strong, // class 3 only: no camera-only face unlock
         iosFallbackTitle: "",
         androidTitle: "Sparán",
         androidSubtitle: reason,

@@ -33,6 +33,7 @@ export interface VaultData {
   /** absent in wallets saved before duress mode existed: treated as "main" */
   role?: VaultRole;
   /** main wallet only: a decoy has been written to the other slot (shown in Settings; a decoy never has this) */
+  /** legacy (written until 0.13): a main wallet once recorded that it had a decoy; never written or read now, since it told the two apart */
   hasDecoy?: boolean;
 }
 
@@ -56,7 +57,9 @@ export const PBKDF2_ITERATIONS = 600_000;
 export const MIN_PASSPHRASE_LENGTH = 10;
 export const SLOT_COUNT = 2;
 /** Plaintexts are padded to a multiple of this before encryption, so slot sizes reveal nothing. */
-export const PAD_BLOCK = 4096;
+export const PAD_BLOCK = 8192;
+/** Accounts per wallet, so the encrypted JSON always fits one pad block (slot sizes stay identical). */
+export const MAX_ACCOUNTS = 24;
 
 const subtle = () => {
   const s = globalThis.crypto?.subtle;

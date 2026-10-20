@@ -37,6 +37,18 @@
       ]
     },
     {
+      "id": "vortex",
+      "icon": null,
+      "name": "Vortex Bridge",
+      "summary": "Bridge between Koinos and Ethereum",
+      "description": "Move KOIN, ETH, USDT and USDC between Koinos and Ethereum. Connects to this wallet through window.kondor; the Ethereum side needs an Ethereum wallet.",
+      "url": "https://vortexbridge.io/",
+      "tags": [
+        "bridge",
+        "defi"
+      ]
+    },
+    {
       "id": "koinosscan",
       "icon": null,
       "name": "KoinosScan",

@@ -1,6 +1,7 @@
 // KCS-4 tokens: the curated list per network (src/data, checked against the chain), the tokens a wallet
 // adds by address, and amounts in a token's own decimals. Balances are read per token with balance_of;
 // there is no indexer of holdings, so the list is what the Account tab shows.
+// Labels from chain or storage are cleaned before use (control/bidi characters, length).
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { NETWORKS } from "koinos-pq-core";

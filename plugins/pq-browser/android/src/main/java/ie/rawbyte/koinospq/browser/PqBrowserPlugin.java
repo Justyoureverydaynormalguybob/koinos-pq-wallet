@@ -5,7 +5,8 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.view.View;
 import android.view.ViewGroup;
-import android.webkit.JavascriptInterface;
+import android.net.Uri;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -13,6 +14,7 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import java.util.Set;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -34,6 +36,7 @@ public class PqBrowserPlugin extends Plugin {
     private double topCss = 0;
     private double bottomCss = 0;
     private boolean startScriptSupported = false;
+    private boolean bridgeSupported = false;
 
     private static boolean isWeb(String url) {
         return url != null && (url.startsWith("https://") || url.startsWith("http://"));
@@ -109,6 +112,41 @@ public class PqBrowserPlugin extends Plugin {
         });
     }
 
+    /**
+     * Desktop layout: the page lays out at a desktop width scaled to fit, pinch zoom allowed, under a
+     * desktop user agent. Some dapps' phone layouts cannot be used at all (a dialog taller than the
+     * screen that does not scroll); this is the user's way out, as in Chrome's "Desktop site".
+     */
+    @PluginMethod
+    public void setDesktop(PluginCall call) {
+        desktop = Boolean.TRUE.equals(call.getBoolean("on", false));
+        getActivity().runOnUiThread(() -> {
+            if (view != null) {
+                applyMode(view);
+                view.reload();
+            }
+            call.resolve();
+        });
+    }
+
+    private boolean desktop = false;
+
+    private void applyMode(WebView wv) {
+        WebSettings s = wv.getSettings();
+        s.setUseWideViewPort(desktop);
+        s.setLoadWithOverviewMode(desktop);
+        s.setSupportZoom(desktop);
+        s.setBuiltInZoomControls(desktop);
+        s.setDisplayZoomControls(false);
+        if (desktop) {
+            String ua = WebSettings.getDefaultUserAgent(getContext());
+            ua = ua.replaceFirst("\\(Linux; Android[^)]*\\)", "(X11; Linux x86_64)").replace(" Mobile", "").replace("; wv", "");
+            s.setUserAgentString(ua);
+        } else {
+            s.setUserAgentString(null);
+        }
+    }
+
     @PluginMethod
     public void setFrame(PluginCall call) {
         topCss = call.getDouble("top", topCss);
@@ -142,8 +180,25 @@ public class PqBrowserPlugin extends Plugin {
         s.setSafeBrowsingEnabled(true);
         s.setSupportMultipleWindows(false);
         s.setGeolocationEnabled(false);
+        // Pages render at the size their authors tested. The system font scale would otherwise inflate
+        // every page's text, and a fixed-height dialog then pushes its buttons off a screen that cannot scroll.
+        s.setTextZoom(100);
+        applyMode(wv);
         wv.setBackgroundColor(Color.WHITE);
-        wv.addJavascriptInterface(new Bridge(), "PqBridge");
+        // The page's way in: a WebMessageListener, so every message arrives with the origin the WebView
+        // itself attributes to the sender and whether it came from the main frame. (addJavascriptInterface
+        // would be callable from any iframe with no sender information at all.)
+        bridgeSupported = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
+        if (bridgeSupported) {
+            WebViewCompat.addWebMessageListener(wv, "PqBridge", Set.of("*"), (webView, message, sourceOrigin, isMainFrame, replyProxy) -> {
+                String json = message.getData();
+                JSObject o = new JSObject();
+                o.put("json", json == null ? "" : json);
+                o.put("origin", sourceOrigin == null ? "" : sourceOrigin.toString());
+                o.put("mainFrame", isMainFrame);
+                notifyListeners("message", o);
+            });
+        }
         startScriptSupported = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
         if (startScriptSupported) WebViewCompat.addDocumentStartJavaScript(wv, script, Collections.singleton("*"));
         wv.setWebViewClient(new WebViewClient() {
@@ -155,12 +210,23 @@ public class PqBrowserPlugin extends Plugin {
             @Override
             public void onPageStarted(WebView v, String url, Bitmap favicon) {
                 if (!startScriptSupported) v.evaluateJavascript(script, null); // late, but before most page code on old WebViews
-                notifyNav(v, url);
+            }
+
+            /** Fires when a navigation commits: only then is the URL the one the page on screen has. */
+            @Override
+            public void doUpdateVisitedHistory(WebView v, String url, boolean isReload) {
+                notifyNav(v, v.getUrl());
             }
 
             @Override
             public void onPageFinished(WebView v, String url) {
-                notifyNav(v, url);
+                notifyNav(v, v.getUrl());
+            }
+
+            /** A failed main-frame load leaves the previous page on screen: report that page's URL, not the failed target. */
+            @Override
+            public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError error) {
+                if (req.isForMainFrame()) notifyNav(v, v.getUrl());
             }
         });
         ViewGroup content = getActivity().findViewById(android.R.id.content);
@@ -191,7 +257,6 @@ public class PqBrowserPlugin extends Plugin {
         if (view == null) return;
         ViewGroup parent = (ViewGroup) view.getParent();
         if (parent != null) parent.removeView(view);
-        view.removeJavascriptInterface("PqBridge");
         view.loadUrl("about:blank");
         view.destroy();
         view = null;
@@ -206,13 +271,4 @@ public class PqBrowserPlugin extends Plugin {
         notifyListeners("navigation", o);
     }
 
-    /** What the page may call: one method, one JSON string. */
-    private class Bridge {
-        @JavascriptInterface
-        public void postMessage(String json) {
-            JSObject o = new JSObject();
-            o.put("json", json == null ? "" : json);
-            notifyListeners("message", o);
-        }
-    }
 }

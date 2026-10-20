@@ -114,7 +114,7 @@ describe("wallet app (jsdom)", () => {
     const before = localVaultStore.load()!;
     toSettings(root);
     expect(text(root)).toMatch(/Duress wallet/);
-    expect(text(root)).toMatch(/Not set up/);
+    expect(text(root)).toMatch(/never says whether one exists/);
     click(root, "duress");
     click(root, "duress-create");
     expect(root.querySelectorAll("ol.words li")).toHaveLength(24);
@@ -132,21 +132,25 @@ describe("wallet app (jsdom)", () => {
     const decoyOpened = await openVault(fa, DURESS);
     expect(mainOpened.slot).not.toBe(decoyOpened.slot);
     expect(mainOpened.data.role).toBe("main");
-    expect(mainOpened.data.hasDecoy).toBe(true);
+    expect(mainOpened.data.hasDecoy).toBeUndefined(); // nothing is written back to the main slot any more
     expect(decoyOpened.data.role).toBe("decoy");
     expect(decoyOpened.data.seedHex).not.toBe(mainOpened.data.seedHex);
-    // the main slot's ciphertext changed only because hasDecoy was recorded; the decoy slot replaced filler
+    // the main slot's bytes are untouched; only the decoy slot replaced its filler
     expect(fa.slots.length).toBe(fb.slots.length);
-    // unlock as the decoy: the UI gives nothing away
+    expect(JSON.stringify(fa.slots[mainOpened.slot])).toBe(JSON.stringify(fb.slots[mainOpened.slot]));
+    expect(JSON.stringify(fa.slots[decoyOpened.slot])).not.toBe(JSON.stringify(fb.slots[decoyOpened.slot]));
+    // unlock as the decoy, then as main: the settings read the same, and neither mentions the other
     await submit(root, "unlock", { passphrase: DURESS });
     toSettings(root);
-    expect(text(root)).toMatch(/Not set up/);
-    expect(text(root)).not.toMatch(/decoy/i);
-    // unlock as main: shows the decoy exists
+    const decoySettings = text(root).replace(/\s+/g, " ");
+    expect(decoySettings).not.toMatch(/decoy/i);
     click(root, "lock");
     await submit(root, "unlock", { passphrase: MAIN });
     toSettings(root);
-    expect(text(root)).toMatch(/Set up\. A second passphrase/);
+    const mainSettings = text(root).replace(/\s+/g, " ");
+    expect(mainSettings).toMatch(/never says whether one exists/);
+    const same = (t: string) => t.replace(/1[1-9A-HJ-NP-Za-km-z]{25,34}/g, "ADDR").replace(/head [\d,]+/, "head N"); // addresses differ, and the ticker's live head moves
+    expect(same(mainSettings)).toBe(same(decoySettings));
   }, 120_000);
 
   it("watch-only: shown with a badge, cannot send; first-time and look-alike recipients are challenged", async () => {

@@ -41,6 +41,26 @@ export interface HostDeps {
 
 const MAX_WAITING_PER_ORIGIN = 3;
 const EXPIRY_MS = 10 * 60_000;
+/** provider:* calls a page may make per origin in a 10 s window (reads for a dapp's UI; not a relay for abuse) */
+const PROVIDER_CALLS_PER_WINDOW = 60;
+const PROVIDER_WINDOW_MS = 10_000;
+/** provider commands a page is never allowed to issue through the wallet */
+const PROVIDER_DENIED = new Set(["provider:submitBlock", "provider:invokeSystemCall"]);
+
+/** http is tolerated only for a developer's own machine; everything else must be https. */
+export function isAcceptableOrigin(origin: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (u.origin !== origin) return false;
+  if (u.protocol === "https:") return true;
+  if (u.protocol !== "http:") return false;
+  const h = u.hostname;
+  return h === "localhost" || h === "127.0.0.1" || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+}
 
 interface Queued {
   key: string;
@@ -53,6 +73,9 @@ export class DappHost {
   private queue: Queued[] = [];
   private current: PendingApproval | null = null;
   private opened = false;
+  /** bumped by close(): work that was awaiting something when the page closed must not touch the new session */
+  private generation = 0;
+  private providerCalls = new Map<string, number[]>();
   url = "";
   title = "";
   canGoBack = false;
@@ -74,7 +97,7 @@ export class DappHost {
   private async listen() {
     if (this.handles.length) return;
     this.handles.push(
-      await this.plugin.addListener("message", (e) => void this.onMessage(e.json)),
+      await this.plugin.addListener("message", (e) => void this.onMessage(e.json, e.origin, e.mainFrame)),
       await this.plugin.addListener("navigation", (e) => {
         this.url = e.url;
         this.title = e.title;
@@ -97,15 +120,23 @@ export class DappHost {
   async setFrame(frame: { top: number; bottom: number }): Promise<void> {
     if (this.opened) await this.plugin.setFrame(frame);
   }
-  /** The page view is shown only on the Dapps screen with no sheet up; elsewhere it stays loaded but hidden. */
+  /** The page view is shown only on the Dapps screen with no sheet up; the app decides when (placeDapp), never the host. */
   async show(): Promise<void> {
     if (this.opened && !this.current) await this.plugin.show().catch(() => undefined);
+  }
+  async setDesktop(on: boolean): Promise<void> {
+    if (this.opened) await this.plugin.setDesktop({ on });
+  }
+  /** True while a request is being planned or shown: the page must stay hidden under the sheet. */
+  get busy(): boolean {
+    return this.current !== null;
   }
   async hide(): Promise<void> {
     if (this.opened) await this.plugin.hide().catch(() => undefined);
   }
   /** Closes the page; everything still waiting is answered "rejected". */
   async close(): Promise<void> {
+    this.generation++;
     for (const q of this.queue) void this.reply(q.req.id, { error: "rejected by the user" });
     this.queue = [];
     if (this.current) {
@@ -126,32 +157,36 @@ export class DappHost {
     await this.plugin.reply({ json }).catch(() => undefined);
   }
 
-  private async onMessage(json: string) {
-    let m: { id?: unknown; command?: unknown; args?: unknown; origin?: unknown };
+  private async onMessage(json: string, nativeOrigin: string, mainFrame: boolean) {
+    let m: { id?: unknown; command?: unknown; args?: unknown };
     try {
       m = JSON.parse(json) as typeof m;
     } catch {
       return;
     }
-    if (!m || typeof m.id !== "string" || m.id.length > 128 || typeof m.command !== "string" || typeof m.origin !== "string") return;
-    // the origin a page claims must be the page the user is looking at
-    let pageOrigin = "";
-    try {
-      pageOrigin = new URL(this.url).origin;
-    } catch {
-      /* no page yet */
+    if (!m || typeof m.id !== "string" || m.id.length > 128 || typeof m.command !== "string") return;
+    // Only the page itself, never an iframe inside it; and only the origin the WebView attributes to it.
+    // Whatever the message body claims about its origin is ignored.
+    if (!mainFrame) {
+      await this.reply(m.id, { error: "requests from frames are not accepted" });
+      return;
     }
-    if (m.origin !== pageOrigin) {
-      await this.reply(m.id, { error: "request from an unexpected origin" });
+    const origin = nativeOrigin;
+    if (!isAcceptableOrigin(origin)) {
+      await this.reply(m.id, { error: "requests are accepted from https pages only" });
       return;
     }
     const args = m.args && typeof m.args === "object" && !Array.isArray(m.args) ? (m.args as Record<string, unknown>) : null;
-    const req: DappRequest = { id: m.id, command: m.command, args, origin: m.origin };
+    const req: DappRequest = { id: m.id, command: m.command, args, origin };
     if (req.command === "ping") {
       await this.reply(req.id, { result: "pong" });
       return;
     }
     if (req.command.startsWith("provider:")) {
+      if (PROVIDER_DENIED.has(req.command) || !this.providerAllowed(origin)) {
+        await this.reply(req.id, { error: PROVIDER_DENIED.has(req.command) ? `${req.command} is not available to pages` : "too many requests; slow down" });
+        return;
+      }
       try {
         await this.reply(req.id, { result: (await handleProvider(req.command, args ?? {}, this.deps.rpcOverride?.())) ?? null });
       } catch (e) {
@@ -172,6 +207,18 @@ export class DappHost {
     await this.reply(req.id, { error: `unsupported command ${req.command}` });
   }
 
+  private providerAllowed(origin: string): boolean {
+    const now = Date.now();
+    const recent = (this.providerCalls.get(origin) ?? []).filter((t) => now - t < PROVIDER_WINDOW_MS);
+    if (recent.length >= PROVIDER_CALLS_PER_WINDOW) {
+      this.providerCalls.set(origin, recent);
+      return false;
+    }
+    recent.push(now);
+    this.providerCalls.set(origin, recent);
+    return true;
+  }
+
   /** Takes the oldest waiting request: answers it silently when it may be, else hands it to the sheet. */
   private async pump() {
     if (this.current) return;
@@ -184,10 +231,13 @@ export class DappHost {
       return true;
     });
     const next = this.queue.shift();
-    if (!next) {
-      await this.plugin.show().catch(() => undefined);
-      return;
-    }
+    if (!next) return; // idle: the app re-renders on onApproval(null) and places the page view itself
+    // Claim the slot before anything asynchronous: a second message arriving while this one is being
+    // planned must queue behind it, never replace the sheet under the user's finger.
+    const claim: PendingApproval = { key: next.key, req: next.req, plan: null, refused: null, status: "planning" };
+    this.current = claim;
+    const gen = this.generation;
+    await this.plugin.hide().catch(() => undefined);
     const net = this.deps.network();
     let plan: Plan | null = null, refused: string | null = null;
     try {
@@ -195,15 +245,20 @@ export class DappHost {
     } catch (e) {
       refused = (e as Error).message || String(e);
     }
+    if (gen !== this.generation || this.current !== claim) return; // the page closed meanwhile; close() already answered it
     // a site already allowed to see the accounts is answered without asking again
     if (plan && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin)) {
       await this.execute(next.req, plan);
+      if (gen !== this.generation) return;
+      this.current = null;
+      this.events.onApproval(null);
       void this.pump();
       return;
     }
-    this.current = { key: next.key, req: next.req, plan, refused, status: null };
-    await this.plugin.hide().catch(() => undefined);
-    this.events.onApproval(this.current);
+    claim.plan = plan;
+    claim.refused = refused;
+    claim.status = null;
+    this.events.onApproval(claim);
   }
 
   private async execute(req: DappRequest, plan: Plan) {
@@ -231,6 +286,8 @@ export class DappHost {
   async decide(key: string, approve: boolean): Promise<void> {
     const c = this.current;
     if (!c || c.key !== key) return;
+    if (c.status === "planning") return; // nothing to decide yet
+    if (c.status !== null) return; // already executing: a late Reject cannot undo a broadcast, so it is ignored rather than lied about
     if (!approve || !c.plan) {
       await this.reply(c.req.id, { error: c.refused ? "refused by the wallet" : "rejected by the user" });
       this.current = null;
@@ -240,13 +297,16 @@ export class DappHost {
     }
     c.status = "Working…";
     this.events.onApproval(c);
+    const gen = this.generation;
     try {
       await this.execute(c.req, c.plan);
-      if (c.req.command === "getAccounts") this.deps.permissions()?.allow(c.req.origin);
+      if (gen === this.generation && c.req.command === "getAccounts") this.deps.permissions()?.allow(c.req.origin);
     } finally {
-      this.current = null;
-      this.events.onApproval(null);
-      void this.pump();
+      if (gen === this.generation && this.current === c) {
+        this.current = null;
+        this.events.onApproval(null);
+        void this.pump();
+      }
     }
   }
 }

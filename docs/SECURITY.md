@@ -217,11 +217,10 @@ list the sites and forget them. Nothing about signing is ever remembered.
 Approve is the consent, as it is for the wallet's own Send. The extension window keeps its passphrase
 field because it holds no keys until then.
 
-**Limits.** On Android the bridge object is visible to every frame of the page, so a cross-origin
-iframe inside a dapp could post a request that is attributed to the page's origin; the user still
-reads and approves every request on its own terms, which is the same position the top page is in. On
-iOS only the main frame's messages are accepted. The page view is hidden while the sheet is up, so a
-page cannot draw over the approval. Pages cannot reach the app's WebView, its storage or the vault:
+**Limits.** (Updated 0.14.0.) On both platforms a message now arrives with the origin and the
+main-frame flag the WebView itself attributes to it (Android `WebMessageListener`, iOS `WKFrameInfo`);
+frames are refused and the message body's own claim about its origin is ignored, see the 2026-10-20
+section. The page view is hidden while the sheet is up, so a page cannot draw over the approval. Pages cannot reach the app's WebView, its storage or the vault:
 they run at their own origins. The plugin is exercised only on a device; the jsdom tests drive the
 screens and the protocol with a fake of it.
 
@@ -239,3 +238,87 @@ followed; anything else is shown without a picture. Metadata bigger than 200 kB 
 of the web app, the site headers and the extension list exactly those hosts for images and fetches;
 nothing else can be loaded. There is no curated collection list yet: the lists the plan compared were
 unlicensed, so collections are added by address and kept per wallet, like tokens.
+
+
+## Security audit 2026-10-20 (wallet 0.13.0 → 0.14.0): three independent reviews
+
+Three reviewers (separate agents, no shared notes) read the whole wallet: the vault and duress
+design, the native shells, the in-app browser and its protocol, the approval screen, tokens and
+collectibles, storage, CI. Everything below was reproduced before it was fixed. What they agreed on:
+the key material handling and the signing path are sound; the weak spots were around the keys, not
+in them.
+
+### Fixed in 0.14.0
+
+**In-app browser: who is asking.** A page's request carried its origin inside the message body, and
+the Android bridge object was callable from any frame. Now the native side reports the origin and
+whether the sender is the main frame (`WebMessageListener` with its `sourceOrigin` on Android,
+`WKFrameInfo.securityOrigin` and `isMainFrame` on iOS); the host ignores the body's claim, refuses
+frames, and accepts `https` only (plain `http` for localhost and private addresses, for developers).
+Navigation is reported at commit time so the url bar can never show a page that has not yet loaded.
+Media capture is denied, link previews are off.
+
+**One sheet, no substitution.** The request queue was re-entrant: a second message arriving while the
+first was being prepared could replace the sheet under the user's finger. The host now claims the
+slot before any await, a generation counter invalidates work from a closed page, and a Reject that
+lands while a transaction is already being broadcast is ignored rather than reported as a success.
+Approve takes no tap for 800 ms after the sheet appears (a tap meant for the page cannot land on
+it); tapping the dimmed page rejects; the actions are pinned at the bottom of a scrollable sheet so a
+long request cannot push them off screen; the site's host is shown in bold with an `unencrypted`
+badge for `http`. `provider:*` calls are rate-limited per origin (60 per 10 s) and `submitBlock` is
+not available to pages. A request that arrives after the wallet locked is rejected unseen.
+
+**What the approval screen says.** A call the wallet could not decode was described as a bare
+"call contract X" and looked no different from a harmless read. Now: KCS-4 `approve` (a standing
+allowance) and `burn`, and KCS-5 `transfer`, are decoded and worded; transfers of tokens the user
+added are decoded like curated ones; anything else is labelled *"The wallet cannot tell what this
+call does"* with the raw arguments and their length shown. Messages to sign are cleaned of control
+and bidi characters for display, capped, and their true byte length is shown.
+
+**Chain id pinned** (core 2003e16). The transaction header's chain id came from the node. Each
+network now pins its id; the client refuses a node that reports another, and every header carries the
+pinned value, so no node can have the wallet sign for a different chain.
+
+**Duress mode told itself apart.** The main wallet recorded `hasDecoy`, rewrote its own slot and
+refreshed its biometric wrap when a decoy was made, while a decoy did none of that; the side stores
+(contacts, tokens, sites, collections) were keyed by a hash of the seed, so a second set of keys
+appearing in storage was a tell. Now creating a decoy does identical work from either wallet: nothing
+is written back to the current slot, biometrics are turned off for every slot, Settings shows the same
+text to both and never says whether a decoy exists. Side stores are keyed by slot and every slot's
+entries exist from the first unlock on (older seed-keyed stores are moved over once). Deleting the
+wallet removes every slot's stores. The padding block grew to 8 KiB so the account count is hidden in
+a wider band, and a vault keeps at most 24 accounts.
+
+**Keys after a lock.** A request in flight while the wallet locked could derive an address, or sign,
+from a zeroed seed. `detectAccount` and `executePlan` derive what they need before any await and
+abort if the key material has been wiped. The seed buffer is wiped after key derivation on every
+unlock path, and the recovery words never survive a change of screen.
+
+**Tokens.** A user-added token whose symbol matches a listed one is refused (a look-alike "KOIN"
+cannot be added); labels from the chain are cleaned of control and bidi characters and capped (core);
+sending to an address that is itself a token or collection contract is refused; a token picked in
+Send that cannot be resolved is an error, never a silent fall-back to KOIN; a malformed amount from the
+indexer cannot blank the activity list.
+
+**Native shells.** Android: `allowBackup=false` with backup and data-extraction rules that exclude
+everything, `FLAG_SECURE` (no screenshots, no recents thumbnail), biometrics restricted to class 3
+("strong"), the Keychain item `whenUnlockedThisDeviceOnly` on iOS, a blur cover when the app resigns
+active on iOS. Collectible pictures load from ipfs.io, dweb.link and arweave.net only (cloudflare's
+gateway was retired); the site sends `Referrer-Policy: no-referrer`.
+
+**CI.** Workflow permissions reduced to `contents: read`; the keystore secret is scoped to the one
+step that decodes it; every action is pinned by commit SHA.
+
+### Accepted for now (documented, not fixed)
+
+- Biometric unlock wraps the slot key under a keystore key that is handed over after the OS prompt;
+  it is not bound to the biometric enrolment itself (`setUserAuthenticationRequired` / `CryptoObject`
+  on Android, `SecAccessControl .biometryCurrentSet` on iOS). A rooted device with the app's keystore
+  can unwrap without a finger. Needs an own plugin; listed in the hand-over.
+- Side stores (contacts, added tokens, allowed sites, collections) are plaintext in local storage,
+  keyed by slot. They hold no secrets, but a duress wallet's contacts are readable without its
+  passphrase. Encrypting them under the slot key is the next step.
+- The in-app browser's "desktop site" mode (added for pages whose phone layout cannot be used)
+  changes the user agent and layout only; it does not change what the page may ask for.
+- Development-only advisories remain in vitest's dependency tree; they do not ship.
+

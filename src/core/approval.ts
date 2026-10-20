@@ -14,7 +14,7 @@
 import { Transaction, utils } from "koilib";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { Chain, PqSigner, bootstrapAddress, decodeFields, type Network, type PqKeys } from "koinos-pq-core";
-import { detectAccount, walletAccounts, type WalletAccount } from "./accounts";
+import { detectAccount, keysWiped, walletAccounts, type WalletAccount } from "./accounts";
 import type { AccountRecord } from "./vault";
 
 export interface DappRequest {
@@ -177,15 +177,19 @@ export type Outcome = { result: unknown } | { error: string; status?: string };
  */
 export async function executePlan(p: Plan, keys: PqKeys, stored: AccountRecord[], onStatus: (s: string) => void = () => undefined): Promise<Outcome> {
   const chain = new Chain(p.net);
+  if (keysWiped(keys)) return { error: "request failed in the wallet", status: "The wallet locked." };
+  const bootstrap = bootstrapAddress(keys), native = keys.address; // derived before any await
   const detected = await detectAccount(chain, keys).catch(() => null);
+  if (keysWiped(keys)) return { error: "request failed in the wallet", status: "The wallet locked." };
   const accounts: WalletAccount[] = walletAccounts(keys, stored, p.net.name, detected);
   if (p.req.command === "getAccounts") return { result: accounts.map((x) => ({ name: x.name, address: x.address, signers: [] })) };
   const acct = accounts.find((x) => x.address === p.signerAddress);
   if (!acct) return { error: "request failed in the wallet", status: "This wallet has no such account on this network." };
   // no operation may touch any account of this wallet (its key, allow-list or code)
-  const own = new Set([...accounts.map((x) => x.address), bootstrapAddress(keys), keys.address]);
+  const own = new Set([...accounts.map((x) => x.address), bootstrap, native]);
   if (p.prepared?.operations?.some((op) => own.has(op.call_contract.contract_id))) return { error: "refused by the wallet", status: "Refused: the transaction calls one of this wallet's own accounts." };
   const signer = acct.mode === "native" ? PqSigner.native(keys, chain.provider) : PqSigner.pqwallet(keys, acct.address, chain.provider);
+  if (keysWiped(keys)) return { error: "request failed in the wallet", status: "The wallet locked." };
   onStatus("Signing…");
   switch (p.req.command) {
     case "signer:signMessage":

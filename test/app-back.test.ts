@@ -49,6 +49,7 @@ function fakeBrowser(canGoBack: boolean) {
     },
     async show() {},
     async hide() {},
+    async setDesktop() {},
     async setFrame() {},
     async reply() {},
     addListener: (async (event: string, fn: (e: unknown) => void) => {

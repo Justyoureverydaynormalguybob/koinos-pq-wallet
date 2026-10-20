@@ -15,7 +15,7 @@ import {
   type SetupCosts, type SetupResult, type SetupStatus,
 } from "koinos-pq-core";
 import {
-  decoySlotFor, decryptVault, encryptVault, localVaultStore, MIN_PASSPHRASE_LENGTH, newFile, openVault, roleOf, toFile, withSlot,
+  decoySlotFor, decryptVault, encryptVault, localVaultStore, MAX_ACCOUNTS, MIN_PASSPHRASE_LENGTH, newFile, openVault, roleOf, SLOT_COUNT, toFile, withSlot,
   type AccountRecord, type VaultData, type VaultFile,
 } from "../core/vault";
 import { canSign, detectAccount, displayLabel } from "../core/accounts";
@@ -29,7 +29,7 @@ import {
 import { isNative } from "./platform";
 import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr } from "../i18n";
 import { scanAddress, type Scanner } from "./scan";
-import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, forgetSlot, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
+import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
 import { SitePermissions, permissionsNamespace } from "../core/permissions";
 import { Collections, NFT_ENTRY, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
 import { DappHost, type PendingApproval } from "./dapp-host";
@@ -104,9 +104,11 @@ interface DappState {
   url: string;
   title: string;
   canGoBack: boolean;
+  /** desktop layout requested for the page (a way out of phone layouts that cannot be used) */
+  desktop: boolean;
   approval: PendingApproval | null;
 }
-const emptyDapp = (): DappState => ({ open: false, url: "", title: "", canGoBack: false, approval: null });
+const emptyDapp = (): DappState => ({ open: false, url: "", title: "", canGoBack: false, desktop: false, approval: null });
 
 interface State {
   screen: Screen;
@@ -167,6 +169,58 @@ const PREF_LOCK_ON_HIDE = "koinos-pq-wallet/lock-on-hide";
 const PREF_CLIPBOARD_WIPE = "koinos-pq-wallet/clipboard-wipe";
 const PREF_THEME = "koinos-pq-wallet/theme";
 const PREF_HIDE_ZERO = "koinos-pq-wallet/hide-zero";
+/** how long after the approval sheet appears before Approve accepts a tap (a tap meant for the page must not land on it) */
+const APPROVE_DELAY_MS = 800;
+
+// The per-wallet side stores (contacts, added tokens, allowed sites, collections) are kept per vault slot,
+// and every slot's entries exist from the first unlock on, so local storage looks the same whether one
+// wallet lives on the device or two. (Until 0.14 they were keyed by a hash of the seed: a second key set
+// appearing was a tell that a duress wallet had been made.)
+type StoreKind = "book" | "tokens" | "sites" | "collections";
+const STORE_KINDS: StoreKind[] = ["book", "tokens", "sites", "collections"];
+const emptyStore = (kind: StoreKind) => (kind === "book" || kind === "sites" ? "[]" : "{}");
+const storeKey = (kind: StoreKind, ns: string) => `koinos-pq-wallet/${kind}/${ns}`;
+function ensureStored(key: string, empty: string) {
+  try {
+    if (globalThis.localStorage?.getItem(key) === null) globalThis.localStorage?.setItem(key, empty);
+  } catch {
+    /* a blocked store: nothing persists, the wallet still works */
+  }
+}
+function moveStored(from: string, to: string) {
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return;
+    const v = ls.getItem(from);
+    if (v === null) return;
+    if (ls.getItem(to) === null) ls.setItem(to, v);
+    ls.removeItem(from);
+  } catch {
+    /* as above */
+  }
+}
+function resetStored(key: string, empty: string) {
+  try {
+    globalThis.localStorage?.setItem(key, empty);
+  } catch {
+    /* as above */
+  }
+}
+/** Deleting the wallet takes every slot's side stores with it; preferences (language, theme, node) stay. */
+function clearWalletStores() {
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return;
+    const doomed: string[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && /^koinos-pq-wallet\/(book|tokens|sites|collections)\//.test(k)) doomed.push(k);
+    }
+    for (const k of doomed) ls.removeItem(k);
+  } catch {
+    /* as above */
+  }
+}
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
 
@@ -204,6 +258,8 @@ export interface AppOptions {
   bridgeScript?: () => Promise<string>;
   /** whether to show what only a native shell has (the Dapps tab, the QR scan button); detected by default */
   native?: boolean;
+  /** ms after the approval sheet appears before Approve takes a tap; tests pass 0 */
+  approveDelayMs?: number;
 }
 
 export class App {
@@ -219,9 +275,14 @@ export class App {
   private readonly browser: PqBrowserPlugin;
   private readonly bridgeScript: (() => Promise<string>) | undefined;
   private host: DappHost | null = null;
+  private approveDelayMs: number;
+  /** the approval the sheet currently shows and when it appeared */
+  private sheetKey = "";
+  private sheetShownAt = 0;
 
   constructor(root: HTMLElement, opts: AppOptions = {}) {
     this.root = root;
+    this.approveDelayMs = opts.approveDelayMs ?? APPROVE_DELAY_MS;
     this.scanner = opts.scanner;
     this.native = opts.native ?? isNative();
     this.bio = { blobs: opts.bio?.blobs ?? localBlobStore, keys: opts.bio?.keys ?? nativeKeyStore, biometry: opts.bio?.biometry ?? nativeBiometry };
@@ -404,6 +465,7 @@ export class App {
   }
   private go(screen: Screen) {
     this.s.screen = screen;
+    this.s.exportWords = null; // the recovery words never outlive the screen they were shown on
     this.s.error = null;
     this.s.notice = null;
     this.render();
@@ -499,15 +561,7 @@ export class App {
     this.s.file = file;
     this.s.slot = slot;
     this.s.vault = vault;
-    this.s.keys = deriveKeys(seed);
-    this.s.book = new AddressBook(addressBookNamespace(seed));
-    this.s.tokens = new CustomTokens(customTokensNamespace(seed));
-    this.s.sites = new SitePermissions(permissionsNamespace(seed));
-    this.s.collections = new Collections(collectionsNamespace(seed));
-    // Wipe our buffer only if the keys hold their own copy (koinos-pq-core >= 2026-10-19). Before that fix the
-    // keys shared it, and wiping zeroed keys.seed: every in-session wallet then derived the account address
-    // of an all-zero seed and collided on 14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR.
-    if (this.s.keys.seed !== seed) wipe(seed);
+    this.startSession(seed);
     this.s.pendingSeed = null;
     this.s.pendingMnemonic = null;
     this.s.pendingAccounts = [];
@@ -515,6 +569,23 @@ export class App {
     this.s.notice = null;
     this.touch();
     await this.enterHome();
+  }
+  /**
+   * Keys and side stores for the wallet just opened (see STORE_KINDS). Older seed-keyed stores are moved
+   * to the slot's keys once. The seed buffer is wiped unless the keys alias it (koinos-pq-core before
+   * 2026-10-19 shared it; wiping then zeroed keys.seed and every wallet collided on one address).
+   */
+  private startSession(seed: Uint8Array) {
+    this.s.keys = deriveKeys(seed);
+    const ns = `slot${this.s.slot}`;
+    const legacy: Record<StoreKind, string> = { book: addressBookNamespace(seed), tokens: customTokensNamespace(seed), sites: permissionsNamespace(seed), collections: collectionsNamespace(seed) };
+    for (const kind of STORE_KINDS) moveStored(storeKey(kind, legacy[kind]), storeKey(kind, ns));
+    for (let i = 0; i < SLOT_COUNT; i++) for (const kind of STORE_KINDS) ensureStored(storeKey(kind, `slot${i}`), emptyStore(kind));
+    this.s.book = new AddressBook(ns);
+    this.s.tokens = new CustomTokens(ns);
+    this.s.sites = new SitePermissions(ns);
+    this.s.collections = new Collections(ns);
+    if (this.s.keys.seed !== seed) wipe(seed);
   }
   /** The passphrase must open the slot this session was unlocked from; anything else is "wrong". */
   private async reopenCurrent(passphrase: string): Promise<VaultData> {
@@ -556,15 +627,14 @@ export class App {
     const decoy: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: [], createdAt: new Date().toISOString(), role: "decoy" };
     wipe(seed);
     const target = decoySlotFor(this.s.slot, roleOf(current));
-    let next = withSlot(file, target, await encryptVault(decoy, decoyPass));
-    if (roleOf(current) === "main") {
-      current.hasDecoy = true;
-      next = withSlot(next, this.s.slot, await encryptVault(current, mainPass));
-    }
+    const next = withSlot(file, target, await encryptVault(decoy, decoyPass));
     if (!localVaultStore.save(next)) throw new Error(tr("could not write to local storage"));
-    forgetSlot(target, this.bio.blobs); // whatever biometrics opened in that slot is gone with it
-    if (roleOf(current) === "main") await refreshWrappedKey(next, this.s.slot, mainPass, this.bio).catch(() => undefined);
-    this.lock("Duress wallet saved. Unlock with either passphrase: each opens its own wallet.");
+    for (const kind of STORE_KINDS) resetStored(storeKey(kind, `slot${target}`), emptyStore(kind)); // nothing of a previous decoy carries over
+    // Exactly the same work whichever wallet did this: nothing is written back to the current slot, and
+    // biometrics go off for every slot (the owner turns them on again from the wallet they should open).
+    // Nothing stored says which slot is which.
+    await disableBiometrics(this.bio).catch(() => undefined);
+    this.lock("Duress wallet saved. Unlock with either passphrase: each opens its own wallet. Biometric unlock is off; turn it on again from the wallet it should open.");
   }
 
   // ---------- account activation (the pqwallet contract on the seed's own address) ----------
@@ -693,11 +763,7 @@ export class App {
     this.s.slot = opened.slot;
     this.s.vault = opened.data;
     const seed = hexToBytes(opened.data.seedHex);
-    this.s.keys = deriveKeys(seed);
-    this.s.book = new AddressBook(addressBookNamespace(seed));
-    this.s.tokens = new CustomTokens(customTokensNamespace(seed));
-    this.s.sites = new SitePermissions(permissionsNamespace(seed));
-    this.s.collections = new Collections(collectionsNamespace(seed));
+          this.startSession(seed);
     this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
     this.touch();
     await this.enterHome();
@@ -720,6 +786,17 @@ export class App {
           if (this.s.screen === "dapps") this.render();
         },
         onApproval: (p) => {
+          if (p && !this.s.keys) {
+            void this.host?.decide(p.key, false); // locked meanwhile: nothing is shown or signed
+            return;
+          }
+          if (p && p.key !== this.sheetKey) {
+            this.sheetKey = p.key;
+            this.sheetShownAt = Date.now();
+            window.setTimeout(() => {
+              if (this.s.dapp.approval?.key === p.key) this.render(); // Approve becomes live
+            }, this.approveDelayMs + 30);
+          }
           this.s.dapp.approval = p;
           if (p && this.s.screen !== "dapps") this.s.screen = "dapps";
           this.render();
@@ -762,7 +839,7 @@ export class App {
   private placeDapp() {
     const host = this.host;
     if (!host?.isOpen) return;
-    if (this.s.screen === "dapps" && !this.s.dapp.approval) {
+    if (this.s.screen === "dapps" && !this.s.dapp.approval && !host.busy) {
       void host.setFrame(this.dappFrame()).then(() => host.show());
     } else {
       void host.hide();
@@ -1039,8 +1116,14 @@ export class App {
       case "dapp-back":
         void this.dappHost().back();
         break;
+      case "dapp-desktop":
+        this.s.dapp.desktop = !this.s.dapp.desktop;
+        void this.dappHost().setDesktop(this.s.dapp.desktop).catch(() => undefined);
+        this.render();
+        break;
       case "dapp-approve":
       case "dapp-reject":
+        if (action === "dapp-approve" && Date.now() - this.sheetShownAt < this.approveDelayMs) break; // a tap meant for the page
         void this.dappHost()
           .decide(el.dataset.key ?? "", action === "dapp-approve")
           .catch((e: Error) => {
@@ -1128,6 +1211,7 @@ export class App {
         const typed = window.prompt(tr("This deletes the wallet from this device. Your 24 words are the only way back in.\nType DELETE to confirm."));
         if (typed === "DELETE") {
           localVaultStore.clear();
+          clearWalletStores();
           void disableBiometrics(this.bio).catch(() => undefined);
           this.lock("Wallet deleted from this device.");
         }
@@ -1235,11 +1319,7 @@ export class App {
           this.s.slot = opened.slot;
           this.s.vault = opened.data;
           const seed = hexToBytes(opened.data.seedHex);
-          this.s.keys = deriveKeys(seed);
-          this.s.book = new AddressBook(addressBookNamespace(seed));
-          this.s.tokens = new CustomTokens(customTokensNamespace(seed));
-    this.s.sites = new SitePermissions(permissionsNamespace(seed));
-    this.s.collections = new Collections(collectionsNamespace(seed));
+          this.startSession(seed);
           this.s.accountIndex = opened.data.accounts.length ? 1 : 0;
           this.touch();
           await this.enterHome();
@@ -1250,7 +1330,13 @@ export class App {
         // Step one: look at the recipient before anything is signed.
         const to = field("to").trim();
         const amount = field("amount").trim();
-        const token = findToken(this.tokenList(), field("token")) ?? this.koinToken();
+        const picked = field("token");
+        const token = picked ? findToken(this.tokenList(), picked) : this.koinToken();
+        if (!token) {
+          this.s.error = tr("Choose a token from the list.");
+          this.render();
+          return;
+        }
         this.s.sendToken = token.address === this.network.koin ? "" : token.address;
         const a = this.account();
         if (!a || !canSign(a)) {
@@ -1268,6 +1354,11 @@ export class App {
         const assessment = this.s.book?.assess(to, this.ownAddresses()) ?? { kind: "new" as const };
         if (assessment.kind === "invalid") {
           this.s.error = tr("That is not a valid Koinos address (check every character; the checksum does not match).");
+          this.render();
+          return;
+        }
+        if (findToken(this.tokenList(), to) || this.collectionList().some((c) => c.address === to)) {
+          this.s.error = tr("That address is a token or collection contract, not someone's account. Anything sent to it is lost.");
           this.render();
           return;
         }
@@ -1354,6 +1445,8 @@ export class App {
             return;
           }
           const info = await this.chain().tokenInfo(addr);
+          const clash = this.tokenList().find((t) => t.symbol.toLowerCase() === info.symbol.toLowerCase());
+          if (clash) throw new Error(tr("A token called {symbol} is already in the list ({address}). This is a different contract using the same name, so it is not added.", { symbol: clash.symbol, address: short(clash.address) }));
           this.s.tokens?.add(this.network.name, { address: addr, ...info });
           this.s.notice = tr("Added {symbol} ({name}).", { symbol: info.symbol, name: info.name });
           const a = this.account();
@@ -1380,7 +1473,9 @@ export class App {
           title: tr("Watch an address"),
           detail: tr("Show {address} ({label}) in this wallet: balance, mana and history only. This wallet holds no key for it and cannot spend from it.", { address: addr, label }),
           apply: (v) => {
-            if (!v.accounts.some((x) => x.address === addr)) v.accounts.push({ label, mode: "watch", address: addr });
+            if (v.accounts.some((x) => x.address === addr)) return;
+            if (v.accounts.length >= MAX_ACCOUNTS) throw new Error(tr("This wallet already keeps {n} accounts, the most it holds.", { n: MAX_ACCOUNTS }));
+            v.accounts.push({ label, mode: "watch", address: addr });
           },
         };
         this.go("save");
@@ -1413,7 +1508,9 @@ export class App {
           title: tr("Add account"),
           detail: tr("Add {address} ({label}) to this wallet. It only works if that account's contract has this wallet's key registered.", { address: addr, label }),
           apply: (v) => {
-            if (!v.accounts.some((x) => x.address === addr)) v.accounts.push({ label, mode: "pqwallet", address: addr });
+            if (v.accounts.some((x) => x.address === addr)) return;
+            if (v.accounts.length >= MAX_ACCOUNTS) throw new Error(tr("This wallet already keeps {n} accounts, the most it holds.", { n: MAX_ACCOUNTS }));
+            v.accounts.push({ label, mode: "pqwallet", address: addr });
           },
         };
         this.go("save");
@@ -1800,7 +1897,12 @@ export class App {
         let amt = "";
         if (i.direction && i.valueBase) {
           const t = i.contract ? findToken(tokens, i.contract) : undefined;
-          const value = t ? fmtAmount(formatUnits(BigInt(i.valueBase), t.decimals)) : fmtAmount(i.valueBase);
+          let value: string;
+          try {
+            value = t ? fmtAmount(formatUnits(BigInt(i.valueBase), t.decimals)) : fmtAmount(i.valueBase);
+          } catch {
+            value = "?";
+          }
           const sym = t ? t.symbol : i.contract ? `${tr("units of")} ${shortAddr(i.contract)}` : "?";
           const who = i.counterparty ? this.s.book?.get(i.counterparty)?.name || shortAddr(i.counterparty) : "?";
           main = `<span class="t">${i.direction === "out" ? tr("Sent") : tr("Received")} ${esc(value)} ${esc(sym)}</span> <span class="s">${i.direction === "out" ? tr("to") : tr("from")} ${esc(who)}${i.reverted ? " " + tr("(reverted)") : ""}</span>`;
@@ -1835,24 +1937,44 @@ export class App {
       <div class="urlbar">
         ${button(tr("&larr;"), { action: "dapp-back", mini: true, title: tr("Back"), disabled: !d.canGoBack })}
         <form data-form="dapp-go" class="grow" style="flex:1 1 auto">${input({ name: "url", class: "in", inputmode: "url", autocomplete: "off", value: d.url, "aria-label": "Address" })}</form>
+        ${button(tr("PC"), { action: "dapp-desktop", mini: true, title: tr("Desktop version of the page"), attrs: `aria-pressed="${d.desktop ? "true" : "false"}"` })}
         ${button(tr("&times;"), { action: "dapp-close", mini: true, title: tr("Close the page") })}
       </div>
       <div id="dapp-area" style="height:calc(100vh - 220px)"></div>
       ${
         a
-          ? `<div class="scrim"></div><section class="sheet" role="dialog" aria-labelledby="req">
+          ? `<div class="scrim" data-action="dapp-reject" data-key="${esc(a.key)}"></div><section class="sheet" role="dialog" aria-labelledby="req">
               <div class="grab" aria-hidden="true"></div>
-              ${section(">", tr("Request"), esc(this.network.name))}
-              <h1 id="req" style="font-size:22px">${esc(a.req.origin)}</h1>
-              ${
-                a.plan
-                  ? `${describePlan(a.plan)}
-                     ${a.status ? notice("busy", esc(a.status)) : `<div class="row">${button(tr("Approve"), { action: "dapp-approve", variant: "primary", data: { key: a.key } })}${button(tr("Reject"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`}`
-                  : `${notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}<div class="row">${button(tr("Close"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
-              }
+              <div class="sheet-body">
+                ${section(">", tr("Request"), esc(this.network.name))}
+                ${this.originHeading(a.req.origin)}
+                ${a.plan ? describePlan(a.plan, this.s.tokens) : notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}
+              </div>
+              <div class="sheet-actions">
+                ${
+                  a.plan
+                    ? a.status
+                      ? notice("busy", esc(a.status))
+                      : `<div class="row">${button(tr("Approve"), { action: "dapp-approve", variant: "primary", data: { key: a.key }, disabled: Date.now() - this.sheetShownAt < this.approveDelayMs })}${button(tr("Reject"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
+                    : `<div class="row">${button(tr("Close"), { action: "dapp-reject", variant: "ghost", data: { key: a.key } })}</div>`
+                }
+              </div>
             </section>`
           : ""
       }`;
+  }
+
+  /** The requesting site: its host in bold, the scheme muted, and a badge when it is not encrypted. */
+  private originHeading(origin: string): string {
+    let host = origin, scheme = "";
+    try {
+      const u = new URL(origin);
+      host = u.host;
+      scheme = u.protocol;
+    } catch {
+      /* shown as it came */
+    }
+    return `<h1 id="req" style="font-size:22px"><span class="rest">${esc(scheme ? `${scheme}//` : "")}</span><span class="host">${esc(host)}</span>${scheme === "http:" ? `<span class="badge-http">${tr("not encrypted")}</span>` : ""}</h1>`;
   }
 
   private vSettings() {
@@ -1901,9 +2023,9 @@ export class App {
       <p class="mute">${tr("Sending to an address you have never used, or one that merely resembles one you have, asks you to check it first.")}</p>
       <div class="row tight">${button(tr("Open contacts"), { action: "contacts" })}</div>
 
-      ${section(null, tr("Duress wallet"), this.s.vault?.hasDecoy ? tr("set up") : tr("not set up"))}
-      <p class="mute">${this.s.vault?.hasDecoy ? tr("Set up. A second passphrase opens a separate, small wallet.") : tr("Not set up. A second passphrase would open a separate, small wallet to show under pressure.")}</p>
-      <div class="row tight">${button(this.s.vault?.hasDecoy ? tr("Replace the duress wallet") : tr("Set up a duress wallet"), { action: "duress" })}</div>
+      ${section(null, tr("Duress wallet"))}
+      <p class="mute">${tr("A second passphrase opens a separate, small wallet to show under pressure. This screen never says whether one exists.")}${this.native ? ` ${tr("Setting one up turns biometric unlock off for every wallet on this device.")}` : ""}</p>
+      <div class="row tight">${button(tr("Set up or replace the duress wallet"), { action: "duress" })}</div>
 
       ${section(null, tr("Network"))}
       ${field(tr("Node"), sel("network", Object.keys(NETWORKS).map((n) => [n, n === "testnet" ? "testnet (Harbinger)" : n]), this.s.networkName))}

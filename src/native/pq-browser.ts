@@ -18,9 +18,12 @@ export interface PqBrowserPlugin {
   show(): Promise<void>;
   hide(): Promise<void>;
   setFrame(o: { top: number; bottom: number }): Promise<void>;
+  /** Desktop layout (a wide viewport, a desktop user agent) and a reload; the way out of a page whose phone layout cannot be used. */
+  setDesktop(o: { on: boolean }): Promise<void>;
   /** Hands an answer to the page (window.__pqDeliver). */
   reply(o: { json: string }): Promise<void>;
-  addListener(event: "message", fn: (e: { json: string }) => void): Promise<PluginListenerHandle>;
+  /** `origin` and `mainFrame` come from the WebView itself (WebMessageListener / WKFrameInfo), never from the page. */
+  addListener(event: "message", fn: (e: { json: string; origin: string; mainFrame: boolean }) => void): Promise<PluginListenerHandle>;
   addListener(event: "navigation", fn: (e: NavigationEvent) => void): Promise<PluginListenerHandle>;
   addListener(event: "closed", fn: () => void): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;

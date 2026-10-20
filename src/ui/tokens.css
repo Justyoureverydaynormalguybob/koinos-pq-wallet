@@ -122,6 +122,9 @@ mark { background: var(--signal); color: var(--on-signal); padding: 0 1px; }
 .mark { display: inline-flex; align-items: center; gap: 8px; font-weight: 900; font-stretch: 125%; font-size: 17px; letter-spacing: -0.01em; text-transform: uppercase; }
 .mark .px { display: inline-block; width: 10px; height: 10px; background: var(--signal); }
 .mark .hex { font: 500 11px/1 var(--mono); letter-spacing: 0.15em; color: var(--mute); text-transform: uppercase; }
+@media (max-width: 400px) { .mark .hex { display: none; } }
+.btn.mini[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.sheet .badge-http { display: inline-block; font: 700 11px/1 var(--mono); letter-spacing: 0.1em; padding: 3px 6px; margin-left: 8px; background: var(--signal); color: #fff; vertical-align: middle; }
 .ticker {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 4px 16px; font: 500 11px/1.6 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--mute);
@@ -250,7 +253,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .note.danger mark { background: var(--on-signal); color: var(--signal); }
 
 /* ---- sheet (approval) ---- */
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 55; background: var(--panel); border-top: 2px solid var(--ink); border-radius: var(--r-card) var(--r-card) 0 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); max-height: 85vh; overflow-y: auto; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 55; background: var(--panel); border-top: 2px solid var(--ink); border-radius: var(--r-card) var(--r-card) 0 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); max-height: 85vh; display: flex; flex-direction: column; }
+.sheet .sheet-body { overflow-y: auto; overflow-x: hidden; min-height: 0; flex: 1 1 auto; }
+.sheet .sheet-actions { flex: 0 0 auto; padding-top: 12px; }
+.sheet #req { word-break: break-all; overflow-wrap: anywhere; }
+.sheet #req .host { font-weight: 800; }
+.sheet #req .rest { color: var(--mute); font-weight: 500; }
 .sheet .grab { width: 36px; height: 3px; background: var(--mute); margin: 0 auto 12px; border-radius: 2px; }
 .scrim { position: fixed; inset: 0; z-index: 54; background: color-mix(in srgb, var(--ink) 55%, transparent); }
 

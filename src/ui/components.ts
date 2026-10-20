@@ -123,8 +123,8 @@ export function tabBar(tabs: Tab[], current: string): string {
     .join("")}</nav>`;
 }
 
-/** The wordmark: a signal pixel, "PQ" wide, and its hex dump. */
-export const mark = (): string => `<span class="mark"><span class="px" aria-hidden="true"></span>PQ <span class="hex" aria-hidden="true">50 51</span><span class="sr-only">Koinos PQ Wallet</span></span>`;
+/** The wordmark: a signal pixel, "Sparán" wide, and its UTF-8 hex dump. */
+export const mark = (): string => `<span class="mark"><span class="px" aria-hidden="true"></span>Sparán <span class="hex" aria-hidden="true">53 70 61 72 c3 a1 6e</span><span class="sr-only">Sparán wallet</span></span>`;
 
 export const header = (rightHtml = ""): string => `<header class="hdr">${mark()}${rightHtml ? `<span class="hdr-right">${rightHtml}</span>` : ""}</header>`;
 
