@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Privacy · Koinos PQ Wallet</title>
+    <style>
+      :root { --paper: #e9e6df; --panel: #dfdbd2; --ink: #0f0f0e; --mute: #5c5850; --signal: #ff4a1c; }
+      @media (prefers-color-scheme: dark) { :root { --paper: #0f0f0e; --panel: #181816; --ink: #e9e6df; --mute: #98938a; } }
+      body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
+      main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+      h1 { font-size: 28px; line-height: 1.15; margin: 0 0 8px; }
+      h2 { font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mute); margin: 28px 0 8px; padding-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--mute) 40%, transparent); font-family: ui-monospace, Menlo, Consolas, monospace; }
+      p, li { margin: 8px 0; }
+      a { color: var(--ink); text-decoration-color: var(--signal); text-underline-offset: 3px; }
+      .mark { display: inline-block; width: 10px; height: 10px; background: var(--signal); margin-right: 8px; vertical-align: 1px; }
+      .fine { color: var(--mute); font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="fine"><span class="mark"></span>Koinos PQ Wallet</p>
+      <h1>Privacy</h1>
+      <p class="fine">Applies to the web wallet at wallet.koinosproof.com, the browser extension and the Android and iOS apps. Last changed 2026-10-20.</p>
+
+      <h2>The short version</h2>
+      <p>The wallet runs entirely on your device. It has no account system, no server of its own, no analytics and no advertising. Nothing you do in it is sent to us, because there is nothing of ours to send it to.</p>
+
+      <h2>What stays on your device</h2>
+      <ul>
+        <li>Your 24 words and keys, encrypted with your passphrase, in the app's own storage (the browser's local storage, or the app's WebView storage on a phone). Uninstalling the app deletes them; the 24 words are the only backup.</li>
+        <li>Your contacts, the tokens and collections you add, the sites you allow to see your accounts, and your settings (network, language, theme, locking). Each is kept per wallet.</li>
+        <li>If you turn on biometric unlock, a wrapped copy of the wallet's key in the device keystore. Never the passphrase or the words. The fingerprint or face check is done by the operating system; the app only learns whether it passed.</li>
+      </ul>
+
+      <h2>What leaves your device</h2>
+      <ul>
+        <li><strong>Koinos nodes.</strong> To show balances and activity and to send transactions, the wallet talks to a public Koinos node for the network you pick (api.koinos.io for mainnet, testnet.koinosfoundation.org for Harbinger, or a node you name for the devnet). Those nodes see your IP address and the addresses you ask about, as any blockchain node does. Transactions you send are public on the chain by design.</li>
+        <li><strong>Collectible pictures.</strong> When you open a collection, the wallet fetches token metadata and images only from a short list of public gateways (ipfs.io, cloudflare-ipfs.com, dweb.link, arweave.net). Those gateways see your IP address and the content addresses requested.</li>
+        <li><strong>Sites you open in the in-app browser.</strong> A site you open sees what any website sees of a browser visit. It learns your account address only after you allow it, and it never sees your keys: every signature is approved on a screen the wallet draws, not the site.</li>
+      </ul>
+      <p>That is the complete list. The wallet fetches no price feeds, no token lists and no updates from anyone; its lists ship inside the app.</p>
+
+      <h2>Permissions</h2>
+      <ul>
+        <li><strong>Camera</strong> (phone apps): only when you tap the scan button, to read a QR code of an address. No picture is stored or sent.</li>
+        <li><strong>Biometrics</strong> (phone apps): only if you turn biometric unlock on, as described above.</li>
+      </ul>
+
+      <h2>Children</h2>
+      <p>The wallet is not aimed at children and collects no data from anyone.</p>
+
+      <h2>Changes and contact</h2>
+      <p>This page changes only when the wallet's behaviour changes, and the date at the top moves. The code is open source under the MIT licence at <a href="https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet">github.com/Justyoureverydaynormalguybob/koinos-pq-wallet</a>; the <code>docs/SECURITY.md</code> file there describes exactly what is stored and sent. Questions: <a href="mailto:hello@koinosproof.com">hello@koinosproof.com</a>.</p>
+    </main>
+  </body>
+</html>

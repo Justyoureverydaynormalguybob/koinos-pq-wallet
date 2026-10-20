@@ -38,19 +38,28 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew --no-daemon assembleRelease
-          ls -la app/build/outputs/apk/release/
+          ./gradlew --no-daemon assembleRelease bundleRelease
+          ls -la app/build/outputs/apk/release/ app/build/outputs/bundle/release/
       - name: Name and hash the APK
         run: |
           V=$(node -p "require('./package.json').version")
           cp android/app/build/outputs/apk/release/app-release.apk "koinos-pq-wallet-$V.apk"
           sha256sum "koinos-pq-wallet-$V.apk" | tee "koinos-pq-wallet-$V.apk.sha256"
+          cp android/app/build/outputs/bundle/release/app-release.aab "koinos-pq-wallet-$V.aab"
+          sha256sum "koinos-pq-wallet-$V.aab" | tee "koinos-pq-wallet-$V.aab.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: |
             koinos-pq-wallet-*.apk
             koinos-pq-wallet-*.apk.sha256
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-aab
+          path: |
+            koinos-pq-wallet-*.aab
+            koinos-pq-wallet-*.aab.sha256
           if-no-files-found: error
 
   ios:

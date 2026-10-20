@@ -3,6 +3,12 @@
 *Researched and written 2026-10-19 on the phone session; to be built on the laptop. Every claim below
 names its source so it can be re-checked. Start at section 2 for the order of work.*
 
+**Status, 2026-10-20: every step shipped.** 0.5.0 (step 1), 0.6.0 (1b), 0.7.0 (2), 0.8.0 (3 and 4),
+0.10.0 (5 and 6; the Cordova spike was skipped, the in-house plugin built directly), 0.11.0 (7),
+0.12.0 (8). What remains needs store accounts: `STORE.md`. The KoinDX token list turned out to carry
+its MIT licence only in package.json, so every entry was re-read from the chain and the files hold
+what the chain said; Harbinger had been reset, so its list is KOIN and VHP only.
+
 ## 0. Why this and not a Konio fork
 
 Konio (github.com/konio-io/konio-mobile, GPL-3.0, Adriano Foschi) was the native Koinos wallet: React

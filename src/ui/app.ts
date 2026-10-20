@@ -273,6 +273,16 @@ export class App {
     if (!NETWORKS[this.s.networkName]) this.s.networkName = "testnet";
     applyTheme(this.s.theme);
     initLanguage();
+    if (this.native) {
+      // the hardware back button on Android (no-op elsewhere); the plugin is loaded on demand
+      void import("@capacitor/app").then(({ App: CapApp }) =>
+        CapApp.addListener("backButton", () => {
+          void this.handleBack().then((r) => {
+            if (r === "minimize") void CapApp.minimizeApp();
+          });
+        }),
+      ).catch(() => undefined);
+    }
     root.addEventListener("click", (e) => this.onClick(e));
     root.addEventListener("submit", (e) => this.onSubmit(e));
     root.addEventListener("change", (e) => this.onChange(e));
@@ -881,7 +891,36 @@ export class App {
   private onClick(e: Event) {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
     if (!el) return;
-    const action = el.dataset.action!;
+    this.act(el.dataset.action!, el);
+  }
+
+  /**
+   * The Android back button: a sheet is a rejection, a page in the browser goes back or closes, a
+   * screen under a tab goes to the tab's root, an onboarding step cancels, and a root minimises the app.
+   */
+  async handleBack(): Promise<"sheet" | "page" | "screen" | "minimize"> {
+    const s = this.s;
+    if (s.dapp.approval) {
+      await this.dappHost().decide(s.dapp.approval.key, false);
+      return "sheet";
+    }
+    if (s.screen === "dapps" && this.host?.isOpen) {
+      const went = await this.host.back();
+      if (!went) await this.host.close();
+      return "page";
+    }
+    const none = document.createElement("span");
+    const toSettings: Screen[] = ["export", "save", "contacts", "duress", "duress-words", "bio-enable"];
+    const toHome: Screen[] = ["send", "send-confirm", "sent", "receive", "nfts", "nft", "nft-send"];
+    const toWelcome: Screen[] = ["create", "confirm", "passphrase", "import"];
+    if (toSettings.includes(s.screen)) this.act("settings", none);
+    else if (toHome.includes(s.screen)) this.act("back-home", none);
+    else if (toWelcome.includes(s.screen)) this.act("welcome", none);
+    else return "minimize";
+    return "screen";
+  }
+
+  private act(action: string, el: HTMLElement) {
     switch (action) {
       case "create": {
         this.s.pendingMnemonic = newMnemonic();
@@ -1876,6 +1915,7 @@ export class App {
 
       ${section(null, tr("About"))}
       <p class="mute">${tr("Koinos PQ Wallet {version}. Open source, MIT. Accounts are controlled by an ML-DSA-44 key (FIPS 204). Keys never leave this device. A test build, not audited.", { version: esc(__APP_VERSION__) })}</p>
+      <p class="fine"><a href="https://wallet.koinosproof.com/privacy.html" target="_blank" rel="noopener noreferrer">${tr("Privacy")}</a> · <a href="https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet" target="_blank" rel="noopener noreferrer">${tr("Source code")}</a></p>
 
       <details class="adv"><summary>Advanced</summary>
         ${section(null, tr("Add an account by address"))}

@@ -47,6 +47,12 @@ Since 0.11.0: **languages**. Every string the app shows is a key in `src/i18n/en
 otherwise, and a missing line falls back to English. To add a language, copy `en.json`, translate the
 values (keep the `{placeholders}` and inline tags), and list it in `src/i18n/index.ts`.
 
+Since 0.12.0: **ready for the stores**. The app mark (an ink square, "PQ" in Archivo at its widest, one
+signal pixel) as icons and splash screens on both platforms, the Android back button mapped, theme
+colours by day and night, a [privacy page](https://wallet.koinosproof.com/privacy.html), and CI
+producing the signed AAB Play wants. `docs/STORE.md` lists what the repo provides and the steps that
+need a Play Console or Apple Developer account.
+
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
                         account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)
@@ -78,8 +84,9 @@ with the zip on the [releases page](https://github.com/Justyoureverydaynormalguy
 
 ## Where this is going
 
-`docs/PLAN-NATIVE-WALLET.md`: the researched plan to take this to Konio parity and beyond (Capacitor 8,
-tokens, QR, biometrics, in-app dapp browser, NFTs, languages), with the standards, plugins and sources.
+`docs/PLAN-NATIVE-WALLET.md`: the researched plan that took this to Konio parity and beyond (Capacitor 8,
+tokens, QR, biometrics, in-app dapp browser, NFTs, languages, store polish), with the standards, plugins and
+sources. Every step shipped between 0.5.0 and 0.12.0; `docs/STORE.md` has what is left for the store accounts.
 
 ## Android and iOS
 
