@@ -9,7 +9,7 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 ARG RAILWAY_GIT_COMMIT_SHA
 ENV RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA
-RUN npm run build
+RUN npm run build && chmod -R a+rX dist  # files uploaded from a strict-umask machine (0600) must still be readable by nginx
 
 FROM nginx:1.27-alpine
 # the official image renders *.template with envsubst at start, so nginx listens on Railway's $PORT
