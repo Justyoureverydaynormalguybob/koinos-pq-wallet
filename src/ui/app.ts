@@ -176,8 +176,8 @@ const PREF_CLIPBOARD_WIPE = "koinos-pq-wallet/clipboard-wipe";
 const PREF_THEME = "koinos-pq-wallet/theme";
 const PREF_HIDE_ZERO = "koinos-pq-wallet/hide-zero";
 const PREF_WC_PROJECT = "koinos-pq-wallet/wc-project-id";
-/** a project id baked in at build time (VITE_WC_PROJECT_ID), overridable in Settings; empty means WalletConnect is off */
-const WC_PROJECT_DEFAULT = (import.meta.env?.VITE_WC_PROJECT_ID as string | undefined) ?? "";
+/** the Reown project id (a public identifier, not a secret): VITE_WC_PROJECT_ID at build time, else the project's own; Settings overrides it */
+const WC_PROJECT_DEFAULT = ((import.meta.env?.VITE_WC_PROJECT_ID as string | undefined) || "d43868eb23db2fcc678234dc12a60eea").trim();
 /** how long after the approval sheet appears before Approve accepts a tap (a tap meant for the page must not land on it) */
 const APPROVE_DELAY_MS = 800;
 
