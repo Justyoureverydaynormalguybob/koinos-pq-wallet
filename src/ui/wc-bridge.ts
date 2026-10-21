@@ -37,6 +37,8 @@ export interface WcDeps {
   onSessionsChanged: () => void;
   /** a readable notice for the user (a proposal refused before the sheet, a dapp disconnecting) */
   notify: (text: string) => void;
+  /** one line per step, for the Dapps tab's WalletConnect log (what the relay did, what the dapp asked) */
+  log?: (text: string) => void;
 }
 
 export const WC_METADATA = {
@@ -81,11 +83,16 @@ export class WcBridge {
     this.starting = (async () => {
       const [{ Core }, { WalletKit }, utils] = await Promise.all([import("@walletconnect/core"), import("@reown/walletkit"), import("@walletconnect/utils")]);
       this.utils = utils;
+      this.deps?.log?.("starting the relay connection");
       const core = new Core({ projectId });
       const kit = await WalletKit.init({ core, metadata: WC_METADATA });
+      core.relayer.on("relayer_connect", () => this.deps?.log?.("relay connected"));
+      core.relayer.on("relayer_disconnect", () => this.deps?.log?.("relay disconnected"));
+      core.relayer.on("relayer_error", (err: unknown) => this.deps?.log?.(`relay error: ${(err as Error)?.message ?? String(err)}`));
       kit.on("session_proposal", (e) => void this.onProposal(e));
       kit.on("session_request", (e) => void this.onRequest(e));
       kit.on("session_delete", () => {
+        this.deps?.log?.("a dapp ended its session");
         this.deps?.onSessionsChanged();
       });
       this.kit = kit;
@@ -104,7 +111,15 @@ export class WcBridge {
     const u = uri.trim();
     if (!/^wc:[0-9a-f]{64}@2\?/i.test(u)) throw new Error("That is not a WalletConnect code.");
     const kit = await this.start();
-    await kit.pair({ uri: u });
+    this.deps?.log?.("pairing with the dapp's code");
+    try {
+      await kit.pair({ uri: u });
+    } catch (err) {
+      const m = (err as Error).message ?? String(err);
+      this.deps?.log?.(`pairing failed: ${m}`);
+      throw new Error(/expired/i.test(m) ? "That code has expired: ask the dapp for a fresh one and scan it straight away." : /already|exists/i.test(m) ? "That code was already used; ask the dapp for a fresh one." : m);
+    }
+    this.deps?.log?.("paired; waiting for the dapp's proposal");
   }
 
   /** The sessions that belong to the open wallet, for the Dapps tab. */
@@ -176,10 +191,12 @@ export class WcBridge {
     try {
       summary = summariseProposal(e.params, e.verifyContext.verified.validation);
     } catch (err) {
+      deps.log?.(`proposal refused: ${(err as Error).message}`);
       await reject((err as Error).message);
       deps.notify((err as Error).message);
       return;
     }
+    deps.log?.(`proposal from ${summary.name} (${summary.origin}): ${summary.chains.join(", ")}, ${summary.methods.length} methods, verify ${summary.verified}`);
     const net = deps.network();
     // the same sheet a page's getAccounts gets, always shown (a pairing is a decision every time)
     const req = { id: `wc-proposal-${e.id}`, command: "getAccounts", args: { wc: { name: summary.name, chains: summary.chains, methods: summary.methods.length } }, origin: summary.origin };
@@ -187,6 +204,7 @@ export class WcBridge {
       req,
       async (outcome: Outcome) => {
         if (outcome.error !== undefined) {
+          deps.log?.(`proposal rejected here: ${outcome.error}`);
           await reject(outcome.error);
           return;
         }
@@ -196,8 +214,10 @@ export class WcBridge {
           const namespaces = utils.buildApprovedNamespaces({ proposal: e.params as never, supportedNamespaces: { [WC_NAMESPACE]: ns } });
           const session = await kit.approveSession({ id: e.id, namespaces });
           this.owned.add(session.topic);
+          deps.log?.(`session approved with ${summary.name}`);
           deps.onSessionsChanged();
         } catch (err) {
+          deps.log?.(`approval failed: ${(err as Error).message}`);
           await reject((err as Error).message);
           deps.notify((err as Error).message);
         }
@@ -208,6 +228,7 @@ export class WcBridge {
 
   private async onRequest(e: { id: number; topic: string; params: { request: { method: string; params: unknown }; chainId: string }; verifyContext: { verified: { validation: "VALID" | "INVALID" | "UNKNOWN" } } }) {
     const kit = this.kit;
+    this.deps?.log?.(`request ${e.params.request.method} on ${e.params.chainId}`);
     if (!kit) return;
     const respond = (o: Outcome) =>
       kit

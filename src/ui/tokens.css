@@ -238,6 +238,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .list .t { font-weight: 600; }
 .list .s { color: var(--mute); font-size: 13px; }
 .list .acts .link, .list .acts a { color: var(--mute); font-size: 13px; }
+.wclog { margin: 10px 0; font: 500 12px/1.5 var(--mono); color: var(--mute); }
+.wclog summary { cursor: pointer; letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; }
+.wclog ul { list-style: none; padding: 6px 0 0; margin: 0; }
+.wclog li { padding: 2px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .list .amt { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .tile { min-width: 36px; height: 36px; padding: 0 6px; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--r-control); display: inline-grid; place-items: center; font: 700 11px/1 var(--mono); letter-spacing: 0.02em; flex: none; background: var(--paper); text-transform: uppercase; white-space: nowrap; }
 .words { columns: 2; gap: 24px; padding-left: 0; margin: 12px 0; font-family: var(--mono); list-style: none; counter-reset: w; }

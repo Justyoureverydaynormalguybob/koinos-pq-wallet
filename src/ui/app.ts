@@ -108,9 +108,18 @@ interface DappState {
   canGoBack: boolean;
   /** desktop layout requested for the page (a way out of phone layouts that cannot be used) */
   desktop: boolean;
+  /** the page stays loaded but hidden while the Dapps list (WalletConnect, the curated sites) is shown */
+  minimised: boolean;
   approval: PendingApproval | null;
 }
-const emptyDapp = (): DappState => ({ open: false, url: "", title: "", canGoBack: false, desktop: false, approval: null });
+const hostOf = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+const emptyDapp = (): DappState => ({ open: false, url: "", title: "", canGoBack: false, desktop: false, minimised: false, approval: null });
 
 interface State {
   screen: Screen;
@@ -136,6 +145,8 @@ interface State {
   dapp: DappState;
   /** WalletConnect sessions of the open wallet (for the Dapps tab) */
   wcSessions: WcSession[];
+  /** the last WalletConnect steps, newest last ("HH:MM text") */
+  wcLog: string[];
   /** the key the side stores are sealed under (from the slot key); wiped on lock */
   storeKey: Uint8Array | null;
   /** NFT collections added by address on this wallet */
@@ -362,6 +373,7 @@ export class App {
       sendCheck: null,
       setup: null,
       wcSessions: [],
+      wcLog: [],
       storeKey: null,
       detected: {},
       change: null,
@@ -788,6 +800,7 @@ export class App {
         this.s.notice = text;
         this.render();
       },
+      log: (text) => this.wcLog(text),
     });
     void this.wc.resume();
     if (this.pendingWcUri) {
@@ -795,6 +808,12 @@ export class App {
       this.pendingWcUri = null;
       void this.run("Connecting", () => this.pairWc(uri));
     }
+  }
+  private wcLog(text: string) {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, "0"), mm = String(d.getMinutes()).padStart(2, "0"), ss = String(d.getSeconds()).padStart(2, "0");
+    this.s.wcLog = [...this.s.wcLog.slice(-11), `${hh}:${mm}:${ss} ${text}`];
+    if (this.s.screen === "dapps" && !this.s.busy && !this.typing()) this.render();
   }
   private wcProjectId(): string {
     return (pref.get(PREF_WC_PROJECT) ?? "").trim() || WC_PROJECT_DEFAULT;
@@ -1069,7 +1088,7 @@ export class App {
   private placeDapp() {
     const host = this.host;
     if (!host?.isOpen) return;
-    if (this.s.screen === "dapps" && !this.s.dapp.approval && !host.busy) {
+    if (this.s.screen === "dapps" && !this.s.dapp.approval && !this.s.dapp.minimised && !host.busy) {
       void host.setFrame(this.dappFrame()).then(() => host.show());
     } else {
       void host.hide();
@@ -1351,6 +1370,14 @@ export class App {
         break;
       case "dapp-close":
         void this.dappHost().close();
+        break;
+      case "dapp-list":
+        this.s.dapp.minimised = true;
+        this.render();
+        break;
+      case "dapp-restore":
+        this.s.dapp.minimised = false;
+        this.render();
         break;
       case "dapp-back":
         void this.dappHost().back();
@@ -2252,6 +2279,7 @@ export class App {
               <label><span>${tr("Pairing link")}</span>${input({ name: "uri", class: "mono", autocomplete: "off", placeholder: "wc:…", required: true })}</label>
               ${scanBtn}${button(tr("Connect"), { mini: true })}
             </form>
+            ${this.s.wcLog.length ? `<details class="wclog"><summary>${tr("WalletConnect log")}</summary><ul>${this.s.wcLog.map((l) => `<li>${esc(l)}</li>`).join("")}</ul></details>` : ""}
             ${sessions.length ? `${section(null, tr("Connected dapps"))}${list(sessions.map((w) => listRow(`<span class="t">${esc(w.name)}</span><br><span class="s mono">${esc(w.origin)}</span>`, linkButton(tr("disconnect"), "wc-disconnect", { topic: w.topic }))).join(""))}` : `<p class="mute">${tr("No dapp connected through WalletConnect.")}</p>`}`
           : `<p class="mute">${tr("Needs a free project id from cloud.reown.com, entered once under Settings › WalletConnect.")}</p>`
       }`;
@@ -2284,10 +2312,11 @@ export class App {
 
   private vDapps() {
     const d = this.s.dapp;
-    if (!d.open) {
+    if (!d.open || d.minimised) {
       const sites = this.s.sites?.list() ?? [];
       return `
         ${section("03", tr("Dapps"), tr("curated"))}
+        ${d.open ? `<div class="row tight" style="margin-bottom:12px">${button(tr("Back to {page}", { page: esc(d.title || hostOf(d.url)) }), { action: "dapp-restore", variant: "primary" })}${button(tr("Close the page"), { action: "dapp-close", variant: "ghost" })}</div>` : ""}
         ${list((dappList as { dapps: Array<{ id: string; name: string; summary: string; url: string }> }).dapps.map((x) => `<li>${tile(x.name)}<span class="grow"><span class="t">${esc(x.name)}</span><br><span class="s">${esc(x.summary)}</span></span>${button(tr("Open"), { action: "dapp-open", mini: true, data: { url: x.url } })}</li>`).join(""))}
         <form data-form="dapp-open" class="field inline">
           <label><span>Or any address</span>${input({ name: "url", class: "mono", inputmode: "url", autocomplete: "off", placeholder: "https://…", required: true })}</label>
@@ -2309,6 +2338,7 @@ export class App {
         ${button(tr("&larr;"), { action: "dapp-back", mini: true, title: tr("Back"), disabled: !d.canGoBack })}
         <form data-form="dapp-go" class="grow" style="flex:1 1 auto">${input({ name: "url", class: "in", inputmode: "url", autocomplete: "off", value: d.url, "aria-label": "Address" })}</form>
         ${button(tr("PC"), { action: "dapp-desktop", mini: true, title: tr("Desktop version of the page"), attrs: `aria-pressed="${d.desktop ? "true" : "false"}"` })}
+        ${button(tr("&#9776;"), { action: "dapp-list", mini: true, title: tr("Dapps list and WalletConnect (the page stays open)") })}
         ${button(tr("&times;"), { action: "dapp-close", mini: true, title: tr("Close the page") })}
       </div>
       <div id="dapp-area" aria-hidden="true"></div>
@@ -2378,7 +2408,7 @@ export class App {
       <div class="row tight">${button(tr("Open contacts"), { action: "contacts" })}</div>
 
       ${section(null, tr("Duress wallet"))}
-      <p class="mute">${tr("A second passphrase opens a separate, small wallet to show under pressure. This screen never says whether one exists.")}${this.native ? ` ${tr("Setting one up turns biometric unlock off for every wallet on this device.")}` : ""}</p>
+      <p class="mute">${tr("A second passphrase opens a separate, small wallet to show under pressure. This screen never says whether one exists.")}${this.native ? ` ${tr("Setting one up turns biometric unlock off for every wallet on this device; either wallet can turn it back on afterwards.")}` : ""}</p>
       <div class="row tight">${button(tr("Set up or replace the duress wallet"), { action: "duress" })}</div>
 
       ${section(null, tr("WalletConnect"), this.wcProjectId() ? tr("on") : tr("off"))}
