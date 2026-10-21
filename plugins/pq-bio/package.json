@@ -1,6 +1,6 @@
 {
   "name": "pq-bio",
-  "version": "0.15.8",
+  "version": "0.15.9",
   "private": true,
   "description": "Biometric key store for Sparán: a key the platform keystore releases only to a strong biometric that passes, invalidated when the enrolment changes.",
   "license": "MIT",

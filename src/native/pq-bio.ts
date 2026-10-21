@@ -7,8 +7,8 @@
 import { registerPlugin } from "@capacitor/core";
 
 export interface PqBioPlugin {
-  /** a strong biometric is enrolled and the keystore can bind to it */
-  available(): Promise<{ available: boolean }>;
+  /** a strong biometric is enrolled and the keystore can bind to it (trial key); `reason` is "enrol" when the phone needs a fingerprint added */
+  available(): Promise<{ available: boolean; reason?: string }>;
   /** stores the key (hex); no prompt. Replaces whatever was there and re-creates the keystore key. */
   set(o: { hex: string }): Promise<void>;
   /** prompts, then returns the key; `hex` is null when nothing is stored. Rejects "cancelled" / "invalidated" / "failed". */

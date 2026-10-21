@@ -328,5 +328,7 @@
   "Sent a collectible": "Sent a collectible",
   "contract": "contract",
   "Each opens in a new tab. The page finds this wallet through window.kondor and every request comes back here for approval. The list is this wallet's own.": "Each opens in a new tab. The page finds this wallet through window.kondor and every request comes back here for approval. The list is this wallet's own.",
-  "Each opens in a new tab. A web page cannot reach this wallet directly: connect it through WalletConnect below, or use the extension or the phone app. The list is this wallet's own.": "Each opens in a new tab. A web page cannot reach this wallet directly: connect it through WalletConnect below, or use the extension or the phone app. The list is this wallet's own."
+  "Each opens in a new tab. A web page cannot reach this wallet directly: connect it through WalletConnect below, or use the extension or the phone app. The list is this wallet's own.": "Each opens in a new tab. A web page cannot reach this wallet directly: connect it through WalletConnect below, or use the extension or the phone app. The list is this wallet's own.",
+  "This phone has no fingerprint or face that Android's secure keystore accepts. Add a fingerprint in the phone's settings and come back; face unlock on many phones is not strong enough for a key.": "This phone has no fingerprint or face that Android's secure keystore accepts. Add a fingerprint in the phone's settings and come back; face unlock on many phones is not strong enough for a key.",
+  "Biometric unlock is not available on this device.": "Biometric unlock is not available on this device."
 }

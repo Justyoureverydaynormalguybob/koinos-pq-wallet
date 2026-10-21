@@ -297,6 +297,7 @@ export class App {
   private readonly bio: BioDeps;
   /** whether the device offers biometrics (checked once per unlock screen on native) */
   private bioAvailable: boolean | null = null;
+  private bioChecking = false;
   private readonly browser: PqBrowserPlugin;
   private readonly bridgeScript: (() => Promise<string>) | undefined;
   private host: DappHost | null = null;
@@ -1799,7 +1800,17 @@ export class App {
       case "bio-enable":
         void this.run("Setting up", async () => {
           if (!this.s.file) throw new Error(tr("no wallet"));
-          await enableBiometrics(this.s.file, this.s.slot, field("passphrase"), this.bio);
+          try {
+            await enableBiometrics(this.s.file, this.s.slot, field("passphrase"), this.bio);
+          } catch (e) {
+            if (/\benrol\b/.test((e as Error).message ?? "")) {
+              this.bioAvailable = false;
+              this.bio.biometry.lastReason = "enrol";
+              this.s.screen = "settings";
+              throw new Error(this.bioUnavailableText());
+            }
+            throw e;
+          }
           this.s.screen = "settings";
           this.s.notice = tr("Biometric unlock is on for this wallet.");
         });
@@ -1969,18 +1980,35 @@ export class App {
       </form>`;
   }
 
+  /** Asks the device once per session whether biometrics can be used; re-renders the screen that asked. */
+  private checkBio(screen: Screen) {
+    if (this.bioAvailable !== null || this.bioChecking) return;
+    this.bioChecking = true;
+    void this.bio.biometry.available().then(
+      (ok) => {
+        this.bioAvailable = ok;
+        this.bioChecking = false;
+        if (this.s.screen === screen) this.render();
+      },
+      () => {
+        this.bioAvailable = false;
+        this.bioChecking = false;
+      },
+    );
+  }
+  /** Why biometrics cannot be turned on here, for the Settings page. */
+  private bioUnavailableText(): string {
+    return this.bio.biometry.lastReason === "enrol"
+      ? tr("This phone has no fingerprint or face that Android's secure keystore accepts. Add a fingerprint in the phone's settings and come back; face unlock on many phones is not strong enough for a key.")
+      : tr("Biometric unlock is not available on this device.");
+  }
+
   private vUnlock() {
     const bio = this.native && biometricsEnabled(this.bio.blobs);
-    if (bio && this.bioAvailable === null) {
-      this.bioAvailable = false;
-      void this.bio.biometry.available().then((ok) => {
-        this.bioAvailable = ok;
-        if (ok && this.s.screen === "unlock") this.render();
-      }, () => undefined);
-    }
+    if (bio) this.checkBio("unlock");
     return `
       <h1 class="wide" style="margin-top:40px">${tr("Unlock")}</h1>
-      ${bio && this.bioAvailable ? `<div class="row" style="margin-top:0">${button(tr("Unlock with fingerprint or face"), { action: "bio-unlock", variant: "primary", block: true })}</div><p class="fine" style="margin:12px 0 0">${tr("Or type the passphrase.")}</p>` : ""}
+      ${bio && this.bioAvailable === true ? `<div class="row" style="margin-top:0">${button(tr("Unlock with fingerprint or face"), { action: "bio-unlock", variant: "primary", block: true })}</div><p class="fine" style="margin:12px 0 0">${tr("Or type the passphrase.")}</p>` : ""}
       <form data-form="unlock">
         ${field(tr("Passphrase"), input({ name: "passphrase", type: "password", required: true, autofocus: !(bio && this.bioAvailable), autocomplete: "current-password" }))}
         <div class="row">${button(tr("Unlock"), { variant: bio && this.bioAvailable ? undefined : "primary", block: true })}</div>
@@ -2328,7 +2356,9 @@ export class App {
         this.native
           ? biometricsEnabled(this.bio.blobs)
             ? `<p class="mute">${tr("Biometric unlock is on. It opens the wallet that turned it on last; the passphrase always works too.")}</p><div class="row tight">${button(tr("Turn biometric unlock off"), { action: "bio-disable" })}</div>`
-            : `<p class="mute">${tr("Unlock with fingerprint or face instead of typing the passphrase. The device keeps a wrapped copy of this wallet's key, never the passphrase or the words.")}</p><div class="row tight">${button(tr("Turn biometric unlock on"), { action: "bio-enable" })}</div>`
+            : (this.checkBio("settings"), this.bioAvailable !== false)
+              ? `<p class="mute">${tr("Unlock with fingerprint or face instead of typing the passphrase. The device keeps a wrapped copy of this wallet's key, never the passphrase or the words.")}</p><div class="row tight">${button(tr("Turn biometric unlock on"), { action: "bio-enable" })}</div>`
+              : `<p class="mute">${this.bioUnavailableText()}</p>`
           : ""
       }
       <form data-form="autolock">

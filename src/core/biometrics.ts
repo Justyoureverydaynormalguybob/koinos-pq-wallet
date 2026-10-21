@@ -27,6 +27,8 @@ export interface KeyStore {
 export interface Biometry {
   /** whether the device has a strong biometric enrolled that the keystore can bind to */
   available(): Promise<boolean>;
+  /** after available() said no: "enrol" when the device needs a (strong) biometric added, else a short reason */
+  lastReason?: string | null;
 }
 /** The wrapped blobs, next to the vault in localStorage. */
 export interface BlobStore {
@@ -243,8 +245,11 @@ export const nativeKeyStore: KeyStore = {
 };
 
 export const nativeBiometry: Biometry = {
+  lastReason: null,
   async available() {
     const { PqBio } = await import("../native/pq-bio");
-    return (await PqBio.available()).available;
+    const r = await PqBio.available();
+    nativeBiometry.lastReason = r.available ? null : (r.reason ?? "unavailable");
+    return r.available;
   },
 };

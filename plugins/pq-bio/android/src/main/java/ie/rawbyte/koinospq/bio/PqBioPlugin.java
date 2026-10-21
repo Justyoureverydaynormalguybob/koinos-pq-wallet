@@ -27,6 +27,7 @@ import java.security.PublicKey;
 import java.security.spec.MGF1ParameterSpec;
 
 import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
 import javax.crypto.spec.OAEPParameterSpec;
 import javax.crypto.spec.PSource;
 
@@ -52,11 +53,52 @@ public class PqBioPlugin extends Plugin {
         return getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    private static final String PROBE = "pq-bio-probe";
+
+    /**
+     * Strong biometric available AND accepted by the keystore. BiometricManager can say "strong biometric
+     * enrolled" (an OEM face unlock, say) while the keystore refuses to create a per-use biometric key
+     * ("At least one biometric must be enrolled to create keys requiring user authentication for every
+     * use"), seen on a ColorOS phone with face unlock and no fingerprint. So the answer comes from a trial
+     * key under a probe alias, deleted at once. `reason` is "enrol" for that case.
+     */
     @PluginMethod
     public void available(PluginCall call) {
-        int r = BiometricManager.from(getContext()).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG);
         JSObject o = new JSObject();
-        o.put("available", r == BiometricManager.BIOMETRIC_SUCCESS);
+        int r = BiometricManager.from(getContext()).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG);
+        if (r != BiometricManager.BIOMETRIC_SUCCESS) {
+            o.put("available", false);
+            o.put("reason", r == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED ? "enrol" : "unavailable");
+            call.resolve(o);
+            return;
+        }
+        try {
+            KeyGenerator g = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE);
+            KeyGenParameterSpec.Builder b = new KeyGenParameterSpec.Builder(PROBE, KeyProperties.PURPOSE_ENCRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setUserAuthenticationRequired(true)
+                .setInvalidatedByBiometricEnrollment(true);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                b.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG);
+            } else {
+                b.setUserAuthenticationValidityDurationSeconds(-1);
+            }
+            g.init(b.build());
+            g.generateKey();
+            o.put("available", true);
+        } catch (IllegalStateException e) {
+            o.put("available", false);
+            o.put("reason", "enrol");
+        } catch (Exception e) {
+            o.put("available", false);
+            o.put("reason", "unavailable: " + e.getMessage());
+        } finally {
+            try {
+                keyStore().deleteEntry(PROBE);
+            } catch (Exception ignored) {
+            }
+        }
         call.resolve(o);
     }
 
@@ -107,6 +149,9 @@ public class PqBioPlugin extends Plugin {
             byte[] ct = c.doFinal(hexToBytes(hex));
             prefs().edit().putString(ITEM, Base64.encodeToString(ct, Base64.NO_WRAP)).apply();
             call.resolve();
+        } catch (IllegalStateException e) {
+            deleteKey();
+            call.reject("enrol"); // the keystore has no strong biometric it accepts (see available())
         } catch (Exception e) {
             deleteKey();
             call.reject("failed: " + e.getMessage());
