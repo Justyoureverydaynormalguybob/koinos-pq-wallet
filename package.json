@@ -9,7 +9,7 @@
     "build": "npm run build:inpage && tsc --noEmit && vite build && node scripts/write-version.mjs",
     "preview": "vite preview",
     "test": "npm run build:inpage && vitest run",
-    "build:ext": "tsc --noEmit && vite build -c vite.ext-pages.config.ts && vite build -c vite.ext-content.config.ts && vite build -c vite.ext-inpage.config.ts",
+    "build:ext": "npm run build:inpage && tsc --noEmit && vite build -c vite.ext-pages.config.ts && vite build -c vite.ext-content.config.ts && npm run build:inpage",
     "e2e:ext": "node --experimental-strip-types scripts/e2e-extension.mjs",
     "smoke:web": "node --experimental-strip-types scripts/smoke-web.mjs",
     "icons": "node scripts/make-icons.mjs",
