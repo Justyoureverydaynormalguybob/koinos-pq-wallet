@@ -287,6 +287,7 @@ export class App {
   private lockTimer: number | undefined;
   private hideTimer: number | undefined;
   private liveTimer: number | undefined;
+  private noticeTimer: number | undefined;
   private liveBusy = false;
   private liveTicks = 0;
   /** "network:contract" already tried as a collection this session */
@@ -506,10 +507,22 @@ export class App {
     this.endSetup();
     this.s.screen = localVaultStore.load() ? "unlock" : "welcome";
     this.s.notice = notice ?? null;
+    if (notice) this.fadeNotice(notice, 6000);
     this.s.error = null;
     window.clearTimeout(this.lockTimer);
     window.clearTimeout(this.hideTimer);
     this.render();
+  }
+  /** Clears `text` from the notice line after `ms`, unless something else has replaced it by then. */
+  private fadeNotice(text: string, ms: number) {
+    window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      if (this.s.notice !== text) return;
+      this.s.notice = null;
+      const el = this.root.querySelector<HTMLElement>(".note.ok");
+      if (el && !this.s.busy) el.remove();
+      else this.render();
+    }, ms);
   }
   private go(screen: Screen) {
     this.s.screen = screen;
