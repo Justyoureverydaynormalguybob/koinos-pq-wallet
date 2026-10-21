@@ -2011,7 +2011,7 @@ export class App {
         <div class="row">${button(tr("Show my account's address"), { action: "setup", variant: "primary" })}${button(tr("Settings"), { action: "settings" })}</div>`;
     }
     const unit = this.unit();
-    const sig = a.mode === "native" ? "ML-DSA-44 · 3,733 B" : "ML-DSA-44 · 2,420 B";
+    const sig = a.mode === "native" ? "ML-DSA-44 · 3,733\u00a0B" : "ML-DSA-44 · 2,420\u00a0B"; // the size never splits from its unit
     return `
       ${section("01", tr("Account"), hexStrip(a.address))}
       ${this.accountPicker()}

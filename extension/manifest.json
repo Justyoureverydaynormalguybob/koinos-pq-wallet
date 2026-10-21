@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sparán",
-  "version": "0.15.7",
+  "version": "0.15.8",
   "description": "Post-quantum (ML-DSA-44) accounts for Koinos. Speaks the same window.kondor interface dapps already use.",
   "permissions": [
     "storage"
