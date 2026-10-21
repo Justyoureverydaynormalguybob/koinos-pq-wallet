@@ -67,9 +67,9 @@ describe("QR scan on Send (jsdom)", () => {
     expect(toField(root).value).toBe("typed");
   }, 60_000);
 
-  it("web: no scan button, and no Dapps tab", async () => {
+  it("web: no scan button; the Dapps tab is there (new-tab opening, WalletConnect)", async () => {
     const root = await openSend(async () => A, false);
     expect(root.querySelector('[data-action="scan"]')).toBeNull();
-    expect(root.querySelector('[data-action="tab-dapps"]')).toBeNull();
+    expect(root.querySelector('[data-action="tab-dapps"]')).not.toBeNull();
   }, 60_000);
 });

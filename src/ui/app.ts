@@ -28,7 +28,7 @@ import {
   addressStrip, balance, button, card, check, esc, field, fmtAmount, fmtInt, header, hexStrip, input, linkButton, list, listRow, notice, section, shortAddr, stat, tabBar,
   ticker, tile, words, type Tab,
 } from "./components";
-import { isNative } from "./platform";
+import { isExtension, isNative } from "./platform";
 import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr } from "../i18n";
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
@@ -1053,6 +1053,12 @@ export class App {
     } catch {
       throw new Error(tr("That is not a web address."));
     }
+    if (!this.native) {
+      // no page view outside the phone app: the dapp opens in a browser tab. Under the extension it finds
+      // this wallet through window.kondor; on the web it can only reach the wallet through WalletConnect.
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
     this.s.dapp = { ...emptyDapp(), open: true, url };
     this.s.screen = "dapps";
     this.render();
@@ -1839,7 +1845,7 @@ export class App {
       { id: "account", label: tr("Account"), action: "back-home" },
       { id: "activity", label: tr("Activity"), action: "history" },
     ];
-    if (this.native) t.push({ id: "dapps", label: tr("Dapps"), action: "tab-dapps" });
+    t.push({ id: "dapps", label: tr("Dapps"), action: "tab-dapps" });
     t.push({ id: "settings", label: tr("Settings"), action: "settings" });
     return t;
   }
@@ -2259,7 +2265,13 @@ export class App {
           <label><span>Or any address</span>${input({ name: "url", class: "mono", inputmode: "url", autocomplete: "off", placeholder: "https://…", required: true })}</label>
           ${button(tr("Go"), { mini: true })}
         </form>
-        <p class="fine">${tr("Sites see your account address only after you allow it, and every signature is approved here in the wallet, never on the page. The list is this wallet's own.")}</p>
+        <p class="fine">${
+          this.native
+            ? tr("Sites see your account address only after you allow it, and every signature is approved here in the wallet, never on the page. The list is this wallet's own.")
+            : isExtension()
+              ? tr("Each opens in a new tab. The page finds this wallet through window.kondor and every request comes back here for approval. The list is this wallet's own.")
+              : tr("Each opens in a new tab. A web page cannot reach this wallet directly: connect it through WalletConnect below, or use the extension or the phone app. The list is this wallet's own.")
+        }</p>
         ${this.vWalletConnect()}
         ${sites.length ? `${section(null, tr("Sites allowed to see your accounts"))}${list(sites.map((g) => listRow(`<span class="t mono">${esc(g.origin)}</span><br><span class="s">${tr("since {date}", { date: esc(g.allowedAt.slice(0, 10)) })}</span>`, linkButton(tr("forget"), "site-revoke", { origin: g.origin }))).join(""))}` : ""}
         ${this.approvalSheet()}`;

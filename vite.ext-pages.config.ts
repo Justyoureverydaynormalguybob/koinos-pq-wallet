@@ -2,13 +2,25 @@
 // service worker as ES modules, plus everything in extension/ (manifest, icons) copied as-is.
 // Output: dist-extension/. Parts 2 and 3 (content.js, inpage.js) are single-file IIFE builds.
 import { defineConfig } from "vite";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
 import { fileURLToPath } from "node:url";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
+/** manifest.json is copied from extension/ as-is; its version follows package.json. */
+const stampManifest = () => ({
+  name: "stamp-manifest-version",
+  closeBundle() {
+    const path = `${here}dist-extension/manifest.json`;
+    const m = JSON.parse(readFileSync(path, "utf8")) as { version: string };
+    m.version = pkg.version;
+    writeFileSync(path, JSON.stringify(m, null, 2) + "\n");
+  },
+});
+
 export default defineConfig({
+  plugins: [stampManifest()],
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   base: "./",
   publicDir: "extension",

@@ -65,6 +65,27 @@ jobs:
             koinos-pq-wallet-*.aab.sha256
           if-no-files-found: error
 
+  extension:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: npm ci --ignore-scripts
+      - name: Build the browser extension and zip it
+        run: |
+          npm run build:ext
+          V=$(node -p "require('./package.json').version")
+          (cd dist-extension && zip -r "$GITHUB_WORKSPACE/koinos-pq-wallet-extension-$V.zip" .)
+          sha256sum "koinos-pq-wallet-extension-$V.zip" | tee "koinos-pq-wallet-extension-$V.zip.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: extension-zip
+          path: |
+            koinos-pq-wallet-extension-*.zip
+            koinos-pq-wallet-extension-*.zip.sha256
+          if-no-files-found: error
+
   ios:
     # Capacitor 8 needs Xcode 26; the macOS 26 image has it as the default toolchain
     runs-on: macos-26

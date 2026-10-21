@@ -128,7 +128,10 @@ node scripts/smoke-web-local.mjs   # serves dist/ and drives it in a real browse
 ```
 
 To use the extension: Chrome (or Brave, Edge) → `chrome://extensions` → Developer mode → "Load
-unpacked" → pick `dist-extension/`. The toolbar button opens the wallet; web pages get
+unpacked" → pick `dist-extension/` (or the unzipped `koinos-pq-wallet-extension-<version>.zip` from
+a GitHub release; CI builds it as the `extension-zip` artifact). The extension has the same tabs as
+the phone app; under Dapps each site opens in a new browser tab and finds the wallet through
+`window.kondor`, and WalletConnect pairing works from the wallet page while it stays open. The toolbar button opens the wallet; web pages get
 `window.kondor`. A test dapp lives at `/demo/` (http://localhost:5173/demo/ under `npm run dev`,
 `dist/demo/` in the build): connect, read the head block, sign a message, send KOIN, all through
 `window.kondor` with no library. Tester instructions: [docs/EXTENSION-TESTING.md](docs/EXTENSION-TESTING.md).

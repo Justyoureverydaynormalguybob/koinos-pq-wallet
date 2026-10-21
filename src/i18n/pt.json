@@ -326,5 +326,7 @@
   "explorer": "explorador",
   "Received a collectible": "Colecionável recebido",
   "Sent a collectible": "Colecionável enviado",
-  "contract": "contrato"
+  "contract": "contrato",
+  "Each opens in a new tab. The page finds this wallet through window.kondor and every request comes back here for approval. The list is this wallet's own.": "Cada uma abre num novo separador. A página encontra esta carteira através de window.kondor e cada pedido volta aqui para aprovação. A lista é própria desta carteira.",
+  "Each opens in a new tab. A web page cannot reach this wallet directly: connect it through WalletConnect below, or use the extension or the phone app. The list is this wallet's own.": "Cada uma abre num novo separador. Uma página web não consegue chegar a esta carteira diretamente: ligue-a através do WalletConnect abaixo, ou use a extensão ou a app do telemóvel. A lista é própria desta carteira."
 }

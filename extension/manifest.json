@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sparán",
-  "version": "0.12.0",
+  "version": "0.15.7",
   "description": "Post-quantum (ML-DSA-44) accounts for Koinos. Speaks the same window.kondor interface dapps already use.",
   "permissions": [
     "storage"
@@ -52,6 +52,6 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://ipfs.io https://*.ipfs.io https://cloudflare-ipfs.com https://dweb.link https://*.dweb.link https://arweave.net https://*.arweave.net; connect-src https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    "extension_pages": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://ipfs.io https://*.ipfs.io https://cloudflare-ipfs.com https://dweb.link https://*.dweb.link https://arweave.net https://*.arweave.net; connect-src https: wss: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
   }
 }
