@@ -826,9 +826,16 @@ export class App {
   /** Pairs with a dapp from a wc: URI; the proposal then arrives on the approval sheet. */
   private async pairWc(uri: string) {
     if (!this.wcProjectId()) throw new Error(tr("WalletConnect needs a project id first: Settings › WalletConnect."));
+    this.s.notice = null;
     await this.wc.pair(uri);
     this.s.screen = "dapps";
-    this.s.notice = tr("Connected to the relay. The dapp's request appears here in a moment.");
+    // The dapp's proposal can arrive before pair() returns: a sheet already up, or a refusal already shown,
+    // says more than this line, which is only for the short wait and goes away by itself.
+    if (!this.s.dapp.approval && !this.s.notice) {
+      const text = tr("Connected to the relay. The dapp's request appears here in a moment.");
+      this.s.notice = text;
+      this.fadeNotice(text, 5000);
+    }
   }
   /** The passphrase must open the slot this session was unlocked from; anything else is "wrong". */
   private async reopenCurrent(passphrase: string): Promise<VaultData> {
@@ -1124,6 +1131,10 @@ export class App {
       window.open(url, "_blank", "noopener,noreferrer");
       return;
     }
+    // A page still open (kept behind the list) is closed first. Opening over it made the native view report
+    // "closed" for the old page after this screen had been set up for the new one, and the wallet then
+    // showed the list while a page was on screen.
+    if (this.host?.isOpen) await this.host.close();
     this.s.dapp = { ...emptyDapp(), open: true, url };
     this.s.screen = "dapps";
     this.render();
@@ -1423,6 +1434,25 @@ export class App {
       case "dapp-list":
         this.s.dapp.minimised = true;
         this.render();
+        break;
+      case "dapp-reset":
+        void this.run("Resetting", async () => {
+          const host = this.dappHost();
+          if (!host.isOpen) return;
+          let origin = "";
+          try {
+            origin = new URL(this.s.dapp.url).origin;
+          } catch {
+            /* nothing to match sessions against */
+          }
+          // the site forgets its side of any WalletConnect session, so the wallet ends its side too
+          for (const w of this.s.wcSessions) if (origin && w.origin === origin) await this.wc.disconnect(w.topic);
+          await host.resetSite();
+          this.s.dapp.minimised = false;
+          const text = tr("The site was reset and is loading again. Connect from the page as if for the first time.");
+          this.s.notice = text;
+          this.fadeNotice(text, 6000);
+        });
         break;
       case "dapp-restore":
         this.s.dapp.minimised = false;
@@ -2343,6 +2373,16 @@ export class App {
           const who = i.counterparty ? this.s.book?.get(i.counterparty)?.name || shortAddr(i.counterparty) : "?";
           main = `<span class="t">${i.direction === "out" ? tr("Sent") : tr("Received")} ${esc(value)} ${esc(sym)}</span> <span class="s">${i.direction === "out" ? tr("to") : tr("from")} ${esc(who)}${i.reverted ? " " + tr("(reverted)") : ""}</span>`;
           amt = `<span class="amt">${i.direction === "out" ? "−" : "+"}${esc(value)}</span>`;
+        } else if (i.burnedForVhp) {
+          // a proof-of-burn conversion (this wallet's Burn screen, or any other way the account burned KOIN for VHP)
+          let value: string;
+          try {
+            value = fmtAmount(formatKoin(BigInt(i.burnedForVhp)));
+          } catch {
+            value = "?";
+          }
+          main = `<span class="t">${tr("Burned")} ${esc(value)} ${esc(this.unit())}</span> <span class="s">${tr("for VHP")}${i.reverted ? " " + tr("(reverted)") : ""}</span>`;
+          amt = `<span class="amt">−${esc(value)}</span>`;
         }
         const meta = [i.txId ? esc(short(i.txId)) : "", i.blockHeight ? `block ${esc(fmtAmount(i.blockHeight))}` : ""].filter(Boolean).join(" · ");
         const explorer = i.txId && this.network.explorerTx ? this.network.explorerTx(i.txId) : null;
@@ -2410,7 +2450,8 @@ export class App {
       const sites = this.s.sites?.list() ?? [];
       return `
         ${section("03", tr("Dapps"), tr("curated"))}
-        ${d.open ? `<div class="row tight" style="margin-bottom:12px">${button(tr("Back to {page}", { page: esc(d.title || hostOf(d.url)) }), { action: "dapp-restore", variant: "primary" })}${button(tr("Close the page"), { action: "dapp-close", variant: "ghost" })}</div>` : ""}
+        ${d.open ? `<div class="row tight" style="margin-bottom:12px">${button(tr("Back to {page}", { page: esc(d.title || hostOf(d.url)) }), { action: "dapp-restore", variant: "primary" })}${button(tr("Close the page"), { action: "dapp-close", variant: "ghost" })}</div>
+        <p class="fine" style="margin-bottom:12px">${tr("If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.")} ${linkButton(tr("Reset this site"), "dapp-reset")}</p>` : ""}
         ${list((dappList as { dapps: Array<{ id: string; name: string; summary: string; url: string }> }).dapps.map((x) => `<li>${tile(x.name)}<span class="grow"><span class="t">${esc(x.name)}</span><br><span class="s">${esc(x.summary)}</span></span>${button(tr("Open"), { action: "dapp-open", mini: true, data: { url: x.url } })}</li>`).join(""))}
         <form data-form="dapp-open" class="field inline">
           <label><span>Or any address</span>${input({ name: "url", class: "mono", inputmode: "url", autocomplete: "off", placeholder: "https://…", required: true })}</label>

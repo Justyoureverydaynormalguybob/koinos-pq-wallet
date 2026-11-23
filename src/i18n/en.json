@@ -347,5 +347,10 @@
   "Tick the box once you understand this cannot be undone.": "Tick the box once you understand this cannot be undone.",
   "The most this account can burn right now is {most} {unit}.": "The most this account can burn right now is {most} {unit}.",
   "Burned, waiting for a block": "Burned, waiting for a block",
-  "Burned for the same amount of VHP": "Burned for the same amount of VHP"
+  "Burned for the same amount of VHP": "Burned for the same amount of VHP",
+  "Burned": "Burned",
+  "for VHP": "for VHP",
+  "The site was reset and is loading again. Connect from the page as if for the first time.": "The site was reset and is loading again. Connect from the page as if for the first time.",
+  "If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.": "If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.",
+  "Reset this site": "Reset this site"
 }

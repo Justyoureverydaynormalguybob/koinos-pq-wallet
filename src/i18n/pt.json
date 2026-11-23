@@ -347,5 +347,10 @@
   "Tick the box once you understand this cannot be undone.": "Marca a caixa quando compreenderes que isto não pode ser desfeito.",
   "The most this account can burn right now is {most} {unit}.": "O máximo que esta conta pode queimar neste momento é {most} {unit}.",
   "Burned, waiting for a block": "Queimado, à espera de um bloco",
-  "Burned for the same amount of VHP": "Queimado pela mesma quantia de VHP"
+  "Burned for the same amount of VHP": "Queimado pela mesma quantia de VHP",
+  "Burned": "Queimado",
+  "for VHP": "por VHP",
+  "The site was reset and is loading again. Connect from the page as if for the first time.": "O site foi reposto e está a carregar de novo. Liga-te a partir da página como se fosse a primeira vez.",
+  "If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.": "Se este site não voltar a ligar-se, repõe-no: o que guardou neste telemóvel é apagado e a página carrega de novo. Nada muda na carteira.",
+  "Reset this site": "Repor este site"
 }

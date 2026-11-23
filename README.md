@@ -37,7 +37,9 @@ fingerprint or face kills the key); the passphrase is never stored and always wo
 Since 0.15.0: **WalletConnect**. Dapps on another device or browser (KoinDX, Vortex Bridge, anything on
 the Koinos WalletConnect SDK) pair by QR code or a pasted `wc:` link from the Dapps tab; a `wc:` link
 opened on the phone lands in the app. Since 0.16.1 the same holds inside the in-app browser: a page whose
-connect button navigates to a `wc:` link is paired with at once (the browser still loads nothing but http(s)). Every request a session sends goes through the same approval
+connect button navigates to a `wc:` link is paired with at once (the browser still loads nothing but http(s)). Since 0.16.2 the Dapps list has "Reset this site" for the page that is open: it clears what that
+site stored on the device and reloads it, for a dapp whose own saved WalletConnect state has gone stale and will not
+connect again (seen with KoinDX after disconnecting from its side). Every request a session sends goes through the same approval
 sheet and the same rules as the in-app browser. It needs a WalletConnect project id, free from
 cloud.reown.com. The repo's `.env` bakes one in (a public identifier, not a secret); Settings ›
 WalletConnect overrides it. `WC_PROJECT_ID=… WC_LIVE_DIR=$(mktemp -d) npx vitest run test/wc-live.test.ts`

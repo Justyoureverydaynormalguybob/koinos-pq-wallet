@@ -14,7 +14,7 @@ globalThis.Uint8Array = Object.getPrototypeOf(Buffer.prototype).constructor as U
 vi.mock("qrcode", () => ({ default: { toCanvas: async () => undefined } }));
 
 const { App } = await import("../src/ui/app");
-const { NETWORKS, POB_ENTRY, decodeFields } = await import("koinos-pq-core");
+const { NETWORKS, POB_ENTRY, decodeFields, concat, fieldBytes, fieldVarint } = await import("koinos-pq-core");
 const { utils } = await import("koilib");
 
 const KOIN = NETWORKS.devnet!.koin;
@@ -33,6 +33,21 @@ const uint64 = (v: bigint) => {
 };
 type Tx = { header: { payer: string }; operations: Array<{ call_contract: { contract_id: string; entry_point: number; args: string } }>; signatures: string[] };
 const submitted: Tx[] = [];
+/** once set, the node's history for the account is one proof-of-burn row of this many base units (the shape a mainnet node returns) */
+let burnedInHistory: { account: string; value: bigint } | null = null;
+function historyRows(): unknown[] {
+  if (!burnedInHistory) return [];
+  const data = utils.encodeBase64url(concat([fieldBytes(1, utils.decodeBase58(burnedInHistory.account)), fieldVarint(2, burnedInHistory.value)]));
+  return [{
+    seq_num: "1",
+    trx: { transaction: { id: "0x1220" + "ab".repeat(32) }, receipt: { events: [
+      { name: "pqwallet.allowed_caller", source: burnedInHistory.account, data: "AA==" },
+      { name: "token.burn_event", source: KOIN, data },
+      { name: "token.mint_event", source: VHP, data },
+      { name: "pqwallet.allowed_caller", source: burnedInHistory.account, data: "AA==" },
+    ] } },
+  }];
+}
 // KOIN balance 5, mana 5: with 2 kept back, 3 can be burned
 function answer(req: { method: string; params: Record<string, unknown> }): unknown {
   if (req.method === "chain.get_head_info") return { head_topology: { height: "100" } };
@@ -44,6 +59,7 @@ function answer(req: { method: string; params: Record<string, unknown> }): unkno
     if (entry_point === 0x5c721497) return { result: uint64(contract_id === KOIN ? 500000000n : 0n) };
     return { result: "" };
   }
+  if (req.method === "account_history.get_account_history") return { values: historyRows() };
   if (req.method === "chain.submit_transaction") {
     submitted.push((req.params as { transaction: Tx }).transaction);
     return { receipt: { rc_used: "78193386" } };
@@ -170,5 +186,16 @@ describe("burn KOIN for VHP (jsdom, a fake node over HTTP)", () => {
     click(root, "back-home");
     await settle();
     expect(root.querySelector('[data-action="burn"]')).not.toBeNull();
+
+    // Activity names the burn and its amount instead of a bare "transaction"
+    burnedInHistory = { account: me, value: 125000000n };
+    click(root, "history");
+    await settle();
+    await new Promise((r) => setTimeout(r, 400));
+    const rows = [...root.querySelectorAll("li")].map((li) => li.textContent?.replace(/\s+/g, " ").trim() ?? "");
+    const burnRow = rows.find((r) => /Burned/.test(r));
+    expect(burnRow, rows.join(" | ")).toMatch(/Burned 1\.25 KOIN for VHP/);
+    expect(burnRow).toMatch(/−1\.25/);
+    expect(rows.some((r) => /^transaction/.test(r))).toBe(false);
   }, 120_000);
 });

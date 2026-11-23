@@ -24,9 +24,27 @@ export const RELAY_SHIM = `(() => {
     }
     return result;
   };
+  // "Reset this site" in the wallet: everything this origin stored on the device goes (local and session
+  // storage, IndexedDB, caches) and the page loads again. A page gains nothing by calling it: it can only
+  // ever clear its own origin's data, which it could do anyway.
+  const clearSiteData = async () => {
+    try { window.localStorage.clear(); } catch (e) {}
+    try { window.sessionStorage.clear(); } catch (e) {}
+    try {
+      const dbs = window.indexedDB && window.indexedDB.databases ? await window.indexedDB.databases() : [];
+      await Promise.all(dbs.map((d) => new Promise((done) => {
+        if (!d || !d.name) return done();
+        const q = window.indexedDB.deleteDatabase(d.name);
+        q.onsuccess = q.onerror = q.onblocked = () => done();
+      })));
+    } catch (e) {}
+    try { for (const k of await window.caches.keys()) await window.caches.delete(k); } catch (e) {}
+    window.location.reload();
+  };
   window.__pqDeliver = (json) => {
     try {
       const m = JSON.parse(json);
+      if (m && m.pqCommand === "clear-site-data") return void clearSiteData();
       if (!m || typeof m.id !== "string") return;
       if (m.error !== undefined) window.postMessage({ id: m.id, error: String(m.error) }, "*");
       else window.postMessage({ id: m.id, result: revive(m.result) }, "*");

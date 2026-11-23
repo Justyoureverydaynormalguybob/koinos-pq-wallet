@@ -166,6 +166,15 @@ export class DappHost {
   async hide(): Promise<void> {
     if (this.opened) await this.plugin.hide().catch(() => undefined);
   }
+  /**
+   * Clears what the open page's site has stored on this device and reloads it (the relay script does the
+   * work inside the page, so only that origin is touched). For a site whose own saved connection state has
+   * gone stale and will not connect again.
+   */
+  async resetSite(): Promise<void> {
+    if (!this.opened) return;
+    await this.plugin.reply({ json: JSON.stringify({ pqCommand: "clear-site-data" }) });
+  }
   /** Closes the page; everything still waiting is answered "rejected". */
   async close(): Promise<void> {
     this.generation++;
