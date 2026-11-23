@@ -66,6 +66,14 @@ colours by day and night, a [privacy page](https://wallet.koinosproof.com/privac
 producing the signed AAB Play wants. `docs/STORE.md` lists what the repo provides and the steps that
 need a Play Console or Apple Developer account.
 
+Since 0.16.0: **burn KOIN for VHP**. The Account tab has "Burn for VHP" on networks with a proof-of-burn
+contract (mainnet and Harbinger): KOIN becomes the same amount of VHP in the same account, one for one,
+through the chain's own `pob.burn`. It cannot be undone, so the screen says so and wants a box ticked, and
+it always leaves 2 KOIN behind, because mana comes only from KOIN. The burn reaches KOIN through the PoB
+contract, a nested call a pqwallet account refuses by default, so the transaction is three operations that
+apply together or not at all: allow PoB, burn, forbid PoB again. Nothing stays on the account's allowed
+list afterwards. `scripts/smoke-burn.mjs` runs it in a browser against Harbinger.
+
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,
                         account setup, a koilib-compatible PqSigner, a protobuf-lite encoder (no eval)

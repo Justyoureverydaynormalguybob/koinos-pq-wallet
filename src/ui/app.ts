@@ -41,11 +41,11 @@ import dappList from "../data/dapps.json";
 
 type Screen =
   | "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "send-confirm" | "sent" | "receive" | "history"
-  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words" | "bio-enable" | "nfts" | "nft" | "nft-send";
+  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words" | "bio-enable" | "nfts" | "nft" | "nft-send" | "burn";
 
 /** Screens that live under the tab bar, and which tab they belong to. */
 const TAB_OF: Partial<Record<Screen, string>> = {
-  home: "account", send: "account", "send-confirm": "account", sent: "account", receive: "account", setup: "account", nfts: "account", nft: "account", "nft-send": "account",
+  home: "account", send: "account", "send-confirm": "account", sent: "account", receive: "account", setup: "account", nfts: "account", nft: "account", "nft-send": "account", burn: "account",
   history: "activity",
   dapps: "dapps",
   settings: "settings", export: "settings", save: "settings", contacts: "settings", duress: "settings", "duress-words": "settings", "bio-enable": "settings",
@@ -166,7 +166,7 @@ interface State {
   mana: bigint | null;
   head: string | null;
   history: HistoryItem[] | null;
-  sent: { txId: string; bytes: number; rcUsed: string; block: string | null; waiting: boolean; amount: string; symbol: string } | null;
+  sent: { txId: string; bytes: number; rcUsed: string; block: string | null; waiting: boolean; amount: string; symbol: string; burned?: boolean } | null;
   exportWords: string | null;
   autolockMinutes: number;
   lockOnHide: boolean;
@@ -247,6 +247,11 @@ function clearWalletStores() {
     /* as above */
   }
 }
+/**
+ * What a burn always leaves behind, in base units (2 KOIN). Mana comes only from KOIN and every transaction
+ * spends some (the burn itself used 0.78 on Harbinger), so an account burned down to nothing could not act again.
+ */
+const BURN_KEEP = 200_000_000n;
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
 /** foreground poll of head, balance and mana (three ~400-byte reads); the activity list is re-read only when the balance moved */
@@ -991,6 +996,41 @@ export class App {
       await this.refresh();
     }
   }
+  /** The most the account can burn now: KOIN that still has its mana, less what always stays behind (BURN_KEEP). */
+  private burnable(balance: bigint | null, mana: bigint | null): bigint | null {
+    if (balance === null || mana === null) return null;
+    const free = (balance < mana ? balance : mana) - BURN_KEEP;
+    return free > 0n ? free : 0n;
+  }
+  /**
+   * Burns KOIN from the current account for the same amount of VHP in the same account (the chain's
+   * proof-of-burn contract; Chain.burnKoin explains how a pqwallet account lets PoB act for it for that one
+   * transaction only). The limit is checked against a fresh balance and mana, not what the screen last showed.
+   */
+  private async doBurn(amount: string) {
+    const a = this.account();
+    if (!a || !this.s.keys || !canSign(a)) throw new Error(tr("locked"));
+    const valueBase = parseUnits(amount, this.koinToken().decimals);
+    const chain = this.chain();
+    const [balance, mana] = await Promise.all([chain.balance(a.address), chain.mana(a.address)]);
+    const most = this.burnable(balance, mana) ?? 0n;
+    if (valueBase > most) throw new Error(tr("The most this account can burn right now is {most} {unit}.", { most: formatKoin(most), unit: this.unit() }));
+    const res = await chain.burnKoin({ from: a.address, valueBase, keys: this.s.keys, mode: a.mode as "native" | "pqwallet" });
+    if (this.network.vhp) delete this.s.balances[this.network.vhp]; // read again on the next refresh
+    this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount, symbol: this.unit(), burned: true };
+    this.s.screen = "sent";
+    this.render();
+    if (this.network.autoBlocks) {
+      try {
+        const block = await chain.waitMined(res.txId);
+        this.s.sent = { ...this.s.sent, block, waiting: false };
+      } catch (err) {
+        this.s.sent = { ...this.s.sent, waiting: false };
+        this.s.error = tr("Sent, but still waiting for a block: {why}", { why: (err as Error).message });
+      }
+      await this.refresh();
+    }
+  }
   /** Opens whatever slot the device key unwraps, after the OS prompt; any failure falls back to the passphrase field. */
   private async unlockWithBiometrics() {
     const stored = localVaultStore.load();
@@ -1238,7 +1278,7 @@ export class App {
     }
     const none = document.createElement("span");
     const toSettings: Screen[] = ["export", "save", "contacts", "duress", "duress-words", "bio-enable"];
-    const toHome: Screen[] = ["send", "send-confirm", "sent", "receive", "nfts", "nft", "nft-send"];
+    const toHome: Screen[] = ["send", "send-confirm", "sent", "receive", "nfts", "nft", "nft-send", "burn"];
     const toWelcome: Screen[] = ["create", "confirm", "passphrase", "import"];
     if (toSettings.includes(s.screen)) this.act("settings", none);
     else if (toHome.includes(s.screen)) this.act("back-home", none);
@@ -1297,6 +1337,10 @@ export class App {
         this.s.sent = null;
         this.s.sendTo = null;
         this.go("send");
+        break;
+      case "burn":
+        this.s.sent = null;
+        this.go("burn");
         break;
       case "send-to": {
         // "send back" from the activity list: the counterparty becomes the recipient, nothing else changes
@@ -1649,6 +1693,29 @@ export class App {
         this.go("send-confirm");
         break;
       }
+      case "burn": {
+        const amount = field("amount").trim();
+        const a = this.account();
+        if (!a || !canSign(a)) {
+          this.s.error = tr("This account is watch-only; it has no key here.");
+          this.render();
+          return;
+        }
+        try {
+          parseUnits(amount, this.koinToken().decimals);
+        } catch (err) {
+          this.s.error = (err as Error).message;
+          this.render();
+          return;
+        }
+        if (!data.get("understood")) {
+          this.s.error = tr("Tick the box once you understand this cannot be undone.");
+          this.render();
+          return;
+        }
+        void this.run("Signing and sending", () => this.doBurn(amount));
+        break;
+      }
       case "send-confirm": {
         const sc = this.s.sendCheck;
         if (!sc) return;
@@ -1913,6 +1980,7 @@ export class App {
       send: () => this.vSend(),
       "send-confirm": () => this.vSendConfirm(),
       sent: () => this.vSent(),
+      burn: () => this.vBurn(),
       receive: () => this.vReceive(),
       history: () => this.vActivity(),
       dapps: () => this.vDapps(),
@@ -2082,6 +2150,7 @@ export class App {
         <div class="actions">
           ${canSign(a) ? button(tr("Send"), { action: "send", variant: "primary" }) : button(tr("Watch-only"), { type: "button", disabled: true, title: tr("Watch-only: this wallet has no key for this address") })}
           ${button(tr("Receive"), { action: "receive" })}
+          ${canSign(a) && this.network.pob ? button(tr("Burn for VHP"), { action: "burn" }) : ""}
         </div>`)}
       ${this.vTokens()}
       ${this.vCollectibles()}`;
@@ -2200,13 +2269,33 @@ export class App {
       </form>`;
   }
 
+  private vBurn() {
+    const a = this.account();
+    const s = this.s;
+    const unit = esc(this.unit());
+    const most = this.burnable(s.balance, s.mana);
+    const amt = (v: bigint | null) => (v === null ? "…" : `${esc(fmtAmount(formatKoin(v)))} ${unit}`);
+    return `
+      ${section("01", tr("Burn"), `from <span class="mono">${esc(shortAddr(a?.address))}</span>`)}
+      <h1>${tr("Burn {unit} for VHP", { unit })}</h1>
+      <p>${tr("Burning turns {unit} into the same amount of VHP, one for one, in this account. VHP is what block producers put up to make blocks. It gives no mana.", { unit })}</p>
+      ${notice("danger", tr("<strong>This cannot be undone.</strong> VHP only becomes {unit} again by producing blocks.", { unit }))}
+      ${card(`${stat(tr("Balance"), amt(s.balance))}${stat(tr("Mana"), amt(s.mana))}${stat(tr("Most you can burn now"), `<span id="burn-most">${amt(most)}</span>`)}`)}
+      <form data-form="burn">
+        <label class="field"><span>${tr("Amount ({symbol})", { symbol: unit })}</span>${input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5", autofocus: true })}</label>
+        ${check("understood", tr("I understand this cannot be undone"), false, "required")}
+        <p class="fine">${tr("Only {unit} backed by mana can be burned, so mana spent on recent transactions has to recharge first. The wallet keeps {keep} {unit} back, because mana comes only from {unit} and every transaction needs some.", { unit, keep: formatKoin(BURN_KEEP) })}</p>
+        <div class="row">${button(tr("Burn"), { variant: "danger" })}${button(tr("Back"), { action: "back-home", variant: "ghost" })}</div>
+      </form>`;
+  }
+
   private vSent() {
     const t = this.s.sent!;
     const link = this.network.explorerTx?.(t.txId);
     return `
-      ${section("01", tr("Send"), t.waiting ? tr("waiting") : t.block ? tr("mined") : tr("submitted"))}
-      <h1>${t.waiting ? tr("Sent, waiting for a block") : t.block ? tr("Mined") : tr("Submitted")}</h1>
-      ${card(`<span class="lbl">Sent</span><div class="bal" style="margin-bottom:12px"><span class="v" style="font-size:28px">${esc(fmtAmount(t.amount))}</span><span class="u">${esc(t.symbol)}</span></div><span class="lbl">Transaction</span><code class="address addr sm box" style="color:var(--ink)">${esc(t.txId)}</code>
+      ${section("01", t.burned ? tr("Burn") : tr("Send"), t.waiting ? tr("waiting") : t.block ? tr("mined") : tr("submitted"))}
+      <h1>${t.waiting ? (t.burned ? tr("Burned, waiting for a block") : tr("Sent, waiting for a block")) : t.block ? tr("Mined") : tr("Submitted")}</h1>
+      ${card(`<span class="lbl">${t.burned ? tr("Burned for the same amount of VHP") : "Sent"}</span><div class="bal" style="margin-bottom:12px"><span class="v" style="font-size:28px">${esc(fmtAmount(t.amount))}</span><span class="u">${esc(t.symbol)}</span></div><span class="lbl">Transaction</span><code class="address addr sm box" style="color:var(--ink)">${esc(t.txId)}</code>
         <div style="margin-top:12px">${stat(tr("Signature entry"), `${esc(t.bytes)} B`)}${stat(tr("Mana used"), esc(t.rcUsed))}${t.block ? stat(tr("Block"), esc(fmtAmount(t.block))) : ""}</div>`)}
       ${this.network.autoBlocks ? "" : `<p class="fine" style="margin-top:12px">${tr("This network only makes blocks when the devnet script produces one.")}</p>`}
       ${link ? `<p style="margin-top:12px"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${tr("Open in explorer")}</a></p>` : ""}

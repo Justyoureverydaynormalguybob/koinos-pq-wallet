@@ -334,5 +334,18 @@
   "Back to {page}": "Volver a {page}",
   "Dapps list and WalletConnect (the page stays open)": "Lista de dapps y WalletConnect (la página sigue abierta)",
   "WalletConnect log": "Registro de WalletConnect",
-  "&#9776;": "&#9776;"
+  "&#9776;": "&#9776;",
+  "Burn": "Quemar",
+  "Burn for VHP": "Quemar por VHP",
+  "Burn {unit} for VHP": "Quemar {unit} por VHP",
+  "Burning turns {unit} into the same amount of VHP, one for one, in this account. VHP is what block producers put up to make blocks. It gives no mana.": "Quemar convierte {unit} en la misma cantidad de VHP, uno por uno, en esta cuenta. El VHP es lo que aportan los productores de bloques para crear bloques. No da maná.",
+  "<strong>This cannot be undone.</strong> VHP only becomes {unit} again by producing blocks.": "<strong>Esto no se puede deshacer.</strong> El VHP solo vuelve a ser {unit} produciendo bloques.",
+  "Balance": "Saldo",
+  "Most you can burn now": "Máximo que puedes quemar ahora",
+  "I understand this cannot be undone": "Entiendo que esto no se puede deshacer",
+  "Only {unit} backed by mana can be burned, so mana spent on recent transactions has to recharge first. The wallet keeps {keep} {unit} back, because mana comes only from {unit} and every transaction needs some.": "Solo se puede quemar {unit} respaldado por maná, así que el maná gastado en transacciones recientes tiene que recargarse antes. La cartera reserva {keep} {unit}, porque el maná solo viene de {unit} y cada transacción necesita algo.",
+  "Tick the box once you understand this cannot be undone.": "Marca la casilla cuando entiendas que esto no se puede deshacer.",
+  "The most this account can burn right now is {most} {unit}.": "Lo máximo que esta cuenta puede quemar ahora mismo es {most} {unit}.",
+  "Burned, waiting for a block": "Quemado, esperando un bloque",
+  "Burned for the same amount of VHP": "Quemado por la misma cantidad de VHP"
 }

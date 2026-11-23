@@ -334,5 +334,18 @@
   "Back to {page}": "Back to {page}",
   "Dapps list and WalletConnect (the page stays open)": "Dapps list and WalletConnect (the page stays open)",
   "WalletConnect log": "WalletConnect log",
-  "&#9776;": "&#9776;"
+  "&#9776;": "&#9776;",
+  "Burn": "Burn",
+  "Burn for VHP": "Burn for VHP",
+  "Burn {unit} for VHP": "Burn {unit} for VHP",
+  "Burning turns {unit} into the same amount of VHP, one for one, in this account. VHP is what block producers put up to make blocks. It gives no mana.": "Burning turns {unit} into the same amount of VHP, one for one, in this account. VHP is what block producers put up to make blocks. It gives no mana.",
+  "<strong>This cannot be undone.</strong> VHP only becomes {unit} again by producing blocks.": "<strong>This cannot be undone.</strong> VHP only becomes {unit} again by producing blocks.",
+  "Balance": "Balance",
+  "Most you can burn now": "Most you can burn now",
+  "I understand this cannot be undone": "I understand this cannot be undone",
+  "Only {unit} backed by mana can be burned, so mana spent on recent transactions has to recharge first. The wallet keeps {keep} {unit} back, because mana comes only from {unit} and every transaction needs some.": "Only {unit} backed by mana can be burned, so mana spent on recent transactions has to recharge first. The wallet keeps {keep} {unit} back, because mana comes only from {unit} and every transaction needs some.",
+  "Tick the box once you understand this cannot be undone.": "Tick the box once you understand this cannot be undone.",
+  "The most this account can burn right now is {most} {unit}.": "The most this account can burn right now is {most} {unit}.",
+  "Burned, waiting for a block": "Burned, waiting for a block",
+  "Burned for the same amount of VHP": "Burned for the same amount of VHP"
 }
