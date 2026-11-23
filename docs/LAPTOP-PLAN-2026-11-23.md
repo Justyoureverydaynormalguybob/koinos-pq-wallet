@@ -3,6 +3,29 @@
 Written on the phone for the laptop session (phone memory does not travel). Four tasks. 1–3 are the
 security follow-ups from the 2026-11-22 outsider pen-test; 4 is the passphrase strength gate.
 
+## STATUS 2026-11-23 — most of this was then done on the phone
+
+Done and pushed (noreply): **Task 1** — SECURITY.md sections in both repos
+(`koinos-pq` 4974541, wallet section in the 0.18.0 doc commit). **Task 2** — `koinos-pq/cli/attack-outsider.mjs`
+(`npm run attack`), ran green against Harbinger (4fa71b5). **Task 4** — passphrase gate
+`src/core/passphrase.ts` + approval-sheet authority warnings, 0.18.0, en/es/pt, tests; tsc clean, 97 pass
+(wallet 647abfd). **Task 3** — re-ran on current code: verifier suite green, attacker test HELD, live web
+headers + `npm audit` unchanged (all build tooling), and the new-surface review found and fixed the
+approval-sheet gap (set_allowed_caller / set_public_key were opaque — now explained).
+
+Left for the laptop (needs a browser or the signed build, or spends testnet value):
+- `npm run build` + `railway up` to deploy 0.18.0, then `gh run download` the signed APK (same keystore).
+- Phone note: the wallet's `node_modules/koinos-pq-core` was a stale Oct-20 install; it was rebuilt
+  (`node node_modules/typescript/bin/tsc -p tsconfig.json` in `~/koinos-pq-core`) and its `dist` copied in.
+  On the laptop a clean `npm install` of the git dep should pick up ec206c7; verify `burnKoin` is in
+  `node_modules/koinos-pq-core/dist/chain.js` before trusting a build.
+- Optional: a live strength meter on the two choose-a-passphrase screens (the gate itself is on submit).
+- The live burn allow-list check from Task 3 below (a real Harbinger burn, then assert PoB is off the
+  allowed list) — needs the account keys; do it with `koinos-pq-core/scripts/testnet-burn.mjs`.
+- e2e:ext / smoke:web in a real browser.
+
+The rest of this document is the original plan, kept for reference.
+
 Commit in all three repos as GitHub noreply only:
 `Justyoureverydaynormalguybob <142058369+Justyoureverydaynormalguybob@users.noreply.github.com>`
 (the phone clones are set this way; set it on the laptop too). All three repos are PUBLIC. The signing

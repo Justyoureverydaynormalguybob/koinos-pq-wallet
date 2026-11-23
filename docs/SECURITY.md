@@ -365,4 +365,45 @@ Deleting the wallet removes every slot's entries.
 the koinos-chain pull request (`~/koinos-pq/docs/PR-koinos-chain.md`), store listings
 (`docs/STORE.md`), and a WalletConnect project id of the wallet's own.
 
+## Outsider pen-test 2026-11-22 (wallet 0.17.2), fixes in 0.18.0
+
+A black-box look from two sides: a remote attacker hitting the served app, and a local attacker who has
+the phone, the localStorage at rest, or DOM access. No way in was found; two weak points were noted and
+one is now fixed.
+
+**Web surface (wallet.koinosproof.com).** Strict CSP (`script-src 'self'`, no inline script), HSTS,
+`X-Frame-Options: DENY`, `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`,
+`X-Content-Type-Options: nosniff`. No source maps served, no secrets in the bundle. `npm audit` reports
+10 findings (8 moderate, 2 critical) and every one is build or test tooling (vitest, tinypool, xcode,
+minimatch, uuid, @capacitor/cli); none ship in the served app. The runtime imports are
+`@noble/*`, `koilib`, `koinos-pq-core`, `kondor-js`, `qrcode` — none with an advisory.
+
+**Local-attacker pass.** The vault is AES-256-GCM under PBKDF2-SHA256 600k with a per-slot salt and IV,
+padded to 8 KiB so slot sizes reveal nothing; the two-slot constant-work unlock makes filler and a hidden
+duress decoy indistinguishable at rest. Lock zeroes the key buffers; a hidden tab locks after 60 s;
+the clipboard is wiped after 60 s; nothing writes a seed or passphrase to the console or sessionStorage.
+The duress tests confirm the decoy leaves no trace. Two weak points:
+
+- *The decrypted seed is held as a JavaScript string* (`vault.seedHex`). Strings are immutable, so on lock
+  the key buffers are zeroed but that string lingers until garbage collection. An attacker with a memory
+  dump of the unlocked (or just-locked) process could recover it. This is inherent to any browser/JS
+  wallet; the window is narrowed, not closed. **Accepted.**
+- *Passphrase strength was length-only (10+ characters).* The one at-rest attack that matters is offline
+  brute-force of an extracted vault, where a weak passphrase is the weak link. **Fixed in 0.18.0:** a
+  strength gate (`src/core/passphrase.ts`) refuses weak passphrases when one is chosen (new wallet, duress
+  wallet) — rewarding length, rejecting common passwords, repeats, sequences and single-class — while
+  never gating unlock, so an existing wallet still opens.
+
+**New surface since the earlier run — burn and the allowed-caller list (0.16–0.17.2).** A burn gives the
+PoB contract authority over the account for one nested call. `Chain.burnKoin` does this atomically —
+allow PoB, burn, forbid PoB in a single transaction, all-or-none — and leaves PoB off the allowed list.
+The dapp-side risk is a page getting the user to approve its own `set_allowed_caller` (grant a contract
+authority) or `set_public_key` (rotate the signing key); both were previously shown on the approval sheet
+only as an opaque "the wallet cannot tell what this call does". **Fixed in 0.18.0:** the approval sheet
+now renders both in plain words, naming the contract and warning what it grants, so neither can be
+slipped past the signer (`src/ui/approval-view.ts`, test `test/approval-authority.test.ts`).
+
+Result: no break. The on-chain gate was re-confirmed with the `koinos-pq` `attack-outsider` negative test
+against the current contract; see that repo's SECURITY.md for the chain side.
+
 
