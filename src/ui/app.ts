@@ -35,6 +35,7 @@ import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr 
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
 import { SitePermissions, permissionsNamespace } from "../core/permissions";
+import { passphraseStrength } from "../core/passphrase";
 import { Collections, NFT_ENTRY, collectionCandidates, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
 import { DappHost, type PendingApproval } from "./dapp-host";
 import { describePlan } from "./approval-view";
@@ -263,6 +264,21 @@ function clearWalletStores() {
   } catch {
     /* as above */
   }
+}
+/**
+ * A user-facing reason to refuse a newly chosen passphrase, or null to accept it. Only ever called when
+ * a passphrase is set (new wallet, duress wallet), never at unlock, so an existing weak passphrase still
+ * opens its wallet. The length check is done by the caller first.
+ */
+function weakPassphraseError(passphrase: string): string | null {
+  const s = passphraseStrength(passphrase);
+  if (s.ok) return null;
+  const why =
+    s.warning === "common" ? tr("It is one that attackers try first.")
+    : s.warning === "repeated" ? tr("It is a short pattern repeated.")
+    : s.warning === "one-kind" ? tr("It is all of one kind of character.")
+    : tr("It is too short or too predictable.");
+  return tr("That passphrase is too easy to guess ({label}). {why} Use a longer one — several unrelated words work well.", { label: tr(s.label), why });
 }
 /**
  * What a burn always leaves behind, in base units (10 KOIN). Mana comes only from KOIN and every transaction
@@ -1879,6 +1895,12 @@ export class App {
           this.render();
           return;
         }
+        const weak = weakPassphraseError(p1);
+        if (weak) {
+          this.s.error = weak;
+          this.render();
+          return;
+        }
         if (p1 !== p2) {
           this.s.error = tr("The two passphrases differ.");
           this.render();
@@ -2096,6 +2118,12 @@ export class App {
         const d1 = field("d1"), d2 = field("d2");
         if (d1.length < MIN_PASSPHRASE_LENGTH) {
           this.s.error = tr("Use at least {n} characters for the duress passphrase.", { n: MIN_PASSPHRASE_LENGTH });
+          this.render();
+          return;
+        }
+        const weakD = weakPassphraseError(d1);
+        if (weakD) {
+          this.s.error = weakD;
           this.render();
           return;
         }

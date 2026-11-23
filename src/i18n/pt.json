@@ -372,5 +372,18 @@
   "Send it from your first account or from anywhere else. The {unit} stays yours in the new account. Until it is activated it is not in the account list; you can leave this screen and come back with Create another account, the address stays the same.": "Envia-o da tua primeira conta ou de qualquer outro sítio. O {unit} continua a ser teu na conta nova. Até ser ativada não aparece na lista de contas; podes sair deste ecrã e voltar com Criar outra conta, o endereço não muda.",
   "Send to it from {name}": "Enviar-lhe a partir de {name}",
   "Account {n} holds {amount} {unit} but is not activated yet, so it is not in your account list. Nothing is lost: the funds are at its address.": "A conta {n} tem {amount} {unit} mas ainda não está ativada, por isso não aparece na tua lista de contas. Nada se perdeu: os fundos estão no endereço dela.",
-  "Finish activating account {n}": "Terminar a ativação da conta {n}"
+  "Finish activating account {n}": "Terminar a ativação da conta {n}",
+  "very weak": "muito fraca",
+  "weak": "fraca",
+  "fair": "razoável",
+  "strong": "forte",
+  "very strong": "muito forte",
+  "It is one that attackers try first.": "É uma das primeiras que os atacantes tentam.",
+  "It is a short pattern repeated.": "É um padrão curto repetido.",
+  "It is all of one kind of character.": "É de um só tipo de caractere.",
+  "It is too short or too predictable.": "É curta demais ou previsível demais.",
+  "That passphrase is too easy to guess ({label}). {why} Use a longer one — several unrelated words work well.": "Essa frase de acesso é fácil demais de adivinhar ({label}). {why} Use uma mais longa — várias palavras sem relação funcionam bem.",
+  "Replace the signing key of {target} with a new post-quantum key. Whoever holds the new key gains full control; the current key stops working. Only do this if you are rotating your own key.": "Substitui a chave de assinatura de {target} por uma nova chave pós-quântica. Quem tiver a nova chave ganha controle total; a chave atual para de funcionar. Faça isso só se estiver trocando sua própria chave.",
+  "Allow {contract} to act for {target} from inside other contracts — it could move funds or change the account's settings until you forbid it again.": "Permite que {contract} aja por {target} de dentro de outros contratos — pode mover fundos ou mudar as configurações da conta até você proibir de novo.",
+  "Stop {contract} from acting for {target}.": "Impedir que {contract} aja por {target}."
 }

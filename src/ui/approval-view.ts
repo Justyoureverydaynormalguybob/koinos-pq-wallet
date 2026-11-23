@@ -1,6 +1,6 @@
 // How a dapp request is shown before approval: the same words in the extension window and the in-app
 // sheet. Everything rendered goes through esc()/addressStrip().
-import { cleanLabel, decodeFields, formatKoin, TOKEN_ENTRY, type Network } from "koinos-pq-core";
+import { cleanLabel, decodeFields, formatKoin, PQWALLET_ENTRY, TOKEN_ENTRY, type Network } from "koinos-pq-core";
 import { utils } from "koilib";
 import { allTokens, findToken, formatUnits, type CustomTokens } from "../core/tokens";
 import { NFT_ENTRY } from "../core/nfts";
@@ -66,6 +66,22 @@ export function describeOperation(cc: CallContract, net: Network, signer: string
   if (token && fields && cc.entry_point === TOKEN_BURN) {
     const from = addr(fieldBytes(fields, 1)), value = fieldUint(fields, 2);
     if (from && value !== null) return `<span class="warn-inline">${tr("Burn (destroy) <strong class=\"mono\">{amount} {symbol}</strong> from {from}", { amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), from: from === signer ? tr("your account") : addressStrip(from, { size: "sm" }) })}</span>`;
+  }
+  if (fields && cc.entry_point === PQWALLET_ENTRY.set_public_key) {
+    // set_public_key { public_key = 1, proof = 2 }: replaces the key that controls the account.
+    const key = fieldBytes(fields, 1);
+    const target = cc.contract_id === signer ? tr("your account") : addressStrip(cc.contract_id, { size: "sm" });
+    return `<span class="warn-inline">${tr("Replace the signing key of {target} with a new post-quantum key. Whoever holds the new key gains full control; the current key stops working. Only do this if you are rotating your own key.", { target })}</span>${key ? ` <span class="mute">(${esc(key.length)} ${tr("bytes")})</span>` : ""}`;
+  }
+  if (fields && cc.entry_point === PQWALLET_ENTRY.set_allowed_caller) {
+    // set_allowed_caller { contract = 1, allowed = 2 }: grants/revokes a contract's authority over the account.
+    const contract = addr(fieldBytes(fields, 1)), allowed = (fieldUint(fields, 2) ?? 0n) !== 0n;
+    const target = cc.contract_id === signer ? tr("your account") : addressStrip(cc.contract_id, { size: "sm" });
+    if (contract) {
+      return allowed
+        ? `<span class="warn-inline">${tr("Allow {contract} to act for {target} from inside other contracts — it could move funds or change the account's settings until you forbid it again.", { contract: addressStrip(contract, { size: "sm" }), target })}</span>`
+        : tr("Stop {contract} from acting for {target}.", { contract: addressStrip(contract, { size: "sm" }), target });
+    }
   }
   if (fields && cc.entry_point === NFT_ENTRY.transfer) {
     // KCS-5 transfer { from = 1, to = 2, token_id = 3 }
