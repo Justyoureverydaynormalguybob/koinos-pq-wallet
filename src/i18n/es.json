@@ -370,5 +370,7 @@
   "Choose the accounts this site may see:": "Elige las cuentas que este sitio puede ver:",
   "Choose at least one account.": "Elige al menos una cuenta.",
   "Send it from your first account or from anywhere else. The {unit} stays yours in the new account. Until it is activated it is not in the account list; you can leave this screen and come back with Create another account, the address stays the same.": "Envíalo desde tu primera cuenta o desde cualquier otro sitio. El {unit} sigue siendo tuyo en la cuenta nueva. Hasta que se active no aparece en la lista de cuentas; puedes salir de esta pantalla y volver con Crear otra cuenta, la dirección no cambia.",
-  "Send to it from {name}": "Enviarle desde {name}"
+  "Send to it from {name}": "Enviarle desde {name}",
+  "Account {n} holds {amount} {unit} but is not activated yet, so it is not in your account list. Nothing is lost: the funds are at its address.": "La cuenta {n} tiene {amount} {unit} pero aún no está activada, por eso no aparece en tu lista de cuentas. No se ha perdido nada: los fondos están en su dirección.",
+  "Finish activating account {n}": "Terminar de activar la cuenta {n}"
 }

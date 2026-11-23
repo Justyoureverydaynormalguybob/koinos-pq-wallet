@@ -186,6 +186,9 @@ interface State {
   setup: SetupState | null;
   /** per network: the activated account found from the seed (null: none; missing: not checked yet) */
   detected: Record<string, FoundAccount[]>;
+  /** per network: the next account of these words when it holds funds but is not activated (null: it holds nothing; missing: not checked) */
+  waiting: Record<string, { key: number; address: string; mana: bigint } | null>;
+  waitingAt: Record<string, number>;
   /** the names the user gave the accounts (sealed side store of the open wallet) */
   names: AccountNames | null;
   /** the address of the account being renamed in Settings */
@@ -274,6 +277,8 @@ const BURN_KEEP = 1_000_000_000n;
  */
 const SEND_KEEP = 400_000_000n;
 /** how long a KOIN price read from the chain is shown before it is read again */
+/** How long "the next account holds nothing" is believed before its address is read again. */
+const WAITING_RECHECK_MS = 60_000;
 const PRICE_TTL_MS = 5 * 60_000;
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
@@ -404,6 +409,8 @@ export class App {
       wcLog: [],
       storeKey: null,
       detected: {},
+      waiting: {},
+      waitingAt: {},
       names: null,
       renaming: null,
       koinUsd: {},
@@ -550,6 +557,8 @@ export class App {
     this.s.history = null;
     this.s.sent = null;
     this.s.detected = {};
+    this.s.waiting = {};
+    this.s.waitingAt = {};
     this.s.change = null;
     this.s.book = null;
     this.s.tokens = null;
@@ -618,6 +627,7 @@ export class App {
         /* node unreachable: look again on the next refresh */
       }
     }
+    await this.checkWaiting();
     const a = this.account();
     if (!a) {
       this.s.balance = this.s.mana = null;
@@ -696,7 +706,34 @@ export class App {
    * patched into the page in place (no re-render, so nothing being typed is lost). When the balance moved,
    * the activity list and the token rows are re-read too; those are the heavy calls, so only then.
    */
+  /**
+   * Funds sent to a further account whose activation never ran (the screen was left, the app was closed)
+   * would sit at an address the wallet shows nowhere. Looks at the next account's address so the Account tab can say so.
+   * "Nothing there" is looked at again after a minute: a transfer to it may still be on its way.
+   */
+  private async checkWaiting() {
+    const net = this.network.name;
+    const keys = this.s.keys;
+    const found = this.s.detected[net];
+    if (!keys || !found?.some((f) => f.key === 0) || this.s.setup) return;
+    const have = this.s.waiting[net];
+    if (have || (have === null && Date.now() - (this.s.waitingAt[net] ?? 0) < WAITING_RECHECK_MS)) return;
+    const key = nextAccountKey(found);
+    if (key >= MAX_DERIVED_ACCOUNTS) return;
+    let address: string, mana: bigint;
+    try {
+      address = bootstrapAddress(accountKeys(keys, key));
+      this.s.waitingAt[net] = Date.now();
+      mana = await this.chain().mana(address);
+    } catch {
+      return; // locked meanwhile, or the node did not answer: look again later
+    }
+    if (!this.s.keys || this.network.name !== net || this.s.detected[net] !== found) return;
+    this.s.waiting[net] = mana > 0n ? { key, address, mana } : null;
+    if (mana > 0n && this.s.screen === "home" && !this.s.busy) this.render();
+  }
   private async liveTick() {
+    void this.checkWaiting();
     if (this.s.keys && this.account()) this.refreshPrice(); // does nothing while the price shown is fresh
     if (this.liveBusy || !this.s.keys || this.s.busy || this.s.setup?.running) return;
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
@@ -1046,6 +1083,11 @@ export class App {
   }
   private endSetup() {
     if (this.s.setup?.timer) window.clearInterval(this.s.setup.timer);
+    if (this.s.setup) {
+      // what the next account holds may have changed while this screen was open: look again
+      delete this.s.waiting[this.s.setup.network];
+      delete this.s.waitingAt[this.s.setup.network];
+    }
     this.s.setup = null;
   }
   /** Leaving the activation screen by a tab stops its polling, unless the activation itself is running. */
@@ -1446,7 +1488,9 @@ export class App {
       case "back-home":
         this.s.sent = null;
         this.s.exportWords = null;
-        if (this.s.setup?.running) this.go("setup"); // an activation in progress: back to its progress view
+        // an activation in progress, or one still waiting for the payment just sent to it: back to its screen,
+        // which goes on watching for the funds (leaving it for Home used to stop that and strand the payment)
+        if (this.s.setup?.running || (this.s.setup && this.s.screen !== "setup")) this.go("setup");
         else {
           this.leaveSetup();
           this.go("home");
@@ -2343,6 +2387,14 @@ export class App {
       .join("")}</select></label>`;
   }
 
+  /** On the Account tab: the next account holds funds but was never activated, with the way to finish it. */
+  private waitingNotice(): string {
+    const w = this.s.waiting[this.network.name];
+    if (!w || !this.s.keys) return "";
+    return `${notice("warn", tr("Account {n} holds {amount} {unit} but is not activated yet, so it is not in your account list. Nothing is lost: the funds are at its address.", { n: w.key + 1, amount: esc(fmtAmount(formatKoin(w.mana, 2))), unit: esc(this.unit()) }))}
+      <div class="row tight" style="margin-bottom:12px">${button(tr("Finish activating account {n}", { n: w.key + 1 }), { action: "new-account", variant: "primary" })}</div>`;
+  }
+
   private vHome() {
     const a = this.account();
     const s = this.s;
@@ -2358,6 +2410,7 @@ export class App {
     return `
       ${section("01", tr("Account"), hexStrip(a.address))}
       ${this.accountPicker()}
+      ${this.waitingNotice()}
       ${card(`
         <span class="lbl">${esc(a.label)} · ${esc(this.network.name)}</span>
         ${addressStrip(a.address)}

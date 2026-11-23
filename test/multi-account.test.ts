@@ -31,12 +31,15 @@ const activate = (...numbers: number[]) => {
   active = new Map(numbers.map((n) => [addressOf(n), keyOf(n).publicKey]));
 };
 
+/** address -> mana the node reports for it; anything else has 5 */
+const manaOf = new Map<string, string>();
+
 type Tx = { id: string; header: { payer: string }; operations: unknown[]; signatures: string[] };
 const submitted: Tx[] = [];
 const reads: string[] = [];
 function answer(req: { method: string; params: Record<string, unknown> }): unknown {
   if (req.method === "chain.get_head_info") return { head_topology: { height: "100" } };
-  if (req.method === "chain.get_account_rc") return { rc: "500000000" };
+  if (req.method === "chain.get_account_rc") return { rc: manaOf.get((req.params as { account: string }).account) ?? "500000000" };
   if (req.method === "chain.get_account_nonce") return { nonce: "" };
   if (req.method === "chain.get_chain_id") return { chain_id: "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==" };
   if (req.method === "chain.get_resource_limits") return { resource_limit_data: { disk_storage_cost: "10", network_bandwidth_cost: "5", compute_bandwidth_cost: "1" } };
@@ -202,5 +205,68 @@ describe("several accounts through the screens (jsdom, a fake node over HTTP)", 
     expect(root.textContent!.replace(/\s+/g, "")).toContain(addressOf(2));
     expect(root.textContent!.replace(/\s+/g, "")).not.toContain(addressOf(0));
     click(root, "lock");
+  }, 120_000);
+
+  it("says when the next account holds funds but was never activated, and goes back to its screen after sending to it", async () => {
+    activate(0);
+    manaOf.clear();
+    manaOf.set(addressOf(1), "0");
+    submitted.length = 0;
+    localStorage.clear();
+    localStorage.setItem("koinos-pq-wallet/network", "devnet");
+    localStorage.setItem("koinos-pq-wallet/devnet-rpc", rpc);
+    document.body.innerHTML = `<div id="app"></div>`;
+    const root = document.getElementById("app")!;
+    new App(root);
+    click(root, "import");
+    await submit(root, "import", { seed: bytesToHex(SEED) });
+    await submit(root, "passphrase", { p1: "main passphrase 1234", p2: "main passphrase 1234" });
+    await new Promise((r) => setTimeout(r, 600));
+    const pick = () => {
+      const p = root.querySelector<HTMLSelectElement>('select[name="account"]')!;
+      p.value = [...p.options].find((o) => /^Your account/.test(o.textContent!.trim()))!.value;
+      p.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    pick();
+    await settle();
+    // account 2 holds nothing: the Account tab says nothing about it
+    expect(root.textContent).not.toContain("is not activated yet");
+
+    // start account 2, send to it from the first account, and tap Done: back on its activation screen, not Home
+    click(root, "settings");
+    await settle();
+    click(root, "new-account");
+    await settle();
+    expect(root.querySelector("h1")?.textContent).toBe("Activate account 2");
+    click(root, "send-to");
+    await settle();
+    await submit(root, "send", { amount: "1" });
+    if (/First time sending here/.test(root.querySelector("h1")?.textContent ?? "")) await submit(root, "send-confirm", {}, ["checked"]);
+    expect(submitted.length, root.querySelector(".notice.danger")?.textContent ?? "").toBe(1);
+    manaOf.set(addressOf(1), "100"); // the payment arrived, too little to activate with
+    click(root, "back-home");
+    await settle();
+    expect(root.querySelector("h1")?.textContent).toBe("Activate account 2");
+
+    // leave it for the Account tab: the wallet says where the funds are and offers to finish
+    click(root, "setup-cancel");
+    await settle();
+    click(root, "back-home");
+    await settle();
+    await new Promise((r) => setTimeout(r, 400));
+    click(root, "refresh");
+    await settle();
+    expect(root.textContent).toContain("Account 2 holds");
+    expect(root.textContent).toContain("is not activated yet");
+    const finish = [...root.querySelectorAll<HTMLElement>('[data-action="new-account"]')].find((b) => /Finish activating account 2/.test(b.textContent ?? ""));
+    expect(finish).toBeTruthy();
+    finish!.click();
+    await settle();
+    expect(root.querySelector("h1")?.textContent).toBe("Activate account 2");
+    expect(root.textContent!.replace(/\s+/g, "")).toContain(addressOf(1));
+    click(root, "setup-cancel");
+    await settle();
+    click(root, "lock");
+    manaOf.clear();
   }, 120_000);
 });
