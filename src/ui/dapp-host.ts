@@ -36,7 +36,12 @@ export interface HostEvents {
   onClosed(): void;
   /** the request waiting for the user (the sheet to show), or null when there is none */
   onApproval(p: PendingApproval | null): void;
+  /** the open page's "connect" button led to a WalletConnect pairing link: pair with it (the proposal then comes to the sheet) */
+  onWcLink?(uri: string): void;
 }
+
+/** a page gets one pairing attempt per this many ms, so a script cannot keep the wallet pairing */
+export const WC_LINK_GAP_MS = 3000;
 
 export interface HostDeps {
   network: () => Network;
@@ -92,6 +97,7 @@ export class DappHost {
   /** bumped by close(): work that was awaiting something when the page closed must not touch the new session */
   private generation = 0;
   private providerCalls = new Map<string, number[]>();
+  private lastWcLink = 0;
   url = "";
   title = "";
   canGoBack = false;
@@ -123,6 +129,16 @@ export class DappHost {
       await this.plugin.addListener("closed", () => {
         this.opened = false;
         this.events.onClosed();
+      }),
+      await this.plugin.addListener("wcLink", (e) => {
+        // The native view dropped the navigation and reports the link. Only a well-formed v2 pairing code
+        // from the page that is open goes on, and pairing alone gives a dapp nothing: its proposal still
+        // has to be approved on the sheet.
+        const uri = typeof e?.url === "string" ? e.url : "";
+        const now = Date.now();
+        if (!this.opened || !/^wc:[0-9a-f]{64}@2\?/i.test(uri) || now - this.lastWcLink < WC_LINK_GAP_MS) return;
+        this.lastWcLink = now;
+        this.events.onWcLink?.(uri);
       }),
     );
   }

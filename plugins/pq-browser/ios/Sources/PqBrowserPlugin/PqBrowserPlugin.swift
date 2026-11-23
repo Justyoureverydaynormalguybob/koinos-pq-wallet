@@ -190,8 +190,19 @@ public class PqBrowserPlugin: CAPPlugin, CAPBridgedPlugin, WKScriptMessageHandle
         if let url = navigationAction.request.url, isWeb(url) {
             decisionHandler(.allow)
         } else {
+            reportWcLink(navigationAction)
             decisionHandler(.cancel)
         }
+    }
+
+    /// A WalletConnect pairing link (a dapp's "connect" button navigating to wc:…) is handed to the app,
+    /// which pairs and asks on its approval sheet. Main frame only. Nothing is loaded, and every other
+    /// scheme is dropped as before.
+    private func reportWcLink(_ action: WKNavigationAction) {
+        guard let url = action.request.url, url.scheme?.lowercased() == "wc" else { return }
+        if let target = action.targetFrame, !target.isMainFrame { return }
+        let s = url.absoluteString
+        if s.count <= 2048 { notifyListeners("wcLink", data: ["url": s]) }
     }
 
     /// The URL is reported only once a navigation has committed: a provisional load that fails leaves the
@@ -221,6 +232,7 @@ public class PqBrowserPlugin: CAPPlugin, CAPBridgedPlugin, WKScriptMessageHandle
     // MARK: WKUIDelegate (target=_blank opens in the same view; no popups)
 
     public func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        reportWcLink(navigationAction)
         if let url = navigationAction.request.url, isWeb(url) {
             webView.load(URLRequest(url: url))
         }

@@ -1080,6 +1080,11 @@ export class App {
           if (p && this.s.screen !== "dapps") this.s.screen = "dapps";
           this.render();
         },
+        onWcLink: (uri) => {
+          // the page offered WalletConnect and its button led to the pairing link: same path as a scanned code
+          if (!this.s.keys || this.s.busy) return;
+          void this.run("Connecting", () => this.pairWc(uri));
+        },
       },
       {
         network: () => this.network,

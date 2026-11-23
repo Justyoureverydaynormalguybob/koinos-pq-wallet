@@ -223,7 +223,17 @@ public class PqBrowserPlugin extends Plugin {
         wv.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                return !isWeb(req.getUrl().toString()); // anything but http(s) is dropped
+                String u = req.getUrl().toString();
+                if (isWeb(u)) return false;
+                // A WalletConnect pairing link (a dapp's "connect" button navigating to wc:…) is handed to the
+                // app, which pairs and asks on its approval sheet. Main frame only. Nothing is loaded, and
+                // every other scheme is dropped as before.
+                if (req.isForMainFrame() && u.length() <= 2048 && u.regionMatches(true, 0, "wc:", 0, 3)) {
+                    JSObject o = new JSObject();
+                    o.put("url", u);
+                    notifyListeners("wcLink", o);
+                }
+                return true;
             }
 
             @Override
