@@ -205,7 +205,7 @@ describe("the account features through the screens (jsdom, a fake node and a fak
 
     // 20 KOIN with 16 mana: a fifth of five days until full; and the dollar value from the pool
     expect(root.querySelector("#home-mana")?.textContent).toBe("16");
-    expect(root.querySelector("#home-mana-full")?.textContent).toBe(" · full in 1 d 0 h");
+    expect(root.querySelector("#home-mana-full")?.textContent).toBe("full in 1 d 0 h");
     await new Promise((r) => setTimeout(r, 400));
     expect(root.querySelector("#home-usd")?.textContent).toBe("≈ $0.382 · $0.0191 per KOIN");
 

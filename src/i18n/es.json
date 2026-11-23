@@ -368,5 +368,7 @@
   "Name for {address}": "Nombre para {address}",
   "Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.": "Déjalo vacío para volver al nombre por defecto. Los nombres se quedan en este dispositivo y nunca se muestran a un sitio.",
   "Choose the accounts this site may see:": "Elige las cuentas que este sitio puede ver:",
-  "Choose at least one account.": "Elige al menos una cuenta."
+  "Choose at least one account.": "Elige al menos una cuenta.",
+  "Send it from your first account or from anywhere else. The {unit} stays yours in the new account. Until it is activated it is not in the account list; you can leave this screen and come back with Create another account, the address stays the same.": "Envíalo desde tu primera cuenta o desde cualquier otro sitio. El {unit} sigue siendo tuyo en la cuenta nueva. Hasta que se active no aparece en la lista de cuentas; puedes salir de esta pantalla y volver con Crear otra cuenta, la dirección no cambia.",
+  "Send to it from {name}": "Enviarle desde {name}"
 }

@@ -368,5 +368,7 @@
   "Name for {address}": "Name for {address}",
   "Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.": "Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.",
   "Choose the accounts this site may see:": "Choose the accounts this site may see:",
-  "Choose at least one account.": "Choose at least one account."
+  "Choose at least one account.": "Choose at least one account.",
+  "Send it from your first account or from anywhere else. The {unit} stays yours in the new account. Until it is activated it is not in the account list; you can leave this screen and come back with Create another account, the address stays the same.": "Send it from your first account or from anywhere else. The {unit} stays yours in the new account. Until it is activated it is not in the account list; you can leave this screen and come back with Create another account, the address stays the same.",
+  "Send to it from {name}": "Send to it from {name}"
 }

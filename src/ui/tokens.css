@@ -249,6 +249,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .words li::before { content: counter(w, decimal-leading-zero); color: var(--mute); font-size: 13px; min-width: 2ch; }
 @media (min-width: 480px) { .words { columns: 3; } }
 .acct-pick { margin: 0 0 12px; }
+.stat .v .sub { display: block; font-size: 13px; color: var(--mute); }
+#home-usd { color: var(--mute); }
 .pick { border: 0; margin: 10px 0 0; padding: 0; min-width: 0; }
 .pick legend { padding: 0; margin-bottom: 4px; }
 .pick .check { display: flex; align-items: center; gap: 8px; min-height: 40px; flex-wrap: wrap; }

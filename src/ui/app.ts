@@ -636,8 +636,8 @@ export class App {
       this.s.notice = tr("Balance unavailable from this {net} node right now ({why}). Mana and head block are live.", { net: this.network.name, why: (balance.reason as Error).message?.slice(0, 120) ?? "error" });
     }
     if (mana.status === "rejected" && head.status === "rejected") throw new Error(tr("cannot reach the {net} node: {why}", { net: this.network.name, why: (head.reason as Error).message }));
-    void this.fillTokenBalances(a.address);
     this.refreshPrice();
+    void this.fillTokenBalances(a.address);
   }
   /**
    * balance_of on every listed token but KOIN, three at a time (the public nodes answer HTML to bursts),
@@ -650,8 +650,10 @@ export class App {
       this.s.balancesFor = key;
     }
     const chain = this.chain();
-    const todo = this.tokenList().filter((t) => t.address !== this.network.koin && this.s.balances[t.address] === undefined);
+    // not read yet, or refused last time (null): the public nodes turn bursts away, and a "?" must not stay for good
+    const todo = this.tokenList().filter((t) => t.address !== this.network.koin && (this.s.balances[t.address] === undefined || this.s.balances[t.address] === null));
     if (!todo.length) return;
+    const failed: Token[] = [];
     const worker = async () => {
       for (;;) {
         const t = todo.shift();
@@ -664,12 +666,29 @@ export class App {
         }
         await new Promise((r) => setTimeout(r, 120)); // api.koinos.io answers HTML to bursts
         if (this.s.balancesFor !== key) return;
+        if (v === null) failed.push(t);
         this.s.balances[t.address] = v;
         const el = this.root.querySelector<HTMLElement>(`[data-token="${t.address}"] .amt`);
         if (el) el.textContent = this.tokenAmount(t);
       }
     };
     await Promise.all([worker(), worker(), worker()]);
+    // second and third pass over what was refused: one at a time, with a pause, which the nodes do answer
+    for (let pass = 0; pass < 2 && failed.length; pass++) {
+      const again = failed.splice(0);
+      for (const t of again) {
+        await new Promise((r) => setTimeout(r, 400));
+        if (this.s.balancesFor !== key) return;
+        try {
+          this.s.balances[t.address] = await chain.tokenBalance(t.address, address);
+        } catch {
+          failed.push(t);
+          continue;
+        }
+        const el = this.root.querySelector<HTMLElement>(`[data-token="${t.address}"] .amt`);
+        if (el) el.textContent = this.tokenAmount(t);
+      }
+    }
     if (this.s.balancesFor === key && this.s.screen === "home" && !this.s.busy) this.render();
   }
   /**
@@ -678,6 +697,7 @@ export class App {
    * the activity list and the token rows are re-read too; those are the heavy calls, so only then.
    */
   private async liveTick() {
+    if (this.s.keys && this.account()) this.refreshPrice(); // does nothing while the price shown is fresh
     if (this.liveBusy || !this.s.keys || this.s.busy || this.s.setup?.running) return;
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     this.liveBusy = true;
@@ -741,11 +761,11 @@ export class App {
     const usdEl = this.root.querySelector<HTMLElement>("#home-usd");
     if (usdEl) usdEl.textContent = this.usdLine();
   }
-  /** " · full in 2 d 4 h" after the mana figure while it is recharging; nothing once it is full or unknown. */
+  /** "full in 2 d 4 h" under the mana figure while it is recharging; nothing once it is full or unknown. */
   private manaFullLine(): string {
     const ms = manaFullIn(this.s.balance, this.s.mana);
     if (ms === null || ms <= 0) return "";
-    return ` · ${tr("full in {time}", { time: fmtDuration(ms) })}`;
+    return tr("full in {time}", { time: fmtDuration(ms) });
   }
   /** "≈ $1.79 · $0.0191 per KOIN" under the balance, where the network has a price on chain. */
   private usdLine(): string {
@@ -760,7 +780,8 @@ export class App {
     if (have && Date.now() - have.at < PRICE_TTL_MS) return;
     this.s.koinUsd[net] = { price: have?.price ?? null, at: Date.now() };
     void koinUsd(this.chain()).then((price) => {
-      this.s.koinUsd[net] = { price: price ?? have?.price ?? null, at: Date.now() };
+      // a read the node refused is tried again in twenty seconds, not after the full five minutes
+      this.s.koinUsd[net] = { price: price ?? have?.price ?? null, at: price === null ? Date.now() - PRICE_TTL_MS + 20_000 : Date.now() };
       const el = this.root.querySelector<HTMLElement>("#home-usd");
       if (el && this.network.name === net) el.textContent = this.usdLine();
     });
@@ -2344,7 +2365,7 @@ export class App {
         <div style="margin-top:20px" id="home-balance">${balance(s.balance === null ? null : fmtAmount(formatKoin(s.balance)), unit)}</div>
         <div class="s" id="home-usd" style="margin-top:4px">${esc(this.usdLine())}</div>
         <div style="margin-top:12px">
-          ${stat(tr("Mana"), `<span id="home-mana">${s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2)))}</span><span class="s" id="home-mana-full">${esc(this.manaFullLine())}</span>`)}
+          ${stat(tr("Mana"), `<span id="home-mana">${s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2)))}</span><span class="s sub" id="home-mana-full">${esc(this.manaFullLine())}</span>`)}
           ${stat(tr("Signature"), canSign(a) ? esc(sig) : "none here (watch-only)")}
         </div>
         <div class="actions">
@@ -2439,8 +2460,8 @@ export class App {
       .join("");
     return `
       ${section("02", tr("Tokens"), tr("{a} of {b}", { a: shown.length, b: tokens.length }))}
+      <label class="check" style="margin-bottom:8px"><input type="checkbox" name="hideZero" ${s.hideZero ? "checked" : ""}> ${tr("Hide zero balances")}</label>
       ${list(rows)}
-      <label class="check"><input type="checkbox" name="hideZero" ${s.hideZero ? "checked" : ""}> ${tr("Hide zero balances")}</label>
       <form data-form="add-token" class="field inline">
         <label><span>Add a token by its contract address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
         ${button(tr("Add"), { mini: true })}
@@ -2813,6 +2834,9 @@ export class App {
         ${addressStrip(st.account, { box: true })}
         <div class="row tight">${button(tr("Copy address"), { action: "copy", data: { copy: st.account } })}</div>`, `style="text-align:center"`)}
       <p id="setup-mana" class="${funded ? "note ok" : "mute"}" style="margin-top:12px">${need !== null ? esc(this.manaLine(st.mana, need)) : tr("Pricing the activation from the node…")}</p>
+      ${st.key > 0 ? `<p style="margin-top:12px">${tr("Send it from your first account or from anywhere else. The {unit} stays yours in the new account. Until it is activated it is not in the account list; you can leave this screen and come back with Create another account, the address stays the same.", { unit: esc(unit) })}</p>${
+        this.account() && canSign(this.account()!) ? `<div class="row tight">${button(tr("Send to it from {name}", { name: esc(this.account()!.label) }), { action: "send-to", data: { address: st.account } })}</div>` : ""
+      }` : ""}
       ${st.failed ? `${notice("danger", tr("Activation stopped: {why}", { why: esc(st.failed) }))}<div class="row tight">${button(tr("Try again"), { action: "setup-retry", variant: "primary" })}</div>` : ""}
       <p class="fine" style="margin-top:12px">${tr("As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here. From then on only your 24 words can move the account. The {unit} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.", { unit: esc(unit) })}</p>
       <div class="row">${button(tr("Settings"), { action: "setup-cancel", variant: "ghost" })}</div>`;
