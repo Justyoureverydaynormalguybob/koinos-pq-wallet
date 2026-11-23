@@ -18,7 +18,7 @@ import {
   decoySlotFor, decryptVault, encryptVault, localVaultStore, MAX_ACCOUNTS, MIN_PASSPHRASE_LENGTH, newFile, openVault, roleOf, SLOT_COUNT, toFile, withSlot,
   type AccountRecord, type VaultData, type VaultFile,
 } from "../core/vault";
-import { canSign, detectAccount, displayLabel, walletAccounts } from "../core/accounts";
+import { MAX_DERIVED_ACCOUNTS, accountKeys, accountName, canSign, detectAccounts, displayLabel, nextAccountKey, walletAccounts, wipeAccountKeys, type FoundAccount } from "../core/accounts";
 import { AddressBook, addressBookNamespace, localBookStore, type Assessment } from "../core/addressbook";
 import { SealedStore, fillerValue, storeKeyFrom } from "../core/sealed-store";
 import { WcBridge, type WcSession } from "./wc-bridge";
@@ -29,6 +29,8 @@ import {
   ticker, tile, words, type Tab,
 } from "./components";
 import { isExtension, isNative } from "./platform";
+import { AccountNames } from "../core/names";
+import { fmtDuration, fmtUsd, koinUsd, manaFullIn, usdValue } from "../core/price";
 import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr } from "../i18n";
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
@@ -52,6 +54,8 @@ const TAB_OF: Partial<Record<Screen, string>> = {
 };
 
 interface SetupState {
+  /** the number of the account being activated (0: the wallet's first) */
+  key: number;
   account: string;
   network: string;
   /** live-priced budgets, null until the node has answered */
@@ -70,6 +74,8 @@ interface Account extends AccountRecord {
   index: number;
   /** found from the seed on this network, not stored in the vault */
   derived?: boolean;
+  /** the number of the key that signs for it (0, the wallet's own, when absent) */
+  key?: number;
 }
 
 /** A change to the stored vault, applied only after the passphrase has been typed (and checked). */
@@ -179,7 +185,15 @@ interface State {
   sendCheck: SendCheck | null;
   setup: SetupState | null;
   /** per network: the activated account found from the seed (null: none; missing: not checked yet) */
-  detected: Record<string, string | null>;
+  detected: Record<string, FoundAccount[]>;
+  /** the names the user gave the accounts (sealed side store of the open wallet) */
+  names: AccountNames | null;
+  /** the address of the account being renamed in Settings */
+  renaming: string | null;
+  /** dollars per KOIN by network, read from the chain; `at` is when (ms) */
+  koinUsd: Record<string, { price: number | null; at: number }>;
+  /** the accounts ticked on the sheet for the "see your accounts" request with this key */
+  dappPick: { key: string; addresses: string[] } | null;
   change: PendingChange | null;
 }
 
@@ -202,8 +216,8 @@ const APPROVE_DELAY_MS = 800;
 // unlock on as filler of the same size, so local storage looks the same whether one wallet lives on the
 // device or two, and says nothing about either. (Until 0.14 they were plain JSON keyed by a hash of the
 // seed: readable by anyone with the storage, and a second key set was a tell that a duress wallet existed.)
-type StoreKind = "book" | "tokens" | "sites" | "collections";
-const STORE_KINDS: StoreKind[] = ["book", "tokens", "sites", "collections"];
+type StoreKind = "book" | "tokens" | "sites" | "collections" | "names";
+const STORE_KINDS: StoreKind[] = ["book", "tokens", "sites", "collections", "names"];
 const emptyStore = (_kind: StoreKind) => fillerValue();
 const storeKey = (kind: StoreKind, ns: string) => `koinos-pq-wallet/${kind}/${ns}`;
 function ensureStored(key: string, empty: string) {
@@ -240,7 +254,7 @@ function clearWalletStores() {
     const doomed: string[] = [];
     for (let i = 0; i < ls.length; i++) {
       const k = ls.key(i);
-      if (k && /^koinos-pq-wallet\/(book|tokens|sites|collections)\//.test(k)) doomed.push(k);
+      if (k && /^koinos-pq-wallet\/(book|tokens|sites|collections|names)\//.test(k)) doomed.push(k);
     }
     for (const k of doomed) ls.removeItem(k);
   } catch {
@@ -248,10 +262,19 @@ function clearWalletStores() {
   }
 }
 /**
- * What a burn always leaves behind, in base units (2 KOIN). Mana comes only from KOIN and every transaction
- * spends some (the burn itself used 0.78 on Harbinger), so an account burned down to nothing could not act again.
+ * What a burn always leaves behind, in base units (10 KOIN). Mana comes only from KOIN and every transaction
+ * spends some: on mainnet the burn itself used 6.1 mana and a transfer afterwards 3.1 (2026-11-23; Harbinger
+ * charged 0.78 for the burn). With less left the burn could not pay for itself, let alone a later transfer.
  */
-const BURN_KEEP = 200_000_000n;
+const BURN_KEEP = 1_000_000_000n;
+/**
+ * What "Max" on Send leaves behind when the token is KOIN, in base units (4 KOIN): the transfer's own fee is
+ * paid in mana, and sent KOIN takes its mana with it. A transfer from a pqwallet account used 3.1 to 3.2 mana
+ * on mainnet (2026-11-23).
+ */
+const SEND_KEEP = 400_000_000n;
+/** how long a KOIN price read from the chain is shown before it is read again */
+const PRICE_TTL_MS = 5 * 60_000;
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
 /** foreground poll of head, balance and mana (three ~400-byte reads); the activity list is re-read only when the balance moved */
@@ -381,6 +404,10 @@ export class App {
       wcLog: [],
       storeKey: null,
       detected: {},
+      names: null,
+      renaming: null,
+      koinUsd: {},
+      dappPick: null,
       change: null,
     };
     if (!NETWORKS[this.s.networkName]) this.s.networkName = "testnet";
@@ -446,8 +473,16 @@ export class App {
     const out: Account[] = [];
     if (this.s.keys) out.push({ index: 0, label: "Post-quantum address (native)", mode: "native", address: this.s.keys.address });
     for (const a of this.s.vault?.accounts ?? []) out.push({ index: out.length, ...a, label: displayLabel(a.label) });
-    const found = this.s.detected[this.network.name];
-    if (found && !out.some((a) => a.address === found)) out.push({ index: out.length, label: "Your account", mode: "pqwallet", address: found, derived: true });
+    for (const f of this.s.detected[this.network.name] ?? []) {
+      const have = out.find((a) => a.address === f.address);
+      if (have) have.key = f.key;
+      else out.push({ index: out.length, label: f.key === 0 ? accountName(0) : tr("Account {n}", { n: f.key + 1 }), mode: "pqwallet", address: f.address, derived: true, key: f.key });
+    }
+    // the user's own names win over the default ones
+    for (const a of out) {
+      const mine = this.s.names?.get(a.address);
+      if (mine) a.label = mine;
+    }
     return out;
   }
   /** What the user is offered: the native address only on the devnet, since today's nodes cannot spend from it. */
@@ -457,6 +492,11 @@ export class App {
   private account(): Account | null {
     const vis = this.visibleAccounts();
     return vis.find((a) => a.index === this.s.accountIndex) ?? vis[0] ?? null;
+  }
+  /** The keys that sign for an account: the wallet's own for the first, a derived pair for each further one. */
+  private keysFor(a: Account): PqKeys {
+    if (!this.s.keys) throw new Error(tr("locked"));
+    return accountKeys(this.s.keys, a.key ?? 0);
   }
   private unit(): string {
     return this.network.name === "testnet" ? "tKOIN" : "KOIN";
@@ -492,7 +532,10 @@ export class App {
   }
   private lock(notice?: string) {
     this.wc.detach();
-    if (this.s.keys) wipe(this.s.keys.secretKey, this.s.keys.seed);
+    if (this.s.keys) {
+      wipeAccountKeys(this.s.keys);
+      wipe(this.s.keys.secretKey, this.s.keys.seed);
+    }
     if (this.s.storeKey) wipe(this.s.storeKey);
     this.s.storeKey = null;
     this.s.wcSessions = [];
@@ -515,6 +558,9 @@ export class App {
     this.s.sendToken = "";
     this.s.sendTo = null;
     this.s.sites = null;
+    this.s.names = null;
+    this.s.renaming = null;
+    this.s.dappPick = null;
     this.s.collections = null;
     this.s.nft = emptyNft();
     if (this.host?.isOpen) void this.host.close();
@@ -567,7 +613,7 @@ export class App {
     const net = this.network.name;
     if (this.s.keys && this.s.detected[net] === undefined) {
       try {
-        this.s.detected[net] = await detectAccount(chain, this.s.keys);
+        this.s.detected[net] = await detectAccounts(chain, this.s.keys);
       } catch {
         /* node unreachable: look again on the next refresh */
       }
@@ -591,6 +637,7 @@ export class App {
     }
     if (mana.status === "rejected" && head.status === "rejected") throw new Error(tr("cannot reach the {net} node: {why}", { net: this.network.name, why: (head.reason as Error).message }));
     void this.fillTokenBalances(a.address);
+    this.refreshPrice();
   }
   /**
    * balance_of on every listed token but KOIN, three at a time (the public nodes answer HTML to bursts),
@@ -689,6 +736,34 @@ export class App {
     if (balEl && s.balance !== null) balEl.textContent = fmtAmount(formatKoin(s.balance));
     const manaEl = this.root.querySelector<HTMLElement>("#home-mana");
     if (manaEl && s.mana !== null) manaEl.textContent = fmtAmount(formatKoin(s.mana, 2));
+    const fullEl = this.root.querySelector<HTMLElement>("#home-mana-full");
+    if (fullEl) fullEl.textContent = this.manaFullLine();
+    const usdEl = this.root.querySelector<HTMLElement>("#home-usd");
+    if (usdEl) usdEl.textContent = this.usdLine();
+  }
+  /** " · full in 2 d 4 h" after the mana figure while it is recharging; nothing once it is full or unknown. */
+  private manaFullLine(): string {
+    const ms = manaFullIn(this.s.balance, this.s.mana);
+    if (ms === null || ms <= 0) return "";
+    return ` · ${tr("full in {time}", { time: fmtDuration(ms) })}`;
+  }
+  /** "≈ $1.79 · $0.0191 per KOIN" under the balance, where the network has a price on chain. */
+  private usdLine(): string {
+    const price = this.s.koinUsd[this.network.name]?.price ?? null;
+    if (price === null || this.s.balance === null) return "";
+    return tr("≈ {value} · {price} per {unit}", { value: fmtUsd(usdValue(this.s.balance, price)), price: fmtUsd(price), unit: this.unit() });
+  }
+  /** Reads the KOIN price from the chain when the one shown is older than PRICE_TTL_MS; never holds anything up. */
+  private refreshPrice() {
+    const net = this.network.name;
+    const have = this.s.koinUsd[net];
+    if (have && Date.now() - have.at < PRICE_TTL_MS) return;
+    this.s.koinUsd[net] = { price: have?.price ?? null, at: Date.now() };
+    void koinUsd(this.chain()).then((price) => {
+      this.s.koinUsd[net] = { price: price ?? have?.price ?? null, at: Date.now() };
+      const el = this.root.querySelector<HTMLElement>("#home-usd");
+      if (el && this.network.name === net) el.textContent = this.usdLine();
+    });
   }
   /** an input has focus: a full re-render would throw away what is being typed */
   private typing(): boolean {
@@ -773,7 +848,7 @@ export class App {
   private startSession(seed: Uint8Array, slotKey: Uint8Array) {
     this.s.keys = deriveKeys(seed);
     const ns = `slot${this.s.slot}`;
-    const legacy: Record<StoreKind, string> = { book: addressBookNamespace(seed), tokens: customTokensNamespace(seed), sites: permissionsNamespace(seed), collections: collectionsNamespace(seed) };
+    const legacy: Record<StoreKind, string> = { book: addressBookNamespace(seed), tokens: customTokensNamespace(seed), sites: permissionsNamespace(seed), collections: collectionsNamespace(seed), names: "-" }; // names never had a seed-keyed store
     for (const kind of STORE_KINDS) moveStored(storeKey(kind, legacy[kind]), storeKey(kind, ns));
     for (let i = 0; i < SLOT_COUNT; i++) for (const kind of STORE_KINDS) ensureStored(storeKey(kind, `slot${i}`), emptyStore(kind));
     this.s.storeKey = storeKeyFrom(slotKey);
@@ -782,6 +857,7 @@ export class App {
     this.s.book = new AddressBook(ns, sealed);
     this.s.tokens = new CustomTokens(ns, sealed);
     this.s.sites = new SitePermissions(ns, sealed);
+    this.s.names = new AccountNames(ns, sealed);
     this.s.collections = new Collections(ns, sealed);
     if (this.s.keys.seed !== seed) wipe(seed);
     this.wc.attach(this.dappHost(), {
@@ -792,7 +868,7 @@ export class App {
       signingAddresses: async () => {
         const keys = this.s.keys;
         if (!keys) return [];
-        const detected = await detectAccount(this.chain(), keys).catch(() => null);
+        const detected = await detectAccounts(this.chain(), keys).catch(() => [] as FoundAccount[]);
         return walletAccounts(keys, this.s.vault?.accounts ?? [], this.network.name, detected).map((a) => a.address);
       },
       onSessionsChanged: () => {
@@ -889,11 +965,12 @@ export class App {
   }
 
   // ---------- account activation (the pqwallet contract on the seed's own address) ----------
-  private startSetup() {
+  /** Starts activating account number `key` on the current network: 0 is the wallet's first account, n a further one from the same words. */
+  private startSetup(key = 0) {
     if (!this.s.keys) return;
     this.endSetup();
-    const account = bootstrapAddress(this.s.keys);
-    const st0: SetupState = { account, network: this.network.name, costs: null, deployed: false, mana: null, status: null, result: null, running: false, failed: null, timer: undefined };
+    const account = bootstrapAddress(accountKeys(this.s.keys, key));
+    const st0: SetupState = { key, account, network: this.network.name, costs: null, deployed: false, mana: null, status: null, result: null, running: false, failed: null, timer: undefined };
     this.s.setup = st0;
     // price the two transactions from the live resource market; nothing runs until that is known
     void Promise.all([estimateSetupCosts(this.chain()), pqwalletInfo(this.chain(), account)])
@@ -963,12 +1040,13 @@ export class App {
     this.s.screen = "setup";
     const net = st.network;
     try {
-      const result = await setupPqwalletAccount(this.chain(), this.s.keys, (status) => {
+      const result = await setupPqwalletAccount(this.chain(), accountKeys(this.s.keys, st.key), (status) => {
         st.status = status;
         if (this.s.setup === st) this.render();
       });
       st.result = result;
-      this.s.detected[net] = result.account;
+      const known = this.s.detected[net] ?? [];
+      if (!known.some((f) => f.address === result.account)) this.s.detected[net] = [...known, { address: result.account, key: st.key }];
       this.s.accountIndex = this.accounts().find((a) => a.address === result.account)?.index ?? 0;
     } catch (e) {
       st.failed = (e as Error).message || String(e);
@@ -985,7 +1063,16 @@ export class App {
     const valueBase = parseUnits(amount, token.decimals);
     const chain = this.chain();
     const contract = token.address === this.network.koin ? undefined : token.address;
-    const res = await chain.sendKoin({ from: a.address, to, valueBase, keys: this.s.keys, mode: a.mode as "native" | "pqwallet", contract });
+    let rcLimit: bigint | undefined;
+    if (!contract) {
+      // Sent KOIN takes its mana with it and the fee is paid from what is left, so the fee ceiling must fit
+      // in what is left too (it matters when most of the account is sent, as with "Max").
+      const avail = await chain.mana(a.address);
+      if (valueBase >= avail) throw new Error(tr("Only {unit} that still has its mana can be sent, and some has to stay to pay for the transaction. Mana now: {mana}.", { unit: this.unit(), mana: formatKoin(avail, 2) }));
+      const left = avail - valueBase, cap = 1_000_000_000n, half = avail / 2n;
+      rcLimit = [left, cap, half].reduce((x, y) => (y < x ? y : x));
+    }
+    const res = await chain.sendKoin({ from: a.address, to, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet", contract, rcLimit });
     this.s.book?.recordSend(to, name);
     this.s.sendCheck = null;
     if (contract) delete this.s.balances[contract]; // read again on the next refresh
@@ -1022,7 +1109,7 @@ export class App {
     const [balance, mana] = await Promise.all([chain.balance(a.address), chain.mana(a.address)]);
     const most = this.burnable(balance, mana) ?? 0n;
     if (valueBase > most) throw new Error(tr("The most this account can burn right now is {most} {unit}.", { most: formatKoin(most), unit: this.unit() }));
-    const res = await chain.burnKoin({ from: a.address, valueBase, keys: this.s.keys, mode: a.mode as "native" | "pqwallet" });
+    const res = await chain.burnKoin({ from: a.address, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" });
     if (this.network.vhp) delete this.s.balances[this.network.vhp]; // read again on the next refresh
     this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount, symbol: this.unit(), burned: true };
     this.s.screen = "sent";
@@ -1189,7 +1276,7 @@ export class App {
     const a = this.account();
     if (!a || !this.s.keys || !canSign(a)) throw new Error(tr("locked"));
     const chain = this.chain();
-    const res = await chain.sendCall({ from: a.address, contract: token.collection, entryPoint: NFT_ENTRY.transfer, args: encodeNftTransferArgs(a.address, to, token.idHex), keys: this.s.keys, mode: a.mode as "native" | "pqwallet" });
+    const res = await chain.sendCall({ from: a.address, contract: token.collection, entryPoint: NFT_ENTRY.transfer, args: encodeNftTransferArgs(a.address, to, token.idHex), keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" });
     this.s.book?.recordSend(to, name);
     this.s.sendCheck = null;
     this.s.nft.tokens[token.collection] = null; // read again next time
@@ -1249,7 +1336,14 @@ export class App {
       pref.set(PREF_THEME, theme);
       applyTheme(theme);
     }
-    if (t instanceof HTMLInputElement && t.name === "account") {
+    if (t instanceof HTMLInputElement && t.name === "dapp-acct") {
+      // ticking accounts on the "see your accounts" sheet: remembered, not re-rendered (the sheet re-renders by itself)
+      const key = this.s.dapp.approval?.key ?? "";
+      const addresses = [...this.root.querySelectorAll<HTMLInputElement>('input[name="dapp-acct"]')].filter((c) => c.checked).map((c) => c.value);
+      this.s.dappPick = { key, addresses };
+      return;
+    }
+    if ((t instanceof HTMLInputElement || t instanceof HTMLSelectElement) && t.name === "account") {
       this.s.accountIndex = Number(t.value);
       this.s.balance = this.s.mana = null;
       this.s.history = null;
@@ -1357,6 +1451,37 @@ export class App {
       case "burn":
         this.s.sent = null;
         this.go("burn");
+        break;
+      case "send-max": {
+        // the most the account can send of the token picked: for KOIN, what has mana less what the fee needs
+        const form = this.root.querySelector<HTMLFormElement>('form[data-form="send"]');
+        const amountEl = form?.querySelector<HTMLInputElement>('input[name="amount"]');
+        const picked = form?.querySelector<HTMLSelectElement>('select[name="token"]')?.value ?? "";
+        const token = (picked && findToken(this.tokenList(), picked)) || this.koinToken();
+        let max: bigint | null = null;
+        if (token.address === this.network.koin) {
+          const b = this.s.balance, m = this.s.mana;
+          if (b !== null && m !== null) max = (b < m ? b : m) - SEND_KEEP;
+        } else {
+          const b = this.tokenBalance(token);
+          if (typeof b === "bigint") max = b;
+        }
+        if (!amountEl) break;
+        if (max === null) {
+          this.s.error = tr("The balance is still loading. Try again in a moment.");
+          this.render();
+          break;
+        }
+        amountEl.value = formatUnits(max > 0n ? max : 0n, token.decimals);
+        break;
+      }
+      case "account-rename":
+        this.s.renaming = el.dataset.address ?? null;
+        this.render();
+        break;
+      case "account-rename-cancel":
+        this.s.renaming = null;
+        this.render();
         break;
       case "send-to": {
         // "send back" from the activity list: the counterparty becomes the recipient, nothing else changes
@@ -1482,13 +1607,26 @@ export class App {
       case "dapp-approve":
       case "dapp-reject":
         if (action === "dapp-approve" && Date.now() - this.sheetShownAt < this.approveDelayMs) break; // a tap meant for the page
-        void this.dappHost()
-          .decide(el.dataset.key ?? "", action === "dapp-approve")
-          .catch((e: Error) => {
-            this.s.error = e.message || String(e);
-            this.render();
-          });
-        break;
+        {
+          // a request to see the accounts, in a wallet with several: only the ticked ones are shown to the site
+          const pending = this.s.dapp.approval;
+          let only: string[] | undefined;
+          if (action === "dapp-approve" && pending?.req.command === "getAccounts" && this.shareable().length > 1) {
+            only = this.picked(pending.key);
+            if (!only.length) {
+              this.s.error = tr("Choose at least one account.");
+              this.render();
+              break;
+            }
+          }
+          void this.dappHost()
+            .decide(el.dataset.key ?? "", action === "dapp-approve", only)
+            .catch((e: Error) => {
+              this.s.error = e.message || String(e);
+              this.render();
+            });
+          break;
+        }
       case "site-revoke":
         this.s.sites?.revoke(el.dataset.origin ?? "");
         this.render();
@@ -1597,6 +1735,24 @@ export class App {
       case "setup":
         this.startSetup();
         break;
+      case "new-account": {
+        // a further account from the same 24 words: the next number not active on this network yet
+        const found = this.s.detected[this.network.name];
+        if (!this.s.keys) break;
+        if (!found) {
+          this.s.error = tr("Still looking for your accounts on {net}. Try again in a moment.", { net: this.network.name });
+          this.render();
+          break;
+        }
+        const key = nextAccountKey(found);
+        if (key >= MAX_DERIVED_ACCOUNTS) {
+          this.s.error = tr("This wallet already keeps {n} accounts, the most it holds.", { n: MAX_DERIVED_ACCOUNTS });
+          this.render();
+          break;
+        }
+        this.startSetup(key);
+        break;
+      }
       case "setup-retry":
         if (this.s.setup) {
           this.s.setup.failed = null;
@@ -1749,6 +1905,15 @@ export class App {
           return;
         }
         void this.run("Signing and sending", () => this.doBurn(amount));
+        break;
+      }
+      case "account-rename": {
+        const address = this.s.renaming;
+        if (!address || !this.s.names) break;
+        this.s.names.set(address, field("name"));
+        this.s.renaming = null;
+        this.s.notice = tr("Saved.");
+        this.render();
         break;
       }
       case "send-confirm": {
@@ -2146,16 +2311,15 @@ export class App {
       <p class="fine" style="margin-top:24px">Lost the passphrase? ${linkButton(tr("Delete this wallet"), "delete-wallet")} and import your 24 words again.</p>`;
   }
 
+  /** One line at the top of the Account tab: the account in use, and a dropdown to change it once there are several. */
   private accountPicker() {
     const items = this.visibleAccounts();
     const cur = this.account();
     if (items.length <= 1) return "";
-    return `<ul class="accts">${items
-      .map(
-        (a) =>
-          `<li><label><input type="radio" name="account" value="${a.index}" ${cur && a.index === cur.index ? "checked" : ""}><span class="grow">${esc(a.label)} <span class="s mono">${esc(shortAddr(a.address))}</span>${a.mode === "native" ? ` <span class="s">${tr("native")}</span>` : a.mode === "watch" ? ` <span class="s">${tr("watch-only")}</span>` : ""}</span></label></li>`,
-      )
-      .join("")}</ul>`;
+    const kind = (a: Account) => (a.mode === "native" ? ` · ${tr("native")}` : a.mode === "watch" ? ` · ${tr("watch-only")}` : "");
+    return `<label class="field acct-pick"><span>${tr("Account")}</span><select name="account">${items
+      .map((a) => `<option value="${a.index}" ${cur && a.index === cur.index ? "selected" : ""}>${esc(a.label)} · ${esc(shortAddr(a.address))}${esc(kind(a))}</option>`)
+      .join("")}</select></label>`;
   }
 
   private vHome() {
@@ -2178,8 +2342,9 @@ export class App {
         ${addressStrip(a.address)}
         <div class="row tight">${button(tr("Copy"), { action: "copy", mini: true, data: { copy: a.address } })}${button(tr("Refresh"), { action: "refresh", variant: "ghost", mini: true })}${this.network.explorerAddress ? `<a class="btn ghost mini" href="${esc(this.network.explorerAddress(a.address))}" target="_blank" rel="noopener noreferrer">${tr("Explorer")}</a>` : ""}</div>
         <div style="margin-top:20px" id="home-balance">${balance(s.balance === null ? null : fmtAmount(formatKoin(s.balance)), unit)}</div>
+        <div class="s" id="home-usd" style="margin-top:4px">${esc(this.usdLine())}</div>
         <div style="margin-top:12px">
-          ${stat(tr("Mana"), `<span id="home-mana">${s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2)))}</span>`)}
+          ${stat(tr("Mana"), `<span id="home-mana">${s.mana === null ? "…" : esc(fmtAmount(formatKoin(s.mana, 2)))}</span><span class="s" id="home-mana-full">${esc(this.manaFullLine())}</span>`)}
           ${stat(tr("Signature"), canSign(a) ? esc(sig) : "none here (watch-only)")}
         </div>
         <div class="actions">
@@ -2298,7 +2463,7 @@ export class App {
             : ""
         }</div></label>
         <datalist id="contacts">${(this.s.book?.list() ?? []).map((c) => `<option value="${esc(c.address)}">${esc(c.name || short(c.address))}</option>`).join("")}</datalist>
-        <label class="field"><span id="amount-label">${tr("Amount ({symbol})", { symbol: esc(tok.symbol) })}</span>${input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" })}</label>
+        <label class="field"><span id="amount-label">${tr("Amount ({symbol})", { symbol: esc(tok.symbol) })}</span><div class="withbtn">${input({ name: "amount", class: "mono", inputmode: "decimal", autocomplete: "off", required: true, placeholder: "0.5" })}${button(tr("Max"), { action: "send-max", mini: true, title: tr("The most this account can send now") })}</div></label>
         <p class="fine">${tr("From {label} on {net}, signed here with ML-DSA-44 ({sig}). A first-time or look-alike recipient asks you to confirm it before anything is signed.", { label: esc(a?.label ?? ""), net: esc(this.network.name), sig: a?.mode === "native" ? tr("3,733-byte native entry") : tr("2,420-byte signature") })}</p>
         <div class="row">${button(tr("Sign and send"), { variant: "primary" })}${button(tr("Back"), { action: "back-home", variant: "ghost" })}</div>
       </form>`;
@@ -2431,6 +2596,7 @@ export class App {
                 ${a.source === "wc" ? `<p class="fine">${tr("Through WalletConnect, as <strong>{name}</strong>.", { name: esc(a.via ?? "") })}${a.unverified ? ` <span class="warn-inline">${tr("The relay could not verify that this request really comes from that site. Check the address above against the dapp you are using.")}</span>` : ""}</p>` : ""}
                 ${wc?.chains?.length ? `<p class="fine">${tr("The dapp asks for: {chains}.", { chains: esc(wc.chains.join(", ")) })}</p>` : ""}
                 ${a.plan ? describePlan(a.plan, this.s.tokens) : notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}
+                ${a.plan && !a.status ? this.accountChoice(a) : ""}
               </div>
               <div class="sheet-actions">
                 ${
@@ -2442,6 +2608,28 @@ export class App {
                 }
               </div>
             </section>`;
+  }
+
+  /** The accounts that can be shown to a site: the ones this wallet signs for on the current network. */
+  private shareable(): Account[] {
+    return this.visibleAccounts().filter((a) => canSign(a));
+  }
+  /** The addresses ticked for the request on the sheet; before any tick, the account in use. */
+  private picked(key: string): string[] {
+    if (this.s.dappPick?.key === key) return this.s.dappPick.addresses;
+    const options = this.shareable();
+    const cur = this.account();
+    return cur && options.some((a) => a.address === cur.address) ? [cur.address] : options.slice(0, 1).map((a) => a.address);
+  }
+  /** On a "see your accounts" request, with several accounts: which of them this site gets. Nothing with one account. */
+  private accountChoice(a: PendingApproval): string {
+    if (a.req.command !== "getAccounts") return "";
+    const options = this.shareable();
+    if (options.length <= 1) return "";
+    const on = this.picked(a.key);
+    return `<fieldset class="pick"><legend class="fine">${tr("Choose the accounts this site may see:")}</legend>${options
+      .map((o) => `<label class="check"><input type="checkbox" name="dapp-acct" value="${esc(o.address)}" ${on.includes(o.address) ? "checked" : ""}> ${esc(o.label)} <span class="s mono">${esc(shortAddr(o.address))}</span></label>`)
+      .join("")}</fieldset>`;
   }
 
   private vDapps() {
@@ -2505,10 +2693,17 @@ export class App {
       ${section(null, tr("Accounts"))}
       ${
         items.length
-          ? list(items.map((a) => listRow(`<span class="t">${esc(a.label)}</span>${a.mode === "watch" ? ` <span class="s">${tr("watch-only")}</span>` : ""}<br><span class="s mono">${esc(a.address)}</span>`, a.derived ? `<span class="s">${tr("found from your 24 words")}</span>` : linkButton(tr("remove"), "remove-account", { index: a.index }))).join(""))
+          ? list(items.map((a) => listRow(`<span class="t">${esc(a.label)}</span>${a.mode === "watch" ? ` <span class="s">${tr("watch-only")}</span>` : ""}<br><span class="s mono">${esc(a.address)}</span><br><span class="s acts">${linkButton(tr("rename"), "account-rename", { address: a.address })} · ${a.derived ? tr("found from your 24 words") : linkButton(tr("remove"), "remove-account", { index: a.index })}</span>`, "")).join(""))
           : `<p class="mute">${tr("No account on {net} yet.", { net: esc(net) })}</p>`
       }
+      ${this.s.renaming && items.some((a) => a.address === this.s.renaming) ? `<form data-form="account-rename" class="field inline">
+        <label><span>${tr("Name for {address}", { address: esc(shortAddr(this.s.renaming)) })}</span>${input({ name: "name", autocomplete: "off", maxlength: 32, autofocus: true, value: this.s.names?.get(this.s.renaming) ?? "" })}</label>
+        ${button(tr("Save"), { mini: true })}${button(tr("Cancel"), { action: "account-rename-cancel", mini: true, variant: "ghost" })}
+      </form>
+      <p class="fine">${tr("Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.")}</p>` : ""}
       ${hasHere ? "" : `<div class="row tight">${button(tr("Activate your account on {net}", { net: esc(net) }), { action: "setup", variant: "primary" })}</div>`}
+      ${(this.s.detected[net] ?? []).some((f) => f.key === 0) ? `<div class="row tight">${button(tr("Create another account"), { action: "new-account" })}</div>
+      <p class="fine">${tr("Another account under the same 24 words, with its own address and its own key. Like the first it has to be activated: you send it some {unit} and the wallet does the rest. Your 24 words bring every account back.", { unit: esc(this.unit()) })}</p>` : ""}
       <form data-form="watch" class="field inline">
         <label><span>Watch an address</span>${input({ name: "address", class: "mono", placeholder: "1…", autocomplete: "off", required: true })}</label>
         <label><span>Label</span>${input({ name: "label", placeholder: "optional", autocomplete: "off" })}</label>
@@ -2611,7 +2806,7 @@ export class App {
     const funded = need !== null && st.mana !== null && st.mana >= need;
     return `
       ${section("01", tr("Account"), "activate")}
-      <h1>${tr("Activate your account")}</h1>
+      <h1>${st.key > 0 ? tr("Activate account {n}", { n: st.key + 1 }) : tr("Activate your account")}</h1>
       <p>${tr("This is your account's address on <strong>{net}</strong>. Send at least <strong class=\"mono\">{need} {unit}</strong> to it.", { net: esc(this.network.name), need: need === null ? "…" : esc(formatKoin(need, 2)), unit: esc(unit) })}</p>
       ${card(`
         <canvas id="qr-setup" class="qr" width="180" height="180" aria-label="QR code of your account's address"></canvas>

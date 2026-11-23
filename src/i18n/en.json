@@ -352,5 +352,21 @@
   "for VHP": "for VHP",
   "The site was reset and is loading again. Connect from the page as if for the first time.": "The site was reset and is loading again. Connect from the page as if for the first time.",
   "If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.": "If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.",
-  "Reset this site": "Reset this site"
+  "Reset this site": "Reset this site",
+  "Account {n}": "Account {n}",
+  "Activate account {n}": "Activate account {n}",
+  "Create another account": "Create another account",
+  "Still looking for your accounts on {net}. Try again in a moment.": "Still looking for your accounts on {net}. Try again in a moment.",
+  "Another account under the same 24 words, with its own address and its own key. Like the first it has to be activated: you send it some {unit} and the wallet does the rest. Your 24 words bring every account back.": "Another account under the same 24 words, with its own address and its own key. Like the first it has to be activated: you send it some {unit} and the wallet does the rest. Your 24 words bring every account back.",
+  "full in {time}": "full in {time}",
+  "≈ {value} · {price} per {unit}": "≈ {value} · {price} per {unit}",
+  "Max": "Max",
+  "The most this account can send now": "The most this account can send now",
+  "The balance is still loading. Try again in a moment.": "The balance is still loading. Try again in a moment.",
+  "Only {unit} that still has its mana can be sent, and some has to stay to pay for the transaction. Mana now: {mana}.": "Only {unit} that still has its mana can be sent, and some has to stay to pay for the transaction. Mana now: {mana}.",
+  "rename": "rename",
+  "Name for {address}": "Name for {address}",
+  "Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.": "Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.",
+  "Choose the accounts this site may see:": "Choose the accounts this site may see:",
+  "Choose at least one account.": "Choose at least one account."
 }

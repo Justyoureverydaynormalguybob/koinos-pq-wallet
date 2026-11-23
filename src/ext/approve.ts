@@ -4,6 +4,7 @@
 // description and the signing itself live in src/core/approval.ts and src/ui/approval-view.ts,
 // shared with the in-app dapp browser, so both refuse the same things and sign the same bytes.
 import "../ui/tokens.css";
+import { wipeAccountKeys } from "../core/accounts";
 import { NETWORKS, deriveKeys, wipe, type Network, type PqKeys } from "koinos-pq-core";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { localVaultStore, openVault, toFile } from "../core/vault";
@@ -115,7 +116,10 @@ async function approve(p: Plan, passphrase: string) {
     status.textContent = `Failed: ${msg}`;
     await finish({ error: "request failed in the wallet" });
   } finally {
-    if (keys) wipe(keys.secretKey, keys.seed);
+    if (keys) {
+      wipeAccountKeys(keys);
+      wipe(keys.secretKey, keys.seed);
+    }
   }
 }
 

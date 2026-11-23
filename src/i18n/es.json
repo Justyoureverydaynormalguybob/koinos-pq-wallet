@@ -352,5 +352,21 @@
   "for VHP": "por VHP",
   "The site was reset and is loading again. Connect from the page as if for the first time.": "El sitio se ha restablecido y se está cargando de nuevo. Conéctate desde la página como si fuera la primera vez.",
   "If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.": "Si este sitio no vuelve a conectarse, restablécelo: se borra lo que guardó en este teléfono y la página se carga de cero. Nada cambia en la cartera.",
-  "Reset this site": "Restablecer este sitio"
+  "Reset this site": "Restablecer este sitio",
+  "Account {n}": "Cuenta {n}",
+  "Activate account {n}": "Activar la cuenta {n}",
+  "Create another account": "Crear otra cuenta",
+  "Still looking for your accounts on {net}. Try again in a moment.": "Todavía se están buscando tus cuentas en {net}. Inténtalo de nuevo en un momento.",
+  "Another account under the same 24 words, with its own address and its own key. Like the first it has to be activated: you send it some {unit} and the wallet does the rest. Your 24 words bring every account back.": "Otra cuenta bajo las mismas 24 palabras, con su propia dirección y su propia clave. Como la primera, hay que activarla: le envías algo de {unit} y la cartera hace el resto. Tus 24 palabras recuperan todas las cuentas.",
+  "full in {time}": "lleno en {time}",
+  "≈ {value} · {price} per {unit}": "≈ {value} · {price} por {unit}",
+  "Max": "Máx.",
+  "The most this account can send now": "Lo máximo que esta cuenta puede enviar ahora",
+  "The balance is still loading. Try again in a moment.": "El saldo todavía se está cargando. Inténtalo de nuevo en un momento.",
+  "Only {unit} that still has its mana can be sent, and some has to stay to pay for the transaction. Mana now: {mana}.": "Solo se puede enviar {unit} que aún tiene su maná, y algo tiene que quedar para pagar la transacción. Maná ahora: {mana}.",
+  "rename": "renombrar",
+  "Name for {address}": "Nombre para {address}",
+  "Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.": "Déjalo vacío para volver al nombre por defecto. Los nombres se quedan en este dispositivo y nunca se muestran a un sitio.",
+  "Choose the accounts this site may see:": "Elige las cuentas que este sitio puede ver:",
+  "Choose at least one account.": "Elige al menos una cuenta."
 }

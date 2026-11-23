@@ -32,6 +32,8 @@ const localStore: BookStore = {
 export interface SiteGrant {
   origin: string;
   allowedAt: string;
+  /** the accounts the user chose to show this site; absent in grants made before there was a choice (all of them) */
+  accounts?: string[];
 }
 
 /** Only an https origin (or http on localhost / a plain IP, for the test dapp) can be remembered. */
@@ -73,12 +75,25 @@ export class SitePermissions {
   isAllowed(origin: string): boolean {
     return this.grants.some((g) => g.origin === origin);
   }
-  allow(origin: string) {
+  /** Remembers the site, and which accounts it may see (`accounts` absent: all of them). A new choice replaces the old one. */
+  allow(origin: string, accounts?: ReadonlyArray<string>) {
     if (!isRememberableOrigin(origin)) return;
-    if (this.isAllowed(origin)) return;
+    const chosen = accounts ? [...new Set(accounts)].slice(0, 64) : undefined;
+    const have = this.grants.find((g) => g.origin === origin);
+    if (have) {
+      if (chosen) have.accounts = chosen;
+      else delete have.accounts;
+      this.write();
+      return;
+    }
     if (this.grants.length >= MAX_SITES) this.grants.shift();
-    this.grants.push({ origin, allowedAt: new Date().toISOString() });
+    this.grants.push({ origin, allowedAt: new Date().toISOString(), ...(chosen ? { accounts: chosen } : {}) });
     this.write();
+  }
+  /** The accounts an allowed site may see, or undefined when it was allowed before there was a choice. */
+  accountsFor(origin: string): string[] | undefined {
+    const a = this.grants.find((g) => g.origin === origin)?.accounts;
+    return Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : undefined;
   }
   revoke(origin: string) {
     this.grants = this.grants.filter((g) => g.origin !== origin);

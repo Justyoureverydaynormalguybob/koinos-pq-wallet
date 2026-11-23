@@ -352,5 +352,21 @@
   "for VHP": "por VHP",
   "The site was reset and is loading again. Connect from the page as if for the first time.": "O site foi reposto e está a carregar de novo. Liga-te a partir da página como se fosse a primeira vez.",
   "If this site will not connect again, reset it: what it stored on this phone is cleared and the page loads fresh. Nothing in the wallet changes.": "Se este site não voltar a ligar-se, repõe-no: o que guardou neste telemóvel é apagado e a página carrega de novo. Nada muda na carteira.",
-  "Reset this site": "Repor este site"
+  "Reset this site": "Repor este site",
+  "Account {n}": "Conta {n}",
+  "Activate account {n}": "Ativar a conta {n}",
+  "Create another account": "Criar outra conta",
+  "Still looking for your accounts on {net}. Try again in a moment.": "Ainda se procuram as tuas contas em {net}. Tenta de novo daqui a pouco.",
+  "Another account under the same 24 words, with its own address and its own key. Like the first it has to be activated: you send it some {unit} and the wallet does the rest. Your 24 words bring every account back.": "Outra conta sob as mesmas 24 palavras, com o seu próprio endereço e a sua própria chave. Tal como a primeira, tem de ser ativada: envias-lhe algum {unit} e a carteira faz o resto. As tuas 24 palavras recuperam todas as contas.",
+  "full in {time}": "cheio em {time}",
+  "≈ {value} · {price} per {unit}": "≈ {value} · {price} por {unit}",
+  "Max": "Máx.",
+  "The most this account can send now": "O máximo que esta conta pode enviar agora",
+  "The balance is still loading. Try again in a moment.": "O saldo ainda está a carregar. Tenta de novo daqui a pouco.",
+  "Only {unit} that still has its mana can be sent, and some has to stay to pay for the transaction. Mana now: {mana}.": "Só se pode enviar {unit} que ainda tem o seu mana, e algum tem de ficar para pagar a transação. Mana agora: {mana}.",
+  "rename": "mudar o nome",
+  "Name for {address}": "Nome para {address}",
+  "Leave it empty to go back to the default name. Names stay on this device and are never shown to a site.": "Deixa vazio para voltar ao nome predefinido. Os nomes ficam neste dispositivo e nunca são mostrados a um site.",
+  "Choose the accounts this site may see:": "Escolhe as contas que este site pode ver:",
+  "Choose at least one account.": "Escolhe pelo menos uma conta."
 }

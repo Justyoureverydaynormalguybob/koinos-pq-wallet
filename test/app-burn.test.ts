@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Burn KOIN for VHP: the Account tab offers it only where the network has a proof-of-burn contract, the
-// screen keeps 2 KOIN back, nothing is signed until the "cannot be undone" box is ticked, and what reaches
+// screen keeps 10 KOIN back, nothing is signed until the "cannot be undone" box is ticked, and what reaches
 // the node is one pob.burn call for exactly the amount typed, from and to the account itself.
 // The node is a small HTTP server in this process (see app-tokens.test.ts for why).
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -48,15 +48,15 @@ function historyRows(): unknown[] {
     ] } },
   }];
 }
-// KOIN balance 5, mana 5: with 2 kept back, 3 can be burned
+// KOIN balance 15, mana 15: with 10 kept back, 5 can be burned
 function answer(req: { method: string; params: Record<string, unknown> }): unknown {
   if (req.method === "chain.get_head_info") return { head_topology: { height: "100" } };
-  if (req.method === "chain.get_account_rc") return { rc: "500000000" };
+  if (req.method === "chain.get_account_rc") return { rc: "1500000000" };
   if (req.method === "chain.get_account_nonce") return { nonce: "" };
   if (req.method === "chain.get_chain_id") return { chain_id: "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==" };
   if (req.method === "chain.read_contract") {
     const { contract_id, entry_point } = req.params as { contract_id: string; entry_point: number };
-    if (entry_point === 0x5c721497) return { result: uint64(contract_id === KOIN ? 500000000n : 0n) };
+    if (entry_point === 0x5c721497) return { result: uint64(contract_id === KOIN ? 1500000000n : 0n) };
     return { result: "" };
   }
   if (req.method === "account_history.get_account_history") return { values: historyRows() };
@@ -141,22 +141,22 @@ describe("burn KOIN for VHP (jsdom, a fake node over HTTP)", () => {
     expect(root.querySelector('[data-action="burn"]')).toBeNull();
   }, 120_000);
 
-  it("keeps 2 KOIN back, wants the box ticked, and sends one pob.burn for the amount typed", async () => {
+  it("keeps 10 KOIN back, wants the box ticked, and sends one pob.burn for the amount typed", async () => {
     Object.assign(devnet, { pob: POB, vhp: VHP });
     const root = await newWallet();
     click(root, "burn");
     expect(root.querySelector("h1")?.textContent).toBe("Burn KOIN for VHP");
     expect(text(root)).toMatch(/cannot be undone/);
-    expect(root.querySelector("#burn-most")?.textContent).toBe("3 KOIN");
+    expect(root.querySelector("#burn-most")?.textContent).toBe("5 KOIN");
 
     // the box is not ticked: nothing is signed
     await submit(root, "burn", { amount: "1" });
     expect(text(root)).toMatch(/Tick the box once you understand/);
     expect(submitted.length).toBe(0);
 
-    // more than balance less the 2 kept back: refused before signing
-    await submit(root, "burn", { amount: "3.5" }, ["understood"]);
-    expect(text(root)).toMatch(/The most this account can burn right now is 3 KOIN/);
+    // more than balance less the 10 kept back: refused before signing
+    await submit(root, "burn", { amount: "5.5" }, ["understood"]);
+    expect(text(root)).toMatch(/The most this account can burn right now is 5 KOIN/);
     expect(submitted.length).toBe(0);
 
     // not a number

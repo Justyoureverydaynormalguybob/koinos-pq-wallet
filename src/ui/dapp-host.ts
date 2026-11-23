@@ -340,7 +340,7 @@ export class DappHost {
     if (closedMeanwhile()) return; // the page closed meanwhile; close() already answered it
     // a site already allowed to see the accounts is answered without asking again
     if (plan && !next.alwaysAsk && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin)) {
-      await this.execute(claim, plan);
+      await this.execute(claim, plan, this.deps.permissions()?.accountsFor(next.req.origin)); // the same accounts as were chosen then
       if (closedMeanwhile()) return;
       this.current = null;
       this.events.onApproval(null);
@@ -353,7 +353,7 @@ export class DappHost {
     this.events.onApproval(claim);
   }
 
-  private async execute(q: { req: DappRequest; respond?: Respond }, plan: Plan) {
+  private async execute(q: { req: DappRequest; respond?: Respond }, plan: Plan, only?: ReadonlyArray<string>) {
     const req = q.req;
     const keys = this.deps.keys();
     if (!keys) {
@@ -365,13 +365,16 @@ export class DappHost {
         this.current.status = s;
         this.events.onApproval(this.current);
       }
-    });
+    }, only);
     await this.answer(q, "error" in outcome ? { error: outcome.error } : { result: outcome.result });
     if ("error" in outcome && outcome.status) throw new Error(outcome.status); // the asker got its answer; the user sees why it failed
   }
 
-  /** The user's decision on the request the sheet shows. Resolves when the page has been answered. */
-  async decide(key: string, approve: boolean): Promise<void> {
+  /**
+   * The user's decision on the request the sheet shows. Resolves when the page has been answered.
+   * `only`: for a request to see the accounts, the addresses the user ticked (absent: all of them).
+   */
+  async decide(key: string, approve: boolean, only?: ReadonlyArray<string>): Promise<void> {
     const c = this.current;
     if (!c || c.key !== key) return;
     if (c.status === "planning") return; // nothing to decide yet
@@ -388,8 +391,8 @@ export class DappHost {
     const gen = this.generation;
     const stillHere = () => (c.source === "page" ? gen === this.generation : true);
     try {
-      await this.execute(c, c.plan);
-      if (stillHere() && c.source === "page" && c.req.command === "getAccounts") this.deps.permissions()?.allow(c.req.origin);
+      await this.execute(c, c.plan, c.req.command === "getAccounts" ? only : undefined);
+      if (stillHere() && c.source === "page" && c.req.command === "getAccounts") this.deps.permissions()?.allow(c.req.origin, only);
     } finally {
       if (stillHere() && this.current === c) {
         this.current = null;

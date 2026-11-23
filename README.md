@@ -72,10 +72,28 @@ need a Play Console or Apple Developer account.
 Since 0.16.0: **burn KOIN for VHP**. The Account tab has "Burn for VHP" on networks with a proof-of-burn
 contract (mainnet and Harbinger): KOIN becomes the same amount of VHP in the same account, one for one,
 through the chain's own `pob.burn`. It cannot be undone, so the screen says so and wants a box ticked, and
-it always leaves 2 KOIN behind, because mana comes only from KOIN. The burn reaches KOIN through the PoB
+it always leaves 10 KOIN behind, because mana comes only from KOIN and the burn's own fee (6.1 mana on mainnet) is paid from what is left. The burn reaches KOIN through the PoB
 contract, a nested call a pqwallet account refuses by default, so the transaction is three operations that
 apply together or not at all: allow PoB, burn, forbid PoB again. Nothing stays on the account's allowed
 list afterwards. `scripts/smoke-burn.mjs` runs it in a browser against Harbinger.
+
+Since 0.17.0: **several accounts from the same 24 words**. Settings › Accounts has "Create another account":
+account 2, 3, ... each get their own key and their own address, derived from the words by a fixed rule
+(koinos-pq-core `keys.ts`: the seed of account n is HMAC-SHA256 of "koinos-pq/account/n" under the master
+seed; the first account is unchanged). Each is activated like the first, by sending it some KOIN. Typing the
+24 words into any copy of the wallet finds them all again: it looks for account 1, 2, ... on the chain and
+stops after two unused numbers in a row. Every account signs with its own key, in Send, Burn, collectibles
+and for dapps. `scripts/devnet-accounts.mjs` activates three on the devnet and checks that no account's
+key moves another's funds.
+
+Also since 0.17.0: an **account dropdown** at the top of the Account tab; **names** for accounts (Settings ›
+Accounts › rename; kept sealed on the device, never shown to a site); **which accounts a site sees**: a
+request to see the accounts lists them with boxes, the one in use ticked, and the site is remembered with
+that choice (the browser extension's approval window still shows a site every account); **Max** on Send
+(for KOIN: what has mana, less 4 KOIN for the fee); **mana recharge time** next to the mana figure (a straight
+line, five days from empty); and KOIN's **value in dollars** under the balance, read from the reserves of
+KoinDX's KOIN/vUSD pool through the node the wallet already uses (`src/core/price.ts`), so no price server
+is involved. It is a spot price from a small pool: shown with "≈", never used to compute an amount.
 
 ```
 koinos-pq-core          keys (24 words <-> seed -> key -> address), the two signature formats, chain reads,

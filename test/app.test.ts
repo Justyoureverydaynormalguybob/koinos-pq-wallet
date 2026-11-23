@@ -174,10 +174,11 @@ describe("wallet app (jsdom)", () => {
     click(root, "back-home");
     // two accounts now: the picker appears, with the watched one marked
     expect(text(root)).toMatch(/watch-only/);
-    const pq = [...root.querySelectorAll<HTMLInputElement>('input[name="account"]')].find((r) => r.closest("label")?.textContent?.includes("PQ"))!;
+    const picker = root.querySelector<HTMLSelectElement>('select[name="account"]')!;
+    const pq = [...picker.options].find((o) => o.textContent?.includes("PQ"))!;
     expect(pq).toBeTruthy();
-    pq.checked = true;
-    pq.dispatchEvent(new Event("change", { bubbles: true }));
+    picker.value = pq.value;
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
     click(root, "send");
     // bad checksum
