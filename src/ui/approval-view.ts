@@ -21,6 +21,29 @@ function fieldUint(f: Map<number, Array<bigint | Uint8Array>>, n: number): bigin
 }
 const addr = (b: Uint8Array | null) => (b && b.length === 25 ? utils.encodeBase58(b) : null);
 
+type Fields = Map<number, Array<bigint | Uint8Array>>;
+/**
+ * True when the arguments are exactly the fields named, each at most once and of the right kind, and
+ * nothing else. Protobuf lets a field appear twice and the chain then uses the LAST one, so a description
+ * read from the first would show one thing while another is signed: an approve of "0.00000001" followed
+ * by a second value of everything. Anything that is not in this plain form is never put into words.
+ * "uint?" may be left out (protobuf omits a zero).
+ */
+function exactly(f: Fields | null, spec: Record<number, "bytes" | "uint" | "uint?">): f is Fields {
+  if (!f) return false;
+  for (const [n, values] of f) {
+    const kind = spec[n];
+    if (!kind || values.length !== 1) return false;
+    if (kind === "bytes" ? !(values[0] instanceof Uint8Array) : typeof values[0] !== "bigint") return false;
+  }
+  return Object.entries(spec).every(([n, kind]) => kind === "uint?" || f.has(Number(n)));
+}
+/** A call that looks like one the wallet knows but is not encoded plainly: said so, with the raw bytes, never worded. */
+function unusual(what: string, cc: CallContract): string {
+  return `<span class="warn-inline">${what}</span> ${tr("Call to {contract}", { contract: addressStrip(cc.contract_id, { size: "sm" }) })}
+    <div class="fine" style="margin-top:4px">${rawArgs(cc.args)}</div>`;
+}
+
 /** The raw arguments, so a call the wallet cannot decode is still visible rather than invisible. */
 function rawArgs(argsB64: string): string {
   let bytes: Uint8Array;
@@ -56,34 +79,38 @@ export function describeOperation(cc: CallContract, net: Network, signer: string
   } catch {
     fields = null;
   }
-  if (token && fields && cc.entry_point === TOKEN_APPROVE) {
+  if (token && cc.entry_point === TOKEN_APPROVE) {
     // approve { owner = 1, spender = 2, value = 3 }: a standing permission for someone else to spend
-    const owner = addr(fieldBytes(fields, 1)), spender = addr(fieldBytes(fields, 2)), value = fieldUint(fields, 3);
-    if (owner && spender && value !== null) {
+    if (!exactly(fields, { 1: "bytes", 2: "bytes", 3: "uint?" })) return unusual(tr("Unusual {symbol} approval encoding: who may spend, and how much, cannot be shown reliably. Do not approve it.", { symbol: esc(symbol) }), cc);
+    const owner = addr(fieldBytes(fields, 1)), spender = addr(fieldBytes(fields, 2)), value = fieldUint(fields, 3) ?? 0n;
+    if (owner && spender) {
       return `<span class="warn-inline">${tr("Allow {spender} to spend up to <strong class=\"mono\">{amount} {symbol}</strong> from {owner}, any time, until revoked", { spender: addressStrip(spender, { size: "sm" }), amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), owner: owner === signer ? tr("your account") : addressStrip(owner, { size: "sm" }) })}</span>`;
     }
   }
-  if (token && fields && cc.entry_point === TOKEN_BURN) {
-    const from = addr(fieldBytes(fields, 1)), value = fieldUint(fields, 2);
-    if (from && value !== null) return `<span class="warn-inline">${tr("Burn (destroy) <strong class=\"mono\">{amount} {symbol}</strong> from {from}", { amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), from: from === signer ? tr("your account") : addressStrip(from, { size: "sm" }) })}</span>`;
+  if (token && cc.entry_point === TOKEN_BURN) {
+    if (!exactly(fields, { 1: "bytes", 2: "uint?" })) return unusual(tr("Unusual {symbol} burn encoding: the amount cannot be shown reliably. Do not approve it.", { symbol: esc(symbol) }), cc);
+    const from = addr(fieldBytes(fields, 1)), value = fieldUint(fields, 2) ?? 0n;
+    if (from) return `<span class="warn-inline">${tr("Burn (destroy) <strong class=\"mono\">{amount} {symbol}</strong> from {from}", { amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), from: from === signer ? tr("your account") : addressStrip(from, { size: "sm" }) })}</span>`;
   }
-  if (fields && cc.entry_point === PQWALLET_ENTRY.set_public_key) {
+  if (cc.entry_point === PQWALLET_ENTRY.set_public_key) {
     // set_public_key { public_key = 1, proof = 2 }: replaces the key that controls the account.
-    const key = fieldBytes(fields, 1);
     const target = cc.contract_id === signer ? tr("your account") : addressStrip(cc.contract_id, { size: "sm" });
+    if (!exactly(fields, { 1: "bytes", 2: "bytes" })) return unusual(tr("This call changes who controls {target}, and its arguments are not in the usual form, so the wallet cannot show them reliably. Do not approve it.", { target }), cc);
+    const key = fieldBytes(fields, 1);
     return `<span class="warn-inline">${tr("Replace the signing key of {target} with a new post-quantum key. Whoever holds the new key gains full control; the current key stops working. Only do this if you are rotating your own key.", { target })}</span>${key ? ` <span class="mute">(${esc(key.length)} ${tr("bytes")})</span>` : ""}`;
   }
-  if (fields && cc.entry_point === PQWALLET_ENTRY.set_allowed_caller) {
+  if (cc.entry_point === PQWALLET_ENTRY.set_allowed_caller) {
     // set_allowed_caller { contract = 1, allowed = 2 }: grants/revokes a contract's authority over the account.
-    const contract = addr(fieldBytes(fields, 1)), allowed = (fieldUint(fields, 2) ?? 0n) !== 0n;
     const target = cc.contract_id === signer ? tr("your account") : addressStrip(cc.contract_id, { size: "sm" });
+    if (!exactly(fields, { 1: "bytes", 2: "uint?" }) || !addr(fieldBytes(fields, 1))) return unusual(tr("This call changes who controls {target}, and its arguments are not in the usual form, so the wallet cannot show them reliably. Do not approve it.", { target }), cc);
+    const contract = addr(fieldBytes(fields, 1)), allowed = (fieldUint(fields, 2) ?? 0n) !== 0n;
     if (contract) {
       return allowed
         ? `<span class="warn-inline">${tr("Allow {contract} to act for {target} from inside other contracts — it could move funds or change the account's settings until you forbid it again.", { contract: addressStrip(contract, { size: "sm" }), target })}</span>`
         : tr("Stop {contract} from acting for {target}.", { contract: addressStrip(contract, { size: "sm" }), target });
     }
   }
-  if (fields && cc.entry_point === NFT_ENTRY.transfer) {
+  if (cc.entry_point === NFT_ENTRY.transfer && exactly(fields, { 1: "bytes", 2: "bytes", 3: "bytes" })) {
     // KCS-5 transfer { from = 1, to = 2, token_id = 3 }
     const from = addr(fieldBytes(fields, 1)), to = addr(fieldBytes(fields, 2)), id = fieldBytes(fields, 3);
     if (from && to && id) return tr("Send collectible <code>{id}</code> of {contract} from {from} to {to}", { id: esc(utils.toHexString(id)), contract: addressStrip(cc.contract_id, { size: "sm" }), from: from === signer ? tr("your account") : addressStrip(from, { size: "sm" }), to: addressStrip(to, { size: "sm" }) });

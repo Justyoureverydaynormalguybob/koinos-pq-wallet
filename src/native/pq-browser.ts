@@ -29,7 +29,7 @@ export interface PqBrowserPlugin {
   addListener(event: "navigation", fn: (e: NavigationEvent) => void): Promise<PluginListenerHandle>;
   addListener(event: "closed", fn: () => void): Promise<PluginListenerHandle>;
   /** The page's main frame tried to go to a WalletConnect pairing link (wc:…). Nothing was loaded. */
-  addListener(event: "wcLink", fn: (e: { url: string }) => void): Promise<PluginListenerHandle>;
+  addListener(event: "wcLink", fn: (e: { url: string; gesture?: boolean }) => void): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }
 

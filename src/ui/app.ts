@@ -11,7 +11,7 @@
 import QRCode from "qrcode";
 import {
   Chain, NETWORKS, formatKoin, isAddress, short, type HistoryItem, type Network, deriveKeys, mnemonicToSeed, newMnemonic, parseSeedInput,
-  seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys, bootstrapAddress, estimateSetupCosts, pqwalletInfo, setupPqwalletAccount,
+  seedToMnemonic, bytesToHex, hexToBytes, wipe, type PqKeys, bootstrapAddress, UnconfirmedSendError, estimateSetupCosts, pqwalletInfo, setupPqwalletAccount,
   type SetupCosts, type SetupResult, type SetupStatus,
 } from "koinos-pq-core";
 import {
@@ -35,7 +35,7 @@ import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr 
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
 import { SitePermissions, permissionsNamespace } from "../core/permissions";
-import { passphraseStrength } from "../core/passphrase";
+import { passphraseStrength, STRENGTH_LABELS } from "../core/passphrase";
 import { Collections, NFT_ENTRY, collectionCandidates, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
 import { DappHost, type PendingApproval } from "./dapp-host";
 import { describePlan } from "./approval-view";
@@ -117,6 +117,8 @@ interface DappState {
   desktop: boolean;
   /** the page stays loaded but hidden while the Dapps list (WalletConnect, the curated sites) is shown */
   minimised: boolean;
+  /** a page asked to pair through WalletConnect without a tap: the wallet asks before doing anything */
+  wcOffer?: { uri: string; origin: string } | null;
   approval: PendingApproval | null;
 }
 const hostOf = (url: string): string => {
@@ -185,6 +187,8 @@ interface State {
   pendingDecoy: string | null;
   sendCheck: SendCheck | null;
   setup: SetupState | null;
+  /** a burn that was signed and sent but got no clear answer from the node: no new burn from that account until it is settled */
+  unconfirmedBurn: { txId: string; account: string; network: string; amount: string; at: number } | null;
   /** per network: the activated account found from the seed (null: none; missing: not checked yet) */
   detected: Record<string, FoundAccount[]>;
   /** per network: the next account of these words when it holds funds but is not activated (null: it holds nothing; missing: not checked) */
@@ -272,13 +276,14 @@ function clearWalletStores() {
  */
 function weakPassphraseError(passphrase: string): string | null {
   const s = passphraseStrength(passphrase);
-  if (s.ok) return null;
-  const why =
-    s.warning === "common" ? tr("It is one that attackers try first.")
-    : s.warning === "repeated" ? tr("It is a short pattern repeated.")
-    : s.warning === "one-kind" ? tr("It is all of one kind of character.")
-    : tr("It is too short or too predictable.");
-  return tr("That passphrase is too easy to guess ({label}). {why} Use a longer one — several unrelated words work well.", { label: tr(s.label), why });
+  if (s.score >= 2) return null;
+  return tr("That passphrase is too easy to guess ({rating}). {why}", { rating: tr(STRENGTH_LABELS[s.score]).toLowerCase(), why: tr(s.warning ?? "Add unrelated words.") });
+}
+/** "Strength: Fair." and the reason when there is one, for the line under a passphrase being chosen. */
+function strengthLine(passphrase: string): string {
+  if (!passphrase) return "";
+  const s = passphraseStrength(passphrase);
+  return tr("Strength: {rating}.", { rating: tr(STRENGTH_LABELS[s.score]) }) + (s.warning ? " " + tr(s.warning) : "");
 }
 /**
  * What a burn always leaves behind, in base units (10 KOIN). Mana comes only from KOIN and every transaction
@@ -295,6 +300,17 @@ const SEND_KEEP = 400_000_000n;
 /** how long a KOIN price read from the chain is shown before it is read again */
 /** How long "the next account holds nothing" is believed before its address is read again. */
 const WAITING_RECHECK_MS = 60_000;
+/** Two origins of the same site: the same host, or one a subdomain of the other ("koindx.com" and "app.koindx.com"). */
+export function sameSite(a: string, b: string): boolean {
+  try {
+    const x = new URL(a).hostname.toLowerCase(), y = new URL(b).hostname.toLowerCase();
+    return x === y || x.endsWith("." + y) || y.endsWith("." + x);
+  } catch {
+    return false;
+  }
+}
+/** How long an unanswered burn blocks another one from the same account (a node drops a waiting transaction well before this). */
+const UNCONFIRMED_HOLD_MS = 10 * 60_000;
 const PRICE_TTL_MS = 5 * 60_000;
 /** how long a hidden tab may stay unlocked */
 const HIDDEN_LOCK_SECONDS = 60;
@@ -424,6 +440,7 @@ export class App {
       wcSessions: [],
       wcLog: [],
       storeKey: null,
+      unconfirmedBurn: null,
       detected: {},
       waiting: {},
       waitingAt: {},
@@ -455,6 +472,7 @@ export class App {
     root.addEventListener("click", (e) => this.onClick(e));
     root.addEventListener("submit", (e) => this.onSubmit(e));
     root.addEventListener("change", (e) => this.onChange(e));
+    root.addEventListener("input", (e) => this.onInput(e));
     for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => this.touch(), { passive: true });
     window.addEventListener("resize", () => this.placeDapp());
     // a tab that is hidden (another tab, minimised, screen off) locks after HIDDEN_LOCK_SECONDS
@@ -974,10 +992,10 @@ export class App {
     return (pref.get(PREF_WC_PROJECT) ?? "").trim() || WC_PROJECT_DEFAULT;
   }
   /** Pairs with a dapp from a wc: URI; the proposal then arrives on the approval sheet. */
-  private async pairWc(uri: string) {
+  private async pairWc(uri: string, startedBy?: string) {
     if (!this.wcProjectId()) throw new Error(tr("WalletConnect needs a project id first: Settings › WalletConnect."));
     this.s.notice = null;
-    await this.wc.pair(uri);
+    await this.wc.pair(uri, startedBy || undefined);
     this.s.screen = "dapps";
     // The dapp's proposal can arrive before pair() returns: a sheet already up, or a refusal already shown,
     // says more than this line, which is only for the short wait and goes away by itself.
@@ -1185,10 +1203,35 @@ export class App {
     if (!a || !this.s.keys || !canSign(a)) throw new Error(tr("locked"));
     const valueBase = parseUnits(amount, this.koinToken().decimals);
     const chain = this.chain();
+    // A burn cannot be undone, so one that may already be on its way is never followed by another.
+    const earlier = this.s.unconfirmedBurn;
+    if (earlier && earlier.account === a.address && earlier.network === this.network.name) {
+      if (await chain.landed(earlier.txId)) {
+        // it went through after all: show that one, and sign nothing new
+        this.s.unconfirmedBurn = null;
+        if (this.network.vhp) delete this.s.balances[this.network.vhp];
+        this.s.sent = { txId: earlier.txId, bytes: 0, rcUsed: "?", block: null, waiting: false, amount: earlier.amount, symbol: this.unit(), burned: true };
+        this.s.screen = "sent";
+        this.s.notice = tr("Your earlier burn of {amount} {unit} went through. Nothing new was sent.", { amount: earlier.amount, unit: this.unit() });
+        await this.refresh();
+        return;
+      }
+      if (Date.now() - earlier.at < UNCONFIRMED_HOLD_MS) throw new Error(tr("An earlier burn of {amount} {unit} got no clear answer from the node and may still go through. Wait a few minutes and look at Activity before burning again.", { amount: earlier.amount, unit: this.unit() }));
+      this.s.unconfirmedBurn = null; // long past the time a node keeps a waiting transaction
+    }
     const [balance, mana] = await Promise.all([chain.balance(a.address), chain.mana(a.address)]);
     const most = this.burnable(balance, mana) ?? 0n;
     if (valueBase > most) throw new Error(tr("The most this account can burn right now is {most} {unit}.", { most: formatKoin(most), unit: this.unit() }));
-    const res = await chain.burnKoin({ from: a.address, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" });
+    let res;
+    try {
+      res = await chain.burnKoin({ from: a.address, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" });
+    } catch (e) {
+      if (e instanceof UnconfirmedSendError) {
+        this.s.unconfirmedBurn = { txId: e.txId, account: a.address, network: this.network.name, amount, at: Date.now() };
+        throw new Error(tr("The node gave no clear answer, so this burn may or may not go through. Do not burn again yet: look at Activity in a few minutes."));
+      }
+      throw e;
+    }
     if (this.network.vhp) delete this.s.balances[this.network.vhp]; // read again on the next refresh
     this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount, symbol: this.unit(), burned: true };
     this.s.screen = "sent";
@@ -1253,10 +1296,18 @@ export class App {
           if (p && this.s.screen !== "dapps") this.s.screen = "dapps";
           this.render();
         },
-        onWcLink: (uri) => {
+        onWcLink: (uri, from) => {
           // the page offered WalletConnect and its button led to the pairing link: same path as a scanned code
           if (!this.s.keys || this.s.busy) return;
-          void this.run("Connecting", () => this.pairWc(uri));
+          // only for the page the user is looking at: a page put aside must not pull the wallet to another screen
+          if (this.s.screen !== "dapps" || !this.s.dapp.open || this.s.dapp.minimised || this.s.dapp.approval) return;
+          if (!from.gesture) {
+            // no tap started this (a script, a timer): nothing is paired until the user says so here
+            this.s.dapp.wcOffer = { uri, origin: from.origin };
+            this.render();
+            return;
+          }
+          void this.run("Connecting", () => this.pairWc(uri, from.origin));
         },
       },
       {
@@ -1310,7 +1361,7 @@ export class App {
   private placeDapp() {
     const host = this.host;
     if (!host?.isOpen) return;
-    if (this.s.screen === "dapps" && !this.s.dapp.approval && !this.s.dapp.minimised && !host.busy) {
+    if (this.s.screen === "dapps" && !this.s.dapp.approval && !this.s.dapp.wcOffer && !this.s.dapp.minimised && !host.busy) {
       void host.setFrame(this.dappFrame()).then(() => host.show());
     } else {
       void host.hide();
@@ -1385,6 +1436,14 @@ export class App {
   }
 
   // ---------- events ----------
+  /** The strength line under a passphrase being chosen follows the typing. Nothing else listens to input. */
+  private onInput(e: Event) {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || (t.name !== "p1" && t.name !== "d1")) return;
+    const el = this.root.querySelector<HTMLElement>("#pw-strength");
+    if (el) el.textContent = strengthLine(t.value);
+  }
+
   private onChange(e: Event) {
     const t = e.target as HTMLElement;
     if (t instanceof HTMLSelectElement && t.name === "network") {
@@ -1637,7 +1696,19 @@ export class App {
       case "dapp-close":
         void this.dappHost().close();
         break;
+      case "wc-offer-accept": {
+        const offer = this.s.dapp.wcOffer;
+        this.s.dapp.wcOffer = null;
+        if (offer && this.s.keys) void this.run("Connecting", () => this.pairWc(offer.uri, offer.origin));
+        else this.render();
+        break;
+      }
+      case "wc-offer-ignore":
+        this.s.dapp.wcOffer = null;
+        this.render();
+        break;
       case "dapp-list":
+        this.s.dapp.wcOffer = null;
         this.s.dapp.minimised = true;
         this.render();
         break;
@@ -2350,6 +2421,8 @@ export class App {
       <p>${tr("It encrypts the wallet on this device. It does not replace the 24 words: if you forget it, import the words again.")}</p>
       <form data-form="passphrase">
         ${field(tr("Passphrase ({n}+ characters)", { n: MIN_PASSPHRASE_LENGTH }), input({ name: "p1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
+        <p class="fine" id="pw-strength" aria-live="polite" style="margin-top:-4px"></p>
+        <p class="fine">${tr("Four or more unrelated words work well. Length counts for more than symbols.")}</p>
         ${field(tr("Repeat it"), input({ name: "p2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
         <div class="row">${button(tr("Create wallet"), { variant: "primary" })}${button(tr("Cancel"), { action: "welcome", variant: "ghost" })}</div>
       </form>`;
@@ -2696,6 +2769,7 @@ export class App {
                 ${section(">", tr("Request"), esc(this.network.name))}
                 ${this.originHeading(a.req.origin)}
                 ${a.source === "wc" ? `<p class="fine">${tr("Through WalletConnect, as <strong>{name}</strong>.", { name: esc(a.via ?? "") })}${a.unverified ? ` <span class="warn-inline">${tr("The relay could not verify that this request really comes from that site. Check the address above against the dapp you are using.")}</span>` : ""}</p>` : ""}
+                ${a.source === "wc" && a.startedBy && !sameSite(a.startedBy, a.req.origin) ? notice("danger", tr("This request says it comes from the address above, but it was started by the page {page}. Reject it unless you expected that.", { page: `<strong class="mono">${esc(a.startedBy)}</strong>` })) : ""}
                 ${wc?.chains?.length ? `<p class="fine">${tr("The dapp asks for: {chains}.", { chains: esc(wc.chains.join(", ")) })}</p>` : ""}
                 ${a.plan ? describePlan(a.plan, this.s.tokens) : notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}
                 ${a.plan && !a.status ? this.accountChoice(a) : ""}
@@ -2766,6 +2840,10 @@ export class App {
         ${button(tr("&#9776;"), { action: "dapp-list", mini: true, title: tr("Dapps list and WalletConnect (the page stays open)") })}
         ${button(tr("&times;"), { action: "dapp-close", mini: true, title: tr("Close the page") })}
       </div>
+      ${d.wcOffer ? card(`
+        <p><strong class="mono">${esc(hostOf(d.wcOffer.origin || d.url))}</strong> ${tr("wants to connect through WalletConnect.")}</p>
+        <p class="fine">${tr("The page asked without a tap on its connect button, so nothing has been started. Connect only if you were connecting your wallet to this site just now.")}</p>
+        <div class="row tight">${button(tr("Connect"), { action: "wc-offer-accept", variant: "primary" })}${button(tr("Ignore"), { action: "wc-offer-ignore", variant: "ghost" })}</div>`) : ""}
       <div id="dapp-area" aria-hidden="true"></div>
       ${this.approvalSheet()}`;
   }
@@ -2993,6 +3071,7 @@ export class App {
       ${card(words(w))}
       <form data-form="duress-save">
         ${field(tr("Duress passphrase ({n}+ characters, different from your main one)", { n: MIN_PASSPHRASE_LENGTH }), input({ name: "d1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
+        <p class="fine" id="pw-strength" aria-live="polite" style="margin-top:-4px"></p>
         ${field(tr("Repeat it"), input({ name: "d2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
         ${field(tr("Your main passphrase (to confirm)"), input({ name: "main", type: "password", required: true, autocomplete: "off" }))}
         <p class="fine">${tr("After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.")}</p>

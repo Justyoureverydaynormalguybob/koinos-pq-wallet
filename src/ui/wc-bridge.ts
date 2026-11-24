@@ -107,9 +107,17 @@ export class WcBridge {
   }
 
   /** Pairs with a dapp from its URI (scanned or pasted). The proposal then arrives as an event. */
-  async pair(uri: string): Promise<void> {
+  /** pairing topic -> the origin of the in-app page whose link started that pairing */
+  private startedBy = new Map<string, string>();
+
+  /** `startedBy`: the origin of the page in the in-app browser whose link this code came from (absent for a scanned or pasted code). */
+  async pair(uri: string, startedBy?: string): Promise<void> {
     const u = uri.trim();
     if (!/^wc:[0-9a-f]{64}@2\?/i.test(u)) throw new Error("That is not a WalletConnect code.");
+    if (startedBy) {
+      if (this.startedBy.size > 50) this.startedBy.clear();
+      this.startedBy.set(u.slice(3, 67).toLowerCase(), startedBy);
+    }
     const kit = await this.start();
     this.deps?.log?.("pairing with the dapp's code");
     try {
@@ -222,7 +230,7 @@ export class WcBridge {
           deps.notify((err as Error).message);
         }
       },
-      { alwaysAsk: true, via: summary.name, unverified: summary.verified !== "VALID" },
+      { alwaysAsk: true, via: summary.name, unverified: summary.verified !== "VALID", startedBy: this.startedBy.get(String((e.params as { pairingTopic?: string }).pairingTopic ?? "").toLowerCase()) },
     );
   }
 

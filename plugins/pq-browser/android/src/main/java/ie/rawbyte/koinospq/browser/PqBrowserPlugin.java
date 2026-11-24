@@ -228,9 +228,12 @@ public class PqBrowserPlugin extends Plugin {
                 // A WalletConnect pairing link (a dapp's "connect" button navigating to wc:…) is handed to the
                 // app, which pairs and asks on its approval sheet. Main frame only. Nothing is loaded, and
                 // every other scheme is dropped as before.
-                if (req.isForMainFrame() && u.length() <= 2048 && u.regionMatches(true, 0, "wc:", 0, 3)) {
+                // A redirect is never the user's tap, so a server cannot bounce the page into a pairing; and the
+                // app is told whether a tap started this navigation, so it can ask before pairing when none did.
+                if (req.isForMainFrame() && !req.isRedirect() && u.length() <= 2048 && u.regionMatches(true, 0, "wc:", 0, 3)) {
                     JSObject o = new JSObject();
                     o.put("url", u);
+                    o.put("gesture", req.hasGesture());
                     notifyListeners("wcLink", o);
                 }
                 return true;

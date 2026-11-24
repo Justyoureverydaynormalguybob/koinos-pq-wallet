@@ -33,6 +33,11 @@ const uint64 = (v: bigint) => {
 };
 type Tx = { header: { payer: string }; operations: Array<{ call_contract: { contract_id: string; entry_point: number; args: string } }>; signatures: string[] };
 const submitted: Tx[] = [];
+/** "lost": the node takes the transaction but answers with a gateway error. */
+let submitMode: "ok" | "lost" = "ok";
+/** ids the node reports as mined */
+const mined = new Set<string>();
+class RpcError extends Error {}
 /** once set, the node's history for the account is one proof-of-burn row of this many base units (the shape a mainnet node returns) */
 let burnedInHistory: { account: string; value: bigint } | null = null;
 function historyRows(): unknown[] {
@@ -62,14 +67,19 @@ function answer(req: { method: string; params: Record<string, unknown> }): unkno
   if (req.method === "account_history.get_account_history") return { values: historyRows() };
   if (req.method === "chain.submit_transaction") {
     submitted.push((req.params as { transaction: Tx }).transaction);
+    if (submitMode === "lost") throw new RpcError("rpc failed, AMQP connection is not open");
     return { receipt: { rc_used: "78193386" } };
+  }
+  if (req.method === "transaction_store.get_transactions_by_id") {
+    const ids = (req.params as { transaction_ids: string[] }).transaction_ids;
+    return { transactions: ids.filter((id) => mined.has(id)).map((id) => ({ transaction: { id }, containing_blocks: ["0x12"] })) };
   }
   return {};
 }
 let server: Server;
 let rpc = "";
 
-const MAIN = "main passphrase 1234";
+const MAIN = "main kettle orbit plank";
 const settle = async () => {
   const root = document.getElementById("app")!;
   const deadline = Date.now() + 60_000;
@@ -123,7 +133,12 @@ describe("burn KOIN for VHP (jsdom, a fake node over HTTP)", () => {
       req.on("end", () => {
         const r = JSON.parse(body) as { id: number; method: string; params: Record<string, unknown> };
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: answer(r) }));
+        try {
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: answer(r) }));
+        } catch (e) {
+          if (!(e instanceof RpcError)) throw e;
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: r.id, error: { code: -32603, message: e.message } }));
+        }
       });
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -198,4 +213,41 @@ describe("burn KOIN for VHP (jsdom, a fake node over HTTP)", () => {
     expect(burnRow).toMatch(/−1\.25/);
     expect(rows.some((r) => /^transaction/.test(r))).toBe(false);
   }, 120_000);
+
+  it("a burn the node did not clearly answer is never followed by a second one", async () => {
+    Object.assign(devnet, { pob: POB, vhp: VHP });
+    submitted.length = 0;
+    mined.clear();
+    burnedInHistory = null;
+    const root = await newWallet();
+    click(root, "burn");
+    submitMode = "lost";
+    await submit(root, "burn", { amount: "1" }, ["understood"]);
+    await new Promise((r) => setTimeout(r, 11_500)); // the wallet looks for the id for about ten seconds first
+    await settle();
+    expect(submitted.length).toBe(1);
+    expect(text(root)).toMatch(/may or may not go through/);
+    expect(root.querySelector("h1")?.textContent).not.toBe("Submitted");
+
+    // pressing Burn again, with the node healthy again: refused, nothing signed
+    submitMode = "ok";
+    if (!root.querySelector('form[data-form="burn"]')) click(root, "burn");
+    await submit(root, "burn", { amount: "1" }, ["understood"]);
+    expect(submitted.length).toBe(1);
+    expect(text(root)).toMatch(/An earlier burn of 1 KOIN got no clear answer/);
+
+    // the first one turns up in a block: the next press shows it and still signs nothing
+    mined.add((submitted[0] as unknown as { id: string }).id);
+    await submit(root, "burn", { amount: "1" }, ["understood"]);
+    expect(submitted.length).toBe(1);
+    expect(root.querySelector("h1")?.textContent).toBe("Submitted");
+    expect(text(root)).toMatch(/went through\. Nothing new was sent/);
+
+    // settled: a new burn is possible again
+    click(root, "back-home");
+    await settle();
+    click(root, "burn");
+    await submit(root, "burn", { amount: "2" }, ["understood"]);
+    expect(submitted.length).toBe(2);
+  }, 180_000);
 });

@@ -188,7 +188,7 @@ describe("the account features through the screens (jsdom, a fake node and a fak
     new App(root, { native: true, browser: fb.plugin, bridgeScript: async () => "/* inpage */", approveDelayMs: 0 });
     click(root, "import");
     await submit(root, "import", { seed: bytesToHex(SEED) });
-    await submit(root, "passphrase", { p1: "main passphrase 1234", p2: "main passphrase 1234" });
+    await submit(root, "passphrase", { p1: "main kettle orbit plank", p2: "main kettle orbit plank" });
     await new Promise((r) => setTimeout(r, 800));
 
     // one dropdown instead of a list of rows

@@ -8,7 +8,7 @@ import { decoySlotFor, encryptVault, newFile, openVault, withSlot, type VaultDat
 if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
 
 const ITER = 1000; // fast derivations in tests; the format is the same
-const MAIN = "main passphrase 1234", DECOY = "decoy passphrase 5678";
+const MAIN = "main kettle orbit plank", DECOY = "decoy lantern gravel moth";
 const mainData: VaultData = { version: 1, seedHex: "11".repeat(32), accounts: [], createdAt: "2026-10-19", role: "main" };
 const decoyData: VaultData = { version: 1, seedHex: "22".repeat(32), accounts: [], createdAt: "2026-10-19", role: "decoy" };
 

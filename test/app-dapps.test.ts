@@ -11,7 +11,7 @@ if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { va
 vi.mock("qrcode", () => ({ default: { toCanvas: async () => undefined } }));
 const { App } = await import("../src/ui/app");
 
-const MAIN = "main passphrase 1234";
+const MAIN = "main kettle orbit plank";
 const PQ = "1FqXVbjZnMo2cUNj56LNCrc8R22RWDmq1t";
 const ORIGIN = "https://dapp.example";
 

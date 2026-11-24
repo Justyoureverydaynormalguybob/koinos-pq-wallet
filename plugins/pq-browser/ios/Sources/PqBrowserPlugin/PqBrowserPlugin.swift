@@ -201,8 +201,12 @@ public class PqBrowserPlugin: CAPPlugin, CAPBridgedPlugin, WKScriptMessageHandle
     private func reportWcLink(_ action: WKNavigationAction) {
         guard let url = action.request.url, url.scheme?.lowercased() == "wc" else { return }
         if let target = action.targetFrame, !target.isMainFrame { return }
+        // Only the page itself may ask, not a frame inside it steering the top frame. WebKit does not say
+        // whether a script's navigation came from a tap; a tapped link does, and the app asks before
+        // pairing for anything else.
+        if !action.sourceFrame.isMainFrame { return }
         let s = url.absoluteString
-        if s.count <= 2048 { notifyListeners("wcLink", data: ["url": s]) }
+        if s.count <= 2048 { notifyListeners("wcLink", data: ["url": s, "gesture": action.navigationType == .linkActivated]) }
     }
 
     /// The URL is reported only once a navigation has committed: a provisional load that fails leaves the

@@ -19,7 +19,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const require = createRequire(import.meta.url);
 const { chromium } = require(resolve(here, "..", process.env.PLAYWRIGHT_DIR ?? "../memorymantle-premier", "node_modules/playwright"));
 const url = process.argv[2] ?? "http://127.0.0.1:4173/";
-const PASS = "web-smoke-passphrase";
+const PASS = "web-smoke-kettle-orbit-plank";
 
 const seed = new Uint8Array(randomBytes(32));
 const keys = deriveKeys(seed);

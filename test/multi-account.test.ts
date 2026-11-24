@@ -166,7 +166,7 @@ describe("several accounts through the screens (jsdom, a fake node over HTTP)", 
     new App(root);
     click(root, "import");
     await submit(root, "import", { seed: bytesToHex(SEED) });
-    await submit(root, "passphrase", { p1: "main passphrase 1234", p2: "main passphrase 1234" });
+    await submit(root, "passphrase", { p1: "main kettle orbit plank", p2: "main kettle orbit plank" });
     await new Promise((r) => setTimeout(r, 600));
 
     // the picker: the native address (devnet only), the first account and "Account 2"
@@ -220,7 +220,7 @@ describe("several accounts through the screens (jsdom, a fake node over HTTP)", 
     new App(root);
     click(root, "import");
     await submit(root, "import", { seed: bytesToHex(SEED) });
-    await submit(root, "passphrase", { p1: "main passphrase 1234", p2: "main passphrase 1234" });
+    await submit(root, "passphrase", { p1: "main kettle orbit plank", p2: "main kettle orbit plank" });
     await new Promise((r) => setTimeout(r, 600));
     const pick = () => {
       const p = root.querySelector<HTMLSelectElement>('select[name="account"]')!;

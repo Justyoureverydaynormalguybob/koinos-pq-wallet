@@ -406,4 +406,58 @@ slipped past the signer (`src/ui/approval-view.ts`, test `test/approval-authorit
 Result: no break. The on-chain gate was re-confirmed with the `koinos-pq` `attack-outsider` negative test
 against the current contract; see that repo's SECURITY.md for the chain side.
 
+## Pen test 2026-11-23 (wallet 0.18.0), fixes in 0.18.1
 
+A second, wider pass on the day 0.18.0 was built, aimed at everything added since 0.15.0 that no review
+had read: the burn, several accounts from one set of words, the `wc:` link catch, "Reset this site", the
+on-chain price, account names, and the 0.18.0 passphrase gate itself. Three parts: two independent
+reviewers reading the code as attackers (one on the wallet, one on koinos-pq-core and the contract),
+live attacks on the chain (koinos-pq `cli/attack-outsider.mjs`, see that repo's SECURITY.md), and the
+web surface again. Not a third-party audit.
+
+**Result.** Nobody without the key moved an account. Five things were wrong and are fixed in 0.18.1; each has a test in `test/pentest-2026-11.test.ts` or `test/passphrase.test.ts` that fails on
+0.18.0.
+
+### Fixed in 0.18.1
+
+| What could happen | Fix |
+|---|---|
+| **A dapp sent a field twice** (high). Protobuf, and so the chain, uses the last occurrence; the approval sheet read the first. A KOIN `approve` with value 0.00000001 followed by a second value of 2^64−1 was shown as "spend up to 0.00000001 KOIN" while the chain would grant everything. The same held for the spender, for a token burn's amount, for a collectible's recipient, and for the 0.18.0 wording of `set_allowed_caller` (forbid then allow read "Stop…") and `set_public_key`. Plain transfers were never affected (`strictTransfer`, 0.3.0). Seen on the sheet in a probe; the chain half rests on protobuf's last-wins rule and was not sent to a node. | `exactly()` in `src/ui/approval-view.ts`: a call is put into words only when its arguments are exactly the expected fields, each once and of the right kind, with nothing else. Anything else is shown raw with "cannot be shown reliably. Do not approve it." |
+| **The 0.18.0 passphrase gate counted characters times alphabet** (medium), which the plan had warned against. It accepted `P@ssw0rd123!` (rated 65 bits), `Summer2024!`, `mywallet2026`, `liverpool1892`, `main passphrase 1234` (106 bits) and `wallet wallet wallet wallet` (139 bits). | `src/core/passphrase.ts` rewritten: the passphrase is split into runs of letters, digits and symbols and each is priced as a guesser would try it (a common word, a year, "1234", a keyboard row are cheap; unrelated words and length add up); well-known passwords are refused however they are dressed up. All of the above are refused; four unrelated words, or twelve random characters, pass. A line under the field shows the rating as you type. Still only where a passphrase is chosen, never at unlock. |
+| **A site shown one account could ask another to sign** (medium). In the in-app browser the list of accounts a site may see was applied to `getAccounts` only. A site shown account A could name account B (usually findable on the chain, since A paid for its activation) as signer; the request reached the sheet with B's address and no warning. WalletConnect already checked this. | `DappHost` refuses a page request whose signer is not among the accounts that site was shown. |
+| **A page could start a WalletConnect pairing without a tap** (medium). The native view reported any main-frame navigation to `wc:…`, a script's or a redirect's included, every three seconds, also for a page put aside. The proposal sheet's heading was the proposer's own claim, not the page that started it, and the three-per-site cap keyed on that claim (a probe queued 39 sheets under 39 claimed origins). | Android reports whether a tap started the navigation and drops redirects; iOS takes it only from the page's own main frame. With a tap the wallet pairs as before. Without one it pairs nothing and shows "wants to connect through WalletConnect" with Connect and Ignore. Links from a page that is not on screen are ignored. The pairing remembers the page it came from, and the sheet warns when the proposal claims another site. At most three WalletConnect requests wait in all. The native half was built by CI but **not run on a device**. |
+| **A burn could go out twice after an unclear answer from the node** (medium/low). If the node took the transaction but answered with an error, the wallet reported a failure; pressing Burn again signed a second one, and a burn cannot be undone. | koinos-pq-core `bc018d8`: after an answer that is not the node's own refusal, the transaction id is looked for before anything is reported. Found: it succeeded. Not found: `UnconfirmedSendError`, and the wallet then refuses another burn from that account until the first is found on the chain (shown as done, nothing new signed) or ten minutes have passed. Sends go through the same path. A node that withholds a signed transaction could still broadcast it later, until the account's next transaction uses its nonce; that remains. |
+| **`burnKoin` had no test** (medium, as a regression risk). | koinos-pq-core `test/burn.test.ts`: allow PoB, burn, forbid PoB in that order in one transaction, the pinned addresses, the bare burn when PoB is already allowed, the mana limit. |
+
+### Found, not fixed yet
+
+- **A site allowed before 0.17 sees every account, including ones made later** (low): a grant without a
+  list means "all".
+- **The account name sent to a dapp gives the count away** (low): "Account 3" tells a site there are at
+  least three.
+- **An answer is not tied to the page that asked** (low, from 0.9): if the page navigates while a reply
+  is being prepared, the reply lands in the new page.
+- **Lock pressed during an activation** wipes the keys under it (low): the activation would then fail and
+  spend its mana. No funds at risk.
+- **Two wallets can show in store sizes** (low): a side store over 1 KiB in both slots says both are
+  real. Pad every store to one larger size.
+- **The dollar figure is whatever the node or the pool says** (info): display only, never used in an
+  amount. No markup, NaN or Infinity gets through.
+
+### Checked and found sound
+
+- A dapp cannot get the allow, call, forbid sandwich signed for a contract of its own: a call to the
+  signer's own account is refused before the sheet, each derived account has its own key, and the
+  contract takes those two calls only as direct operations signed by that account.
+- Burn: the VHP always goes to the sender, the PoB address is a constant per network (no name lookup a
+  node could answer), the three operations are one transaction, and no link, dapp or WalletConnect
+  input reaches it. PoB is off the allowed list of the mainnet account that has burned twice.
+- Account derivation (`accountSeed`): separated from every other use of the seed; one account's seed
+  gives neither the master nor a sibling; bad account numbers throw; buffers are copied.
+- Derived keys are wiped on every lock path. Account names are sealed, escaped wherever shown, and never
+  sent to dapps. Activity rows and the WalletConnect log are escaped.
+- "Reset this site" can be triggered only by the wallet, and clears only that site's own storage.
+- Web surface on wallet.koinosproof.com: the same headers as before, no source maps, no stray files.
+  The site still serves **0.15.10** (it deploys by hand), so none of 0.16 to 0.18 is live there.
+  `npm audit --omit=dev`: 6 moderate findings, all under `@capacitor/cli` (glob, minimatch, uuid), build
+  tooling that does not ship.

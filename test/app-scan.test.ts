@@ -9,7 +9,7 @@ vi.mock("qrcode", () => ({ default: { toCanvas: async () => undefined } }));
 const { App } = await import("../src/ui/app");
 
 const A = "1LQYsdpGuA3nwU5G1jANCnMWs3yYWfHwkQ";
-const MAIN = "main passphrase 1234";
+const MAIN = "main kettle orbit plank";
 const settle = async () => {
   const root = document.getElementById("app")!;
   const deadline = Date.now() + 60_000;

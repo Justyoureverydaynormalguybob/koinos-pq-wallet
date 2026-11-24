@@ -57,7 +57,7 @@ function answer(req: { method: string; params: Record<string, unknown> }): unkno
 }
 let server: Server;
 let rpc = "";
-const MAIN = "main passphrase 1234";
+const MAIN = "main kettle orbit plank";
 const OTHER = "19G2VrmoqgCFRRtgoYF3vFi2ekDsyoRvab";
 const settle = async () => {
   const root = document.getElementById("app")!;

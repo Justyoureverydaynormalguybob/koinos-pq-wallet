@@ -12,8 +12,8 @@ const { localVaultStore, openVault, toFile, PBKDF2_ITERATIONS } = await import("
 const { bootstrapAddress, deriveKeys, hexToBytes } = await import("koinos-pq-core");
 const ZERO_SEED_ADDRESS = "14PpxNmUVA7qeAw1cyASMfJFUd2xDkPUBR";
 
-const MAIN = "main passphrase 1234";
-const DURESS = "duress passphrase 5678";
+const MAIN = "main kettle orbit plank";
+const DURESS = "duress lantern gravel moth";
 const PQ = "1FqXVbjZnMo2cUNj56LNCrc8R22RWDmq1t";
 const ISSUER = "1JZ2fwcuwRPLSJd3cdNpwLGkLAPktVUkqp";
 const OTHER = "19G2VrmoqgCFRRtgoYF3vFi2ekDsyoRvab"; // a valid address this wallet has never used

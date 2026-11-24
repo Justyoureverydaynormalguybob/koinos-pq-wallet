@@ -24,6 +24,8 @@ export interface PendingApproval {
   via?: string;
   /** shown on the sheet when the source could not be verified (WalletConnect's verify result) */
   unverified?: boolean;
+  /** WalletConnect: the origin of the page in the in-app browser whose link started this pairing, when one did */
+  startedBy?: string;
   /** what will be done if approved; null when the request was refused (see `refused`) */
   plan: Plan | null;
   refused: string | null;
@@ -37,7 +39,7 @@ export interface HostEvents {
   /** the request waiting for the user (the sheet to show), or null when there is none */
   onApproval(p: PendingApproval | null): void;
   /** the open page's "connect" button led to a WalletConnect pairing link: pair with it (the proposal then comes to the sheet) */
-  onWcLink?(uri: string): void;
+  onWcLink?(uri: string, from: { origin: string; gesture: boolean }): void;
 }
 
 /** a page gets one pairing attempt per this many ms, so a script cannot keep the wallet pairing */
@@ -56,6 +58,8 @@ export interface HostDeps {
 }
 
 const MAX_WAITING_PER_ORIGIN = 3;
+/** Everything waiting from WalletConnect together: a proposal names its own origin, so a per-origin cap alone can be walked around. */
+const MAX_WAITING_WC = 3;
 const EXPIRY_MS = 10 * 60_000;
 /** provider:* calls a page may make per origin in a 10 s window (reads for a dapp's UI; not a relay for abuse) */
 const PROVIDER_CALLS_PER_WINDOW = 60;
@@ -87,6 +91,7 @@ interface Queued {
   alwaysAsk?: boolean;
   via?: string;
   unverified?: boolean;
+  startedBy?: string;
 }
 
 export class DappHost {
@@ -138,7 +143,14 @@ export class DappHost {
         const now = Date.now();
         if (!this.opened || !/^wc:[0-9a-f]{64}@2\?/i.test(uri) || now - this.lastWcLink < WC_LINK_GAP_MS) return;
         this.lastWcLink = now;
-        this.events.onWcLink?.(uri);
+        let origin = "";
+        try {
+          origin = new URL(this.url).origin;
+        } catch {
+          /* no page address yet: the app is told so, and asks before pairing */
+        }
+        // gesture: only an explicit true counts as a tap. A native side that does not say is treated as "no tap".
+        this.events.onWcLink?.(uri, { origin, gesture: e?.gesture === true });
       }),
     );
   }
@@ -213,17 +225,18 @@ export class DappHost {
    * `respond` carries the answer back. `alwaysAsk` shows the sheet even for a site already allowed
    * (a new pairing is always a decision). Resolves once queued; the answer comes through `respond`.
    */
-  async submit(req: DappRequest, respond: Respond, o: { alwaysAsk?: boolean; via?: string; unverified?: boolean } = {}): Promise<void> {
+  async submit(req: DappRequest, respond: Respond, o: { alwaysAsk?: boolean; via?: string; unverified?: boolean; startedBy?: string } = {}): Promise<void> {
     if (!APPROVAL_COMMANDS.has(req.command)) {
       await respond({ error: `unsupported command ${req.command}` });
       return;
     }
     const waiting = this.queue.filter((q) => q.req.origin === req.origin).length + (this.current?.req.origin === req.origin ? 1 : 0);
-    if (waiting >= MAX_WAITING_PER_ORIGIN) {
-      await respond({ error: "too many requests waiting for approval from this site" });
+    const waitingWc = this.queue.filter((q) => q.source === "wc").length + (this.current?.source === "wc" ? 1 : 0);
+    if (waiting >= MAX_WAITING_PER_ORIGIN || waitingWc >= MAX_WAITING_WC) {
+      await respond({ error: "too many requests waiting for approval" });
       return;
     }
-    this.queue.push({ key: crypto.randomUUID(), req, createdAt: Date.now(), source: "wc", respond, alwaysAsk: o.alwaysAsk, via: o.via, unverified: o.unverified });
+    this.queue.push({ key: crypto.randomUUID(), req, createdAt: Date.now(), source: "wc", respond, alwaysAsk: o.alwaysAsk, via: o.via, unverified: o.unverified, startedBy: o.startedBy });
     void this.pump();
   }
   /** A read for another source, under the page's denylist and rate limit. */
@@ -325,7 +338,7 @@ export class DappHost {
     if (!next) return; // idle: the app re-renders on onApproval(null) and places the page view itself
     // Claim the slot before anything asynchronous: a second message arriving while this one is being
     // planned must queue behind it, never replace the sheet under the user's finger.
-    const claim: PendingApproval & { respond?: Respond } = { key: next.key, req: next.req, source: next.source, via: next.via, unverified: next.unverified, respond: next.respond, plan: null, refused: null, status: "planning" };
+    const claim: PendingApproval & { respond?: Respond } = { key: next.key, req: next.req, source: next.source, via: next.via, unverified: next.unverified, startedBy: next.startedBy, respond: next.respond, plan: null, refused: null, status: "planning" };
     this.current = claim;
     const gen = this.generation;
     const closedMeanwhile = () => (next.source === "page" ? gen !== this.generation : false) || this.current !== claim;
@@ -338,6 +351,15 @@ export class DappHost {
       refused = (e as Error).message || String(e);
     }
     if (closedMeanwhile()) return; // the page closed meanwhile; close() already answered it
+    // A site that was shown some of the accounts may ask only those to sign. Another account of this wallet
+    // (its address is usually findable on the chain) must not reach the sheet as if it were the connected one.
+    if (plan && next.source === "page" && plan.signerAddress) {
+      const shown = this.deps.permissions()?.accountsFor(next.req.origin);
+      if (shown && !shown.includes(plan.signerAddress)) {
+        plan = null;
+        refused = "This site was not shown that account. Connect it to the site first.";
+      }
+    }
     // a site already allowed to see the accounts is answered without asking again
     if (plan && !next.alwaysAsk && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin)) {
       await this.execute(claim, plan, this.deps.permissions()?.accountsFor(next.req.origin)); // the same accounts as were chosen then
