@@ -21,7 +21,7 @@ import {
 import { MAX_DERIVED_ACCOUNTS, accountKeys, accountName, canSign, detectAccounts, displayLabel, nextAccountKey, walletAccounts, wipeAccountKeys, type FoundAccount } from "../core/accounts";
 import { AddressBook, addressBookNamespace, localBookStore, type Assessment } from "../core/addressbook";
 import { SealedStore, fillerValue, storeKeyFrom } from "../core/sealed-store";
-import { WcBridge, type WcSession } from "./wc-bridge";
+import { WcBridge, type WcSession, wipeWcStorage } from "./wc-bridge";
 import { CLIPBOARD_WIPE_SECONDS, copyWithWipe } from "../core/clipboard";
 import { CustomTokens, allTokens, customTokensNamespace, findToken, formatUnits, parseUnits, type Token } from "../core/tokens";
 import {
@@ -476,6 +476,9 @@ export class App {
     root.addEventListener("click", (e) => this.onClick(e));
     root.addEventListener("submit", (e) => this.onSubmit(e));
     root.addEventListener("change", (e) => this.onChange(e));
+    // The app starts locked. Anything the WalletConnect client left behind (the app was killed while
+    // unlocked, or a version before 0.18.3 kept sessions across locks) goes before anything can read it.
+    void wipeWcStorage();
     root.addEventListener("input", (e) => this.onInput(e));
     for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => this.touch(), { passive: true });
     window.addEventListener("resize", () => this.placeDapp());
@@ -577,6 +580,7 @@ export class App {
   }
   private lock(notice?: string) {
     this.wc.detach();
+    void this.wc.endAll(); // sessions never outlive an unlocked wallet: nothing of them stays on the device
     if (this.s.keys) {
       wipeAccountKeys(this.s.keys);
       wipe(this.s.keys.secretKey, this.s.keys.seed);
@@ -806,8 +810,17 @@ export class App {
     this.liveBusy = true;
     try {
       const chain = this.chain();
-      const a = this.account();
       const net = this.network.name;
+      // the accounts could not be looked for earlier (the node gave no answer): look again, quietly
+      if (this.s.keys && this.s.detected[net] === undefined && !this.s.setup) {
+        const keys = this.s.keys;
+        const found = await detectAccounts(chain, keys).catch(() => undefined);
+        if (found && this.s.keys === keys && this.network.name === net && this.s.detected[net] === undefined) {
+          this.s.detected[net] = found;
+          if (this.s.screen === "home" && !this.s.busy) this.render();
+        }
+      }
+      const a = this.account();
       const before = this.s.balance;
       const none = () => Promise.reject(new Error("no account"));
       const [head, balance, mana] = await Promise.allSettled([chain.headHeight(), a ? chain.balance(a.address) : none(), a ? chain.mana(a.address) : none()]);

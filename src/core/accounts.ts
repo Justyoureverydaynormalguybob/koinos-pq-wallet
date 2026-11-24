@@ -1,5 +1,5 @@
 // Accounts a wallet can show, and the subset it can sign for; shared by the web app and the extension.
-import { bootstrapAddress, deriveAccountKeys, pqwalletInfo, registeredPublicKey, wipe, type Chain, type PqKeys } from "koinos-pq-core";
+import { PQWALLET_ENTRY, bootstrapAddress, decodeGetInfoResult, deriveAccountKeys, isRefusal, registeredPublicKey, wipe, type Chain, type PqKeys } from "koinos-pq-core";
 
 /**
  * Wallets built before 2026-10-19 derived their account address from a wiped (all-zero) seed when the
@@ -73,10 +73,36 @@ export function wipeAccountKeys(master: PqKeys): void {
   ring.clear();
 }
 
+/**
+ * A read that is tried again when the node gives no answer. The public nodes turn bursts away, and a read
+ * that failed must never be taken for "nothing there": an account would drop out of the wallet for the
+ * whole session. Only the node's own verdict ("contract does not exist") is passed on at once.
+ */
+async function steady<T>(read: () => Promise<T>, tries = 3): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await read();
+    } catch (e) {
+      if (isRefusal(e) || i >= tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+}
+/** Is the pqwallet contract at this address, with a key registered? "No" only on the node's word; throws when it cannot be asked. */
+async function contractAt(chain: Chain, address: string): Promise<{ deployed: boolean; keyRegistered: boolean }> {
+  try {
+    const info = decodeGetInfoResult(await steady(() => chain.read(address, PQWALLET_ENTRY.get_info)));
+    return { deployed: info.publicKeyBytes === 1312, keyRegistered: info.keyRegistered };
+  } catch (e) {
+    if (isRefusal(e)) return { deployed: false, keyRegistered: false }; // the node judged: no such contract
+    throw e;
+  }
+}
+
 async function activeWith(chain: Chain, address: string, keys: PqKeys): Promise<boolean> {
-  const info = await pqwalletInfo(chain, address);
+  const info = await contractAt(chain, address);
   if (!info.deployed || !info.keyRegistered) return false;
-  const pk = await registeredPublicKey(chain, address);
+  const pk = await steady(() => registeredPublicKey(chain, address));
   return !!pk && pk.length === keys.publicKey.length && pk.every((b, i) => b === keys.publicKey[i]);
 }
 
@@ -114,9 +140,9 @@ export async function detectAccount(chain: Chain, keys: PqKeys): Promise<string 
   const bootstrap = bootstrapAddress(keys); // before any await: a lock during the wait zeroes the seed
   await chain.headHeight();
   for (const address of [bootstrap, LEGACY_COLLISION_ADDRESS]) {
-    const info = await pqwalletInfo(chain, address);
+    const info = await contractAt(chain, address);
     if (!info.deployed || !info.keyRegistered) continue;
-    const pk = await registeredPublicKey(chain, address);
+    const pk = await steady(() => registeredPublicKey(chain, address));
     if (pk && pk.length === keys.publicKey.length && pk.every((b, i) => b === keys.publicKey[i])) return address;
   }
   return null;

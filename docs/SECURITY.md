@@ -504,9 +504,30 @@ Everything left in "Found, not fixed yet" above, taken in turn. Tests: the last 
   of storage format to the part that keeps duress mode honest, and it wants its own design and tests
   rather than a line in a batch. The exposure needs a decoy with more than a kilobyte in one store
   (about thirteen named accounts).
-- *WalletConnect's own storage is not encrypted* (session topics and account addresses). It belongs to
-  the library; sealing it would mean replacing its storage layer.
+- *WalletConnect's own storage is not encrypted.* Closed in 0.18.3, see below.
 - *The legacy shared address is taken on the node's word.* Every read is; a second node to cross-check
   would be the fix, for one address that one wallet owns.
 - *A node that withholds a signed burn can still broadcast it* until the account's next transaction.
   The wallet now blocks a second burn and finds the first; it cannot recall a signature.
+
+## 0.18.3 (2026-11-24): WalletConnect leaves nothing at rest; account detection survives a node that does not answer
+
+**WalletConnect.** The client library keeps its records in the app's own IndexedDB, unencrypted: session
+and pairing topics with their keys, the dapps' names, and the account addresses shared with them. At rest
+that named a wallet's dapps and addresses to anyone with the app's data, including someone shown only the
+decoy, which duress mode promises cannot happen. Sealing the library's storage would mean replacing its
+storage layer, so the rule is instead that a session never outlives an unlocked wallet: on every lock
+all sessions and pairings are ended (the dapps are told) and the client's records are cleared, and at
+every start anything left over (the app was killed while unlocked, or an older version kept sessions) is
+cleared before anything reads it (, , test ). The
+cost: a dapp connected through WalletConnect is connected again after each unlock. The records are
+cleared, not the database deleted, because that works while the client still has it open; the client's
+own identity key may be written back while it runs and names nothing. Checked against a stand-in for
+IndexedDB, not yet on a device.
+
+**Account detection.** A read the node did not answer was taken for "no contract there", so an account
+could drop out of the wallet for the whole session when a public node turned a burst away (it showed up
+as a test that failed now and then). Detection now tries an unanswered read three times, accepts "no"
+only as the node's own verdict, and is tried again in the background when it could not be done
+(, test in ). The activation path keeps its own reads
+as they were.

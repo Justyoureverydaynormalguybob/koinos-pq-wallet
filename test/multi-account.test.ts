@@ -37,6 +37,9 @@ const manaOf = new Map<string, string>();
 type Tx = { id: string; header: { payer: string }; operations: unknown[]; signatures: string[] };
 const submitted: Tx[] = [];
 const reads: string[] = [];
+/** addresses whose next read the node answers with a gateway error page instead of JSON */
+const flakyOnce = new Set<string>();
+const FLAKE = Symbol("flake");
 function answer(req: { method: string; params: Record<string, unknown> }): unknown {
   if (req.method === "chain.get_head_info") return { head_topology: { height: "100" } };
   if (req.method === "chain.get_account_rc") return { rc: manaOf.get((req.params as { account: string }).account) ?? "500000000" };
@@ -46,6 +49,7 @@ function answer(req: { method: string; params: Record<string, unknown> }): unkno
   if (req.method === "chain.read_contract") {
     const { contract_id, entry_point } = req.params as { contract_id: string; entry_point: number };
     reads.push(`${contract_id}:${entry_point.toString(16)}`);
+    if (flakyOnce.delete(contract_id)) return FLAKE;
     const pk = active.get(contract_id);
     if (entry_point === PQWALLET_ENTRY.get_info) return { result: pk ? infoResult : "" };
     if (entry_point === PQWALLET_ENTRY.get_public_key) return { result: pk ? keyResult(pk) : "" };
@@ -67,7 +71,14 @@ beforeAll(async () => {
     req.on("end", () => {
       const r = JSON.parse(body) as { id: number; method: string; params: Record<string, unknown> };
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: answer(r) }));
+      const result = answer(r);
+      if (result === FLAKE) {
+        res.statusCode = 502;
+        res.setHeader("content-type", "text/html");
+        res.end("<html><body>Bad gateway</body></html>");
+        return;
+      }
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: r.id, result }));
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -98,6 +109,16 @@ describe("finding a wallet's accounts", () => {
     expect(addressOf(1)).not.toBe(addressOf(0));
     expect(new Set([0, 1, 2, 3].map(addressOf)).size).toBe(4);
   });
+
+  it("a read the node did not answer is tried again, never taken for \"no account there\"", async () => {
+    activate(0, 1, 2);
+    const master = deriveKeys(SEED);
+    flakyOnce.add(addressOf(1));
+    flakyOnce.add(addressOf(0));
+    const found = await detectAccounts(chain(), master);
+    expect(found.map((f) => f.key)).toEqual([0, 1, 2]);
+    expect(flakyOnce.size).toBe(0); // both failures really happened
+  }, 30_000);
 
   it("keeps one key pair per account for as long as the wallet is open, and wipes them with it", () => {
     const master = deriveKeys(SEED);

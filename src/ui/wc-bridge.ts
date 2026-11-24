@@ -48,6 +48,57 @@ export const WC_METADATA = {
   icons: ["https://wallet.koinosproof.com/icons/icon-192.png"],
 };
 
+/** Where the WalletConnect client keeps its records in this app's own storage. */
+export const WC_DB = "WALLET_CONNECT_V2_INDEXED_DB";
+
+/**
+ * Removes everything the WalletConnect client stored on this device: its database's records (session and
+ * pairing topics, their keys, the dapps' names and the account addresses shared with them) and any "wc@2"
+ * entries in local storage. The client does not encrypt these, so they must not outlive an unlocked
+ * wallet: at rest they would name a wallet's dapps and addresses, also to someone shown only the decoy.
+ * The records are cleared rather than the database deleted, which works while a client still has it open.
+ */
+export async function wipeWcStorage(): Promise<void> {
+  try {
+    const ls = globalThis.localStorage;
+    if (ls) for (const k of Object.keys(ls)) if (k.startsWith("wc@2") || k.startsWith("WALLETCONNECT") || k.startsWith("WCM_") || k.startsWith("@w3m")) ls.removeItem(k);
+  } catch {
+    /* no local storage here */
+  }
+  const idb = globalThis.indexedDB;
+  if (!idb) return;
+  try {
+    // never open a database that is not there: that would create an empty one the client then cannot set up
+    const known = typeof idb.databases === "function" ? (await idb.databases()).some((d) => d.name === WC_DB) : false;
+    if (!known) return;
+    await new Promise<void>((done) => {
+      const open = idb.open(WC_DB);
+      open.onerror = open.onblocked = () => done();
+      open.onsuccess = () => {
+        const db = open.result;
+        try {
+          const names = [...db.objectStoreNames];
+          if (!names.length) {
+            db.close();
+            return done();
+          }
+          const tx = db.transaction(names, "readwrite");
+          for (const n of names) tx.objectStore(n).clear();
+          tx.oncomplete = tx.onerror = tx.onabort = () => {
+            db.close();
+            done();
+          };
+        } catch {
+          db.close();
+          done();
+        }
+      };
+    });
+  } catch {
+    /* the storage could not be reached: the next start tries again */
+  }
+}
+
 export class WcBridge {
   private kit: Kit | null = null;
   private utils: UtilsModule | null = null;
@@ -75,7 +126,39 @@ export class WcBridge {
     this.owned.clear();
   }
 
+  private ending: Promise<void> | null = null;
+  /**
+   * The wallet locked: every session and pairing is ended (so the dapps know) and what the
+   * client stored is removed. The relay connection is left to the client: with no session there is nothing
+   * for it to carry, and closing it by hand stops the client reconnecting after the next unlock. Nothing about WalletConnect is left at rest; after the
+   * next unlock a dapp is connected again from its code. Needs no key, so the lock itself does not wait.
+   */
+  endAll(): Promise<void> {
+    if (this.ending) return this.ending;
+    const kit = this.kit, utils = this.utils;
+    this.kit = null; // the next unlock starts a fresh client
+    this.startedBy.clear();
+    this.ending = (async () => {
+      if (kit && utils) {
+        for (const s of Object.values(kit.getActiveSessions()) as Array<{ topic: string }>) {
+          await kit.disconnectSession({ topic: s.topic, reason: utils.getSdkError("USER_DISCONNECTED") }).catch(() => undefined);
+        }
+        try {
+          const core = (kit as unknown as { core: { pairing: { getPairings(): Array<{ topic: string }>; disconnect(o: { topic: string }): Promise<void> } } }).core;
+          for (const p of core.pairing.getPairings()) await core.pairing.disconnect({ topic: p.topic }).catch(() => undefined);
+        } catch {
+          /* an older client without these: the storage wipe below still runs */
+        }
+      }
+      await wipeWcStorage();
+    })().finally(() => {
+      this.ending = null;
+    });
+    return this.ending;
+  }
+
   private async start(): Promise<Kit> {
+    if (this.ending) await this.ending; // a lock still tidying up: the new client starts on clean storage
     if (this.kit) return this.kit;
     if (this.starting) return this.starting;
     const projectId = this.deps?.projectId();
