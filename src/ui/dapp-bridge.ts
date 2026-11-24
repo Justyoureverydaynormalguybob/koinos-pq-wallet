@@ -27,7 +27,7 @@ export const RELAY_SHIM = `(() => {
   // "Reset this site" in the wallet: everything this origin stored on the device goes (local and session
   // storage, IndexedDB, caches) and the page loads again. A page gains nothing by calling it: it can only
   // ever clear its own origin's data, which it could do anyway.
-  const clearSiteData = async () => {
+  const clearSiteData = async (reload) => {
     try { window.localStorage.clear(); } catch (e) {}
     try { window.sessionStorage.clear(); } catch (e) {}
     try {
@@ -39,12 +39,22 @@ export const RELAY_SHIM = `(() => {
       })));
     } catch (e) {}
     try { for (const k of await window.caches.keys()) await window.caches.delete(k); } catch (e) {}
-    window.location.reload();
+    try {
+      // the cookies a script can reach (HttpOnly ones are the browser's to keep)
+      for (const c of document.cookie.split(";")) {
+        const name = c.split("=")[0].trim();
+        if (name) document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+      }
+    } catch (e) {}
+    if (reload) window.location.reload();
+    // leaving the page: tell the wallet the site's data is gone, so it can close the view
+    else send({ id: "pq-site-cleared", command: "pq:site-cleared", args: null, origin: window.location.origin });
   };
   window.__pqDeliver = (json) => {
     try {
       const m = JSON.parse(json);
-      if (m && m.pqCommand === "clear-site-data") return void clearSiteData();
+      if (m && m.pqCommand === "clear-site-data") return void clearSiteData(true);
+      if (m && m.pqCommand === "clear-site-data-quiet") return void clearSiteData(false);
       if (!m || typeof m.id !== "string") return;
       if (m.error !== undefined) window.postMessage({ id: m.id, error: String(m.error) }, "*");
       else window.postMessage({ id: m.id, result: revive(m.result) }, "*");

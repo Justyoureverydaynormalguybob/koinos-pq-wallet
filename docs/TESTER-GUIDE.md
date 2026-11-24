@@ -35,14 +35,16 @@ post-quantum-signed transfer is transaction
 
 ## You need
 
-- A current browser on a computer.
+- The browser extension on a computer (Chrome, Edge or Brave), or the Android app. Both are on the
+  [releases page](https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/releases); how to
+  install each is further down this page.
 - Some KOIN in Kondor (about 70 to be comfortable).
 
 ## Steps
 
-1. **Open the wallet:** https://wallet.koinosproof.com. Nothing leaves the page except calls to the
-   Koinos node; the site is static files and keeps nothing of yours. If you would rather run it
-   yourself (Node.js 20 or newer and git):
+1. **Open the wallet:** the extension's icon in the browser toolbar, or the app on your phone. Nothing
+   leaves it except calls to the Koinos node; it keeps nothing of yours anywhere else. If you would
+   rather build and run it yourself (Node.js 20 or newer and git):
    ```
    git clone https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet
    cd koinos-pq-wallet

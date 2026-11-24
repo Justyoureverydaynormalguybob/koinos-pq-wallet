@@ -167,7 +167,9 @@ describe("several accounts through the screens (jsdom, a fake node over HTTP)", 
     click(root, "import");
     await submit(root, "import", { seed: bytesToHex(SEED) });
     await submit(root, "passphrase", { p1: "main kettle orbit plank", p2: "main kettle orbit plank" });
-    await new Promise((r) => setTimeout(r, 600));
+    // the accounts are found by reads that take longer on a loaded machine: wait for the picker, not a fixed time
+    for (let i = 0; i < 100 && ![...root.querySelectorAll('select[name="account"] option')].some((o) => /^Account 2/.test(o.textContent!.trim())); i++) await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 300));
 
     // the picker: the native address (devnet only), the first account and "Account 2"
     const picker = () => root.querySelector<HTMLSelectElement>('select[name="account"]')!;

@@ -401,5 +401,6 @@
   "This request says it comes from the address above, but it was started by the page {page}. Reject it unless you expected that.": "This request says it comes from the address above, but it was started by the page {page}. Reject it unless you expected that.",
   "wants to connect through WalletConnect.": "wants to connect through WalletConnect.",
   "The page asked without a tap on its connect button, so nothing has been started. Connect only if you were connecting your wallet to this site just now.": "The page asked without a tap on its connect button, so nothing has been started. Connect only if you were connecting your wallet to this site just now.",
-  "Ignore": "Ignore"
+  "Ignore": "Ignore",
+  "Wait until the activation has finished before locking.": "Wait until the activation has finished before locking."
 }

@@ -175,6 +175,12 @@ export type Outcome = { result: unknown } | { error: string; status?: string };
  * excluded here); the detected account is looked up. Refuses, again, anything that touches one of the
  * wallet's own accounts. Never throws for a user-facing refusal; the outcome says what happened.
  */
+/**
+ * The name every account carries when a dapp is shown it. The wallet's own names ("Account 3", or a label
+ * the user typed) would tell a site how many accounts there are, or something the user wrote for themselves.
+ */
+export const DAPP_ACCOUNT_NAME = "Sparán account";
+
 export async function executePlan(p: Plan, keys: PqKeys, stored: AccountRecord[], onStatus: (s: string) => void = () => undefined, only?: ReadonlyArray<string>): Promise<Outcome> {
   const chain = new Chain(p.net);
   if (keysWiped(keys)) return { error: "request failed in the wallet", status: "The wallet locked." };
@@ -183,7 +189,7 @@ export async function executePlan(p: Plan, keys: PqKeys, stored: AccountRecord[]
   if (keysWiped(keys)) return { error: "request failed in the wallet", status: "The wallet locked." };
   const accounts: WalletAccount[] = walletAccounts(keys, stored, p.net.name, detected);
   // `only`: the accounts the user chose to show this site (absent: all the wallet can sign for here)
-  if (p.req.command === "getAccounts") return { result: accounts.filter((x) => !only || only.includes(x.address)).map((x) => ({ name: x.name, address: x.address, signers: [] })) };
+  if (p.req.command === "getAccounts") return { result: accounts.filter((x) => !only || only.includes(x.address)).map((x) => ({ name: DAPP_ACCOUNT_NAME, address: x.address, signers: [] })) };
   const acct = accounts.find((x) => x.address === p.signerAddress);
   if (!acct) return { error: "request failed in the wallet", status: "This wallet has no such account on this network." };
   // no operation may touch any account of this wallet (its key, allow-list or code)

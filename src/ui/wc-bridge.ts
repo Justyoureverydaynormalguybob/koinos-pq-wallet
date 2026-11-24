@@ -151,6 +151,14 @@ export class WcBridge {
     }
   }
 
+  /** Ends the sessions whose pairing was started from an in-app page of this origin (the page is being left, and its side of them cleared). */
+  async endStartedBy(origin: string): Promise<void> {
+    if (!this.kit || !origin) return;
+    for (const s of Object.values(this.kit.getActiveSessions()) as Array<{ topic: string; pairingTopic?: string }>) {
+      if (this.owned.has(s.topic) && this.startedBy.get(String(s.pairingTopic ?? "").toLowerCase()) === origin) await this.disconnect(s.topic);
+    }
+  }
+
   async disconnect(topic: string): Promise<void> {
     if (!this.kit || !this.utils) return;
     await this.kit.disconnectSession({ topic, reason: this.utils.getSdkError("USER_DISCONNECTED") }).catch(() => undefined);

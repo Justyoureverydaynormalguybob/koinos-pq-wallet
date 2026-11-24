@@ -67,6 +67,13 @@ const PROVIDER_WINDOW_MS = 10_000;
 /** provider commands a page is never allowed to issue through the wallet */
 const PROVIDER_DENIED = new Set(["provider:submitBlock", "provider:invokeSystemCall"]);
 
+const originOf = (url: string): string => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+};
 /** http is tolerated only for a developer's own machine; everything else must be https. */
 export function isAcceptableOrigin(origin: string): boolean {
   let u: URL;
@@ -126,6 +133,7 @@ export class DappHost {
     this.handles.push(
       await this.plugin.addListener("message", (e) => void this.onMessage(e.json, e.origin, e.mainFrame)),
       await this.plugin.addListener("navigation", (e) => {
+        if (originOf(this.url) !== originOf(e.url)) this.dropPageRequests();
         this.url = e.url;
         this.title = e.title;
         this.canGoBack = e.canGoBack;
@@ -156,6 +164,12 @@ export class DappHost {
   }
   async navigate(url: string): Promise<void> {
     if (!/^https?:\/\//.test(url)) throw new Error("only http(s) pages can be opened");
+    // typing another site's address into the bar leaves this one: its stored data goes first
+    try {
+      if (this.url && new URL(url).origin !== new URL(this.url).origin) await this.clearSite();
+    } catch {
+      /* an address that does not parse is refused by the view itself */
+    }
     await this.plugin.navigate({ url });
   }
   async back(): Promise<boolean> {
@@ -187,8 +201,47 @@ export class DappHost {
     if (!this.opened) return;
     await this.plugin.reply({ json: JSON.stringify({ pqCommand: "clear-site-data" }) });
   }
-  /** Closes the page; everything still waiting is answered "rejected". */
+  private cleared: (() => void) | null = null;
+  /**
+   * Leaving a site: what it stored on this device (local and session storage, IndexedDB, caches, the
+   * cookies a script can reach) is cleared first, by the relay script inside the page, so only that origin
+   * is touched. A dapp's saved connection state is what stops it connecting again on the next visit, so no
+   * visit leaves any behind. Waits for the page to say it is done, but never long: a page that does not
+   * answer is closed all the same.
+   */
+  async clearSite(waitMs = 1500): Promise<void> {
+    if (!this.opened) return;
+    const done = new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, waitMs);
+      this.cleared = () => {
+        clearTimeout(t);
+        resolve();
+      };
+    });
+    try {
+      await this.plugin.reply({ json: JSON.stringify({ pqCommand: "clear-site-data-quiet" }) });
+    } catch {
+      this.cleared?.(); // the view is already gone: nothing to wait for
+    }
+    await done;
+    this.cleared = null;
+  }
+  /**
+   * The page moved to another site: what the old one asked is dropped unanswered (there is nobody left to
+   * answer; an answer sent now would land in the new site's page), and work in flight for it is disowned.
+   */
+  private dropPageRequests() {
+    this.generation++;
+    this.queue = this.queue.filter((q) => q.source !== "page");
+    if (this.current?.source === "page") {
+      this.current = null;
+      this.events.onApproval(null);
+      void this.pump();
+    }
+  }
+  /** Closes the page, clearing what its site stored first; everything still waiting is answered "rejected". */
   async close(): Promise<void> {
+    await this.clearSite();
     this.generation++;
     for (const q of this.queue) if (q.source === "page") void this.reply(q.req.id, { error: "rejected by the user" });
     this.queue = this.queue.filter((q) => q.source !== "page");
@@ -269,6 +322,10 @@ export class DappHost {
       return;
     }
     if (!m || typeof m.id !== "string" || m.id.length > 128 || typeof m.command !== "string") return;
+    if (m.command === "pq:site-cleared") {
+      if (mainFrame) this.cleared?.(); // the relay script's word that the site's data is gone; nothing is answered
+      return;
+    }
     // Only the page itself, never an iframe inside it; and only the origin the WebView attributes to it.
     // Whatever the message body claims about its origin is ignored.
     if (!mainFrame) {
@@ -361,8 +418,11 @@ export class DappHost {
       }
     }
     // a site already allowed to see the accounts is answered without asking again
-    if (plan && !next.alwaysAsk && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin)) {
-      await this.execute(claim, plan, this.deps.permissions()?.accountsFor(next.req.origin)); // the same accounts as were chosen then
+    // A grant from before there was a choice has no list, and used to mean "every account, also ones made
+    // later". Such a site is simply asked again, once, and the answer is then remembered with its list.
+    const remembered = this.deps.permissions()?.accountsFor(next.req.origin);
+    if (plan && !next.alwaysAsk && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin) && remembered) {
+      await this.execute(claim, plan, remembered); // the same accounts as were chosen then
       if (closedMeanwhile()) return;
       this.current = null;
       this.events.onApproval(null);
@@ -375,12 +435,12 @@ export class DappHost {
     this.events.onApproval(claim);
   }
 
-  private async execute(q: { req: DappRequest; respond?: Respond }, plan: Plan, only?: ReadonlyArray<string>) {
+  private async execute(q: { req: DappRequest; respond?: Respond }, plan: Plan, only?: ReadonlyArray<string>): Promise<string[] | undefined> {
     const req = q.req;
     const keys = this.deps.keys();
     if (!keys) {
       await this.answer(q, { error: "the wallet is locked" });
-      return;
+      return undefined;
     }
     const outcome = await executePlan(plan, keys, this.deps.accounts(), (s) => {
       if (this.current?.req.id === req.id) {
@@ -390,6 +450,9 @@ export class DappHost {
     }, only);
     await this.answer(q, "error" in outcome ? { error: outcome.error } : { result: outcome.result });
     if ("error" in outcome && outcome.status) throw new Error(outcome.status); // the asker got its answer; the user sees why it failed
+    // for a request to see the accounts: the addresses that were in the answer
+    if (!("error" in outcome) && req.command === "getAccounts" && Array.isArray(outcome.result)) return (outcome.result as Array<{ address: string }>).map((x) => x.address);
+    return undefined;
   }
 
   /**
@@ -413,8 +476,9 @@ export class DappHost {
     const gen = this.generation;
     const stillHere = () => (c.source === "page" ? gen === this.generation : true);
     try {
-      await this.execute(c, c.plan, c.req.command === "getAccounts" ? only : undefined);
-      if (stillHere() && c.source === "page" && c.req.command === "getAccounts") this.deps.permissions()?.allow(c.req.origin, only);
+      const shown = await this.execute(c, c.plan, c.req.command === "getAccounts" ? only : undefined);
+      // what is remembered is exactly the accounts that were shown, never an open-ended "all"
+      if (stillHere() && c.source === "page" && c.req.command === "getAccounts" && shown) this.deps.permissions()?.allow(c.req.origin, shown);
     } finally {
       if (stillHere() && this.current === c) {
         this.current = null;

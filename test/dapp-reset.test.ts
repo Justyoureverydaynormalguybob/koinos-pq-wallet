@@ -68,3 +68,103 @@ describe("resetting a site in the in-app browser", () => {
     expect(got.length).toBe(1); // the command itself is not passed to the page
   });
 });
+
+describe("leaving a site clears what it stored", () => {
+  function setup() {
+    const order: string[] = [];
+    const listeners: Record<string, Array<(e: unknown) => void>> = {};
+    const plugin = {
+      async open() {},
+      async close() {
+        order.push("close");
+      },
+      async navigate(o: { url: string }) {
+        order.push("navigate " + o.url);
+      },
+      async reply(o: { json: string }) {
+        order.push("reply " + o.json);
+      },
+      addListener: (async (event: string, fn: (e: unknown) => void) => {
+        (listeners[event] ??= []).push(fn);
+        return { remove: async () => undefined };
+      }) as PqBrowserPlugin["addListener"],
+    } as unknown as PqBrowserPlugin;
+    const host = new DappHost(
+      plugin,
+      { onNavigation: () => undefined, onClosed: () => void order.push("onClosed"), onApproval: () => undefined },
+      { network: () => ({}) as never, keys: () => null, accounts: () => [], permissions: () => null, bridgeScript: async () => "/* bridge */" },
+    );
+    const pageSays = (command: string, mainFrame = true) => (listeners.message ?? []).forEach((fn) => fn({ json: JSON.stringify({ id: "pq-site-cleared", command }), origin: "https://app.example", mainFrame }));
+    return { host, order, pageSays };
+  }
+  const QUIET = 'reply {"pqCommand":"clear-site-data-quiet"}';
+
+  it("closing a page clears its site first and closes once the page says it is done", async () => {
+    const { host, order, pageSays } = setup();
+    await host.open("https://app.example/", { top: 0, bottom: 0 });
+    const closing = host.close();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(order).toEqual([QUIET]); // asked to clear, not closed yet
+    pageSays("pq:site-cleared", false); // a frame's word does not count
+    await new Promise((r) => setTimeout(r, 30));
+    expect(order).toEqual([QUIET]);
+    pageSays("pq:site-cleared");
+    await closing;
+    expect(order).toEqual([QUIET, "close", "onClosed"]);
+  });
+
+  it("a page that never answers is closed all the same, after a short wait", async () => {
+    const { host, order } = setup();
+    await host.open("https://app.example/", { top: 0, bottom: 0 });
+    const t0 = Date.now();
+    await host.close();
+    expect(Date.now() - t0).toBeLessThan(2500);
+    expect(order).toEqual([QUIET, "close", "onClosed"]);
+    await host.close(); // nothing open now: nothing is sent
+    expect(order.filter((x) => x === QUIET)).toHaveLength(1);
+  });
+
+  it("typing another site's address clears the one being left; moving within a site does not", async () => {
+    const { host, order, pageSays } = setup();
+    await host.open("https://app.example/", { top: 0, bottom: 0 });
+    await host.navigate("https://app.example/pools");
+    expect(order).toEqual(["navigate https://app.example/pools"]);
+    const going = host.navigate("https://other.example/");
+    await new Promise((r) => setTimeout(r, 30));
+    pageSays("pq:site-cleared");
+    await going;
+    expect(order).toEqual(["navigate https://app.example/pools", QUIET, "navigate https://other.example/"]);
+  });
+
+  it("the relay clears storage, cookies and databases without reloading, and reports back", async () => {
+    const w = window as unknown as { __pqRelay?: boolean; __pqDeliver: (json: string) => void; PqBridge?: { postMessage: (j: string) => void } };
+    delete w.__pqRelay;
+    const told: Array<{ command?: string; origin?: string }> = [];
+    w.PqBridge = { postMessage: (j) => void told.push(JSON.parse(j)) };
+    new Function(RELAY_SHIM)();
+    localStorage.setItem("wc@2:client:0.3//session", "stale");
+    sessionStorage.setItem("s", "1");
+    document.cookie = "connected=1; path=/";
+    const deleted: string[] = [];
+    Object.defineProperty(window, "indexedDB", {
+      configurable: true,
+      value: {
+        databases: async () => [{ name: "WALLET_CONNECT_V2_INDEXED_DB" }],
+        deleteDatabase: (name: string) => {
+          deleted.push(name);
+          const q: { onsuccess?: () => void } = {};
+          setTimeout(() => q.onsuccess?.(), 0);
+          return q;
+        },
+      },
+    });
+    w.__pqDeliver(JSON.stringify({ pqCommand: "clear-site-data-quiet" }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+    expect(deleted).toEqual(["WALLET_CONNECT_V2_INDEXED_DB"]);
+    expect(document.cookie).not.toMatch(/connected=1/);
+    expect(told.filter((m) => m.command === "pq:site-cleared")).toHaveLength(1);
+    delete w.PqBridge;
+  });
+});

@@ -401,5 +401,6 @@
   "This request says it comes from the address above, but it was started by the page {page}. Reject it unless you expected that.": "Este pedido diz vir do endereço acima, mas foi iniciado pela página {page}. Rejeita-o a não ser que o esperasses.",
   "wants to connect through WalletConnect.": "quer ligar-se através do WalletConnect.",
   "The page asked without a tap on its connect button, so nothing has been started. Connect only if you were connecting your wallet to this site just now.": "A página pediu-o sem um toque no botão de ligar, por isso nada foi iniciado. Liga só se estavas a ligar a tua carteira a este site agora mesmo.",
-  "Ignore": "Ignorar"
+  "Ignore": "Ignorar",
+  "Wait until the activation has finished before locking.": "Espera que a ativação termine antes de bloquear."
 }

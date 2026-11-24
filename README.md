@@ -117,8 +117,9 @@ scripts/                end-to-end test of the extension (devnet), CSP smoke tes
 test/                   vectors shared with the koinos-chain tests, signature formats, vault round trip
 ```
 
-**Live:** https://wallet.koinosproof.com (the web wallet), https://wallet.koinosproof.com/demo/ (the
-test dapp for the extension), https://wallet.koinosproof.com/version.json (what is deployed).
+**Get it:** the Android app and the browser extension, from the
+[releases page](https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/releases). The test
+dapp for the extension is at https://wallet.koinosproof.com/demo/.
 
 Want to try it? Read [docs/TESTER-GUIDE.md](docs/TESTER-GUIDE.md) first: what it costs, what to back up,
 and the steps for a mainnet account. For the extension: [docs/EXTENSION-TESTING.md](docs/EXTENSION-TESTING.md),

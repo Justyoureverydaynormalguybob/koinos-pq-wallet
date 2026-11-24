@@ -54,6 +54,8 @@ function fakeBrowser() {
     async setSecure() {},
     async reply(o) {
       replies.push(JSON.parse(o.json));
+      // the page's relay answers "clear what this site stored" at once, as a real page does
+      if (JSON.parse(o.json).pqCommand === "clear-site-data-quiet") pageSends({ id: "pq-site-cleared", command: "pq:site-cleared" });
     },
     addListener: (async (event: string, fn: (e: unknown) => void) => {
       (listeners[event] ??= []).push(fn);

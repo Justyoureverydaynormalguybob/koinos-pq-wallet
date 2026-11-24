@@ -309,6 +309,10 @@ export function sameSite(a: string, b: string): boolean {
     return false;
   }
 }
+/** How long a banner message stays: long enough to read it (about 50 ms a character), 6 to 12 seconds, an error 3 s more. */
+export function bannerMs(text: string, kind: "notice" | "error"): number {
+  return Math.min(12_000, Math.max(6_000, 4_000 + 50 * text.length)) + (kind === "error" ? 3_000 : 0);
+}
 /** How long an unanswered burn blocks another one from the same account (a node drops a waiting transaction well before this). */
 const UNCONFIRMED_HOLD_MS = 10 * 60_000;
 const PRICE_TTL_MS = 5 * 60_000;
@@ -621,12 +625,38 @@ export class App {
     this.render();
   }
   /** Clears `text` from the notice line after `ms`, unless something else has replaced it by then. */
+  /**
+   * THE RULE: every message in the banner at the top (s.notice, s.error) goes away by itself after a few
+   * seconds. Nothing has to ask for it; setting the message is enough. The time grows with the length of
+   * the text, and an error stays a little longer than a notice. The element is taken out without drawing
+   * the screen again, so a form being filled in is left alone. What must stay until the user acts (a
+   * request to approve, an account waiting to be activated, "Try again") belongs in the screen, not here.
+   */
+  private bannerTimers: { notice?: { text: string; id: number }; error?: { text: string; id: number } } = {};
+  private autoHideBanners() {
+    for (const kind of ["notice", "error"] as const) {
+      const text = this.s[kind];
+      const running = this.bannerTimers[kind];
+      if (running && running.text === text) continue; // already counting down for this message
+      if (running) window.clearTimeout(running.id);
+      this.bannerTimers[kind] = undefined;
+      if (!text) continue;
+      const ms = bannerMs(text, kind);
+      const id = window.setTimeout(() => {
+        this.bannerTimers[kind] = undefined;
+        if (this.s[kind] !== text) return;
+        this.s[kind] = null;
+        this.root.querySelector<HTMLElement>(`[data-banner="${kind}"]`)?.remove();
+      }, ms);
+      this.bannerTimers[kind] = { text, id };
+    }
+  }
   private fadeNotice(text: string, ms: number) {
     window.clearTimeout(this.noticeTimer);
     this.noticeTimer = window.setTimeout(() => {
       if (this.s.notice !== text) return;
       this.s.notice = null;
-      const el = this.root.querySelector<HTMLElement>(".note.ok");
+      const el = this.root.querySelector<HTMLElement>('[data-banner="notice"]');
       if (el && !this.s.busy) el.remove();
       else this.render();
     }, ms);
@@ -669,6 +699,8 @@ export class App {
       return;
     }
     const [balance, mana, head] = await Promise.allSettled([chain.balance(a.address), chain.mana(a.address), chain.headHeight()]);
+    // the account or network changed while the reads were out: these figures belong to the old view
+    if (this.network.name !== net || this.account()?.address !== a.address) return;
     this.s.mana = mana.status === "fulfilled" ? mana.value : null;
     this.s.head = head.status === "fulfilled" ? head.value : null;
     if (balance.status === "fulfilled") {
@@ -1277,6 +1309,12 @@ export class App {
           if (bar && document.activeElement !== bar) bar.value = e.url;
         },
         onClosed: () => {
+          // the site's own data was cleared on the way out, so a WalletConnect session it started is dead on its side: end ours too
+          try {
+            if (this.s.dapp.url) void this.wc.endStartedBy(new URL(this.s.dapp.url).origin).catch(() => undefined);
+          } catch {
+            /* no address to go by */
+          }
           this.s.dapp = emptyDapp();
           if (this.s.screen === "dapps") this.render();
         },
@@ -1578,6 +1616,12 @@ export class App {
         this.go("welcome");
         break;
       case "lock":
+        if (this.s.setup?.running) {
+          // locking wipes the keys the activation is about to sign with: it would fail and spend its mana
+          this.s.error = tr("Wait until the activation has finished before locking.");
+          this.render();
+          break;
+        }
         this.lock();
         break;
       case "refresh":
@@ -2364,8 +2408,8 @@ export class App {
     const inApp = !!tab && !!s.keys;
     const notes = [
       s.busy ? notice("busy", `${esc(s.busy)}…`) : "",
-      s.error ? notice("danger", esc(s.error)) : "",
-      s.notice ? notice("ok", esc(s.notice)) : "",
+      s.error ? `<div data-banner="error">${notice("danger", esc(s.error))}</div>` : "",
+      s.notice ? `<div data-banner="notice">${notice("ok", esc(s.notice))}</div>` : "",
     ].join("");
     this.root.innerHTML = `
       <div class="shell">
@@ -2378,6 +2422,7 @@ export class App {
         </div>
         ${inApp ? tabBar(this.tabs(), tab) : ""}
       </div>`;
+    this.autoHideBanners();
     const canvas = this.root.querySelector<HTMLCanvasElement>("canvas#qr");
     if (canvas) {
       const a = this.account();

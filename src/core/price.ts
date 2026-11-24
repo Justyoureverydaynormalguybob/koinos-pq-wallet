@@ -12,12 +12,16 @@ export const KOIN_USD_PAIR: Record<string, string> = {
 const GET_RESERVES = 0x6d0c5abf;
 
 /** get_reserves_result { string kLast = 1; uint64 reserveA = 2; uint64 reserveB = 3; uint64 blockTime = 4; } -> dollars per KOIN */
+/** A KOIN price outside this range is not shown: it is a broken pool or a node making it up. */
+export const PRICE_MIN = 0.000001, PRICE_MAX = 10_000;
+
 export function priceFromReserves(result: Uint8Array): number | null {
   const f = decodeFields(result);
   const a = f.get(2)?.[0], b = f.get(3)?.[0];
   if (typeof a !== "bigint" || typeof b !== "bigint" || a <= 0n || b <= 0n) return null;
   const price = Number(b) / Number(a);
-  return Number.isFinite(price) && price > 0 ? price : null;
+  // The figure is the node's or the pool's word. Outside any price KOIN could have, nothing is shown at all.
+  return Number.isFinite(price) && price >= PRICE_MIN && price <= PRICE_MAX ? price : null;
 }
 
 /** Dollars per KOIN on this network, or null where there is no pool (testnets) or it cannot be read. */
@@ -31,13 +35,16 @@ export async function koinUsd(chain: Chain): Promise<number | null> {
   }
 }
 
-/** "$12.34", "$1,234", "$0.0191" (small prices keep four significant digits), "<$0.01" never: an amount is shown as it is. */
+/** "$12.34", "$1,234", "$0.0191" (small prices keep three significant digits, written out in full), "<$0.01" never: an amount is shown as it is. */
 export function fmtUsd(v: number): string {
   if (!Number.isFinite(v) || v < 0) return "$?";
   if (v === 0) return "$0";
   if (v >= 1000) return `$${Math.round(v).toLocaleString("en-US")}`;
   if (v >= 1) return `$${v.toFixed(2)}`;
-  return `$${Number(v.toPrecision(3))}`;
+  if (v < 0.00000001) return "<$0.00000001";
+  // three significant digits, written out in full: never "1e-7"
+  const digits = Math.min(10, 2 - Math.floor(Math.log10(v)));
+  return `$${v.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "")}`;
 }
 
 /** The dollar value of an amount in KOIN base units (8 decimals). */

@@ -461,3 +461,52 @@ web surface again. Not a third-party audit.
   The site still serves **0.15.10** (it deploys by hand), so none of 0.16 to 0.18 is live there.
   `npm audit --omit=dev`: 6 moderate findings, all under `@capacitor/cli` (glob, minimatch, uuid), build
   tooling that does not ship.
+
+## Follow-up 2026-11-24 (wallet 0.18.2): the rest of the pen-test list
+
+Everything left in "Found, not fixed yet" above, taken in turn. Tests: the last block of
+`test/pentest-2026-11.test.ts`, `test/dapp-reset.test.ts`, `test/banner.test.ts`, and koinos-pq-core
+`test/abi-lite.test.ts`, `test/history.test.ts`.
+
+**Fixed**
+
+- *A site allowed before 0.17 saw every account, including later ones.* A grant is now remembered with
+  exactly the accounts that were shown. A grant with no list is no longer answered silently: the site is
+  asked again once.
+- *The account name sent to a dapp gave the count away.* Every account is called "Sparán account" to a
+  dapp; the wallet's own names and numbers stay in the wallet.
+- *An answer was not tied to the page that asked.* When the page moves to another site, the old site's
+  waiting requests are dropped unanswered and work in flight for them is disowned.
+- *Lock during an activation.* Refused, with the reason, until the activation has finished.
+- *A balance read for one account could show on another for a few seconds.* `refresh()` discards reads
+  when the account or network changed while they were out, as `liveTick` already did.
+- *The dollar figure.* A price outside 0.000001 to 10,000 dollars is not shown, and small figures are
+  written out in full, never with an exponent.
+- *Core:* the argument encoders refuse anything that is not a 25-byte checksummed address; a bool sent
+  twice reads as its last value; one unreadable history row is listed as a plain transaction instead of
+  blanking the list; `scripts/testnet-burn.mjs` needs `--mainnet` to run there and counts only the
+  chain's own refusal as a pass.
+
+**Also in 0.18.2**
+
+- *Leaving a site clears what it stored.* Closing a page, opening another dapp, or typing another site's
+  address clears the old site's local and session storage, IndexedDB, caches and script-readable cookies
+  first (the relay script does it inside the page, so only that origin is touched), and ends any
+  WalletConnect session that page started. A dapp's stale saved connection is what stopped it connecting
+  on the next visit. Switching between the wallet's own tabs, or putting the page aside with the list
+  button, leaves the page open and clears nothing.
+- *Banner messages hide themselves* after 6 to 12 seconds by length (errors 3 seconds longer).
+
+**Left as they are, with the reason**
+
+- *Two wallets can show in side-store sizes.* Fixing it means one fixed size for every store in every
+  slot, and entries that belong to the other slot cannot be re-sealed without its key. That is a change
+  of storage format to the part that keeps duress mode honest, and it wants its own design and tests
+  rather than a line in a batch. The exposure needs a decoy with more than a kilobyte in one store
+  (about thirteen named accounts).
+- *WalletConnect's own storage is not encrypted* (session topics and account addresses). It belongs to
+  the library; sealing it would mean replacing its storage layer.
+- *The legacy shared address is taken on the node's word.* Every read is; a second node to cross-check
+  would be the fix, for one address that one wallet owns.
+- *A node that withholds a signed burn can still broadcast it* until the account's next transaction.
+  The wallet now blocks a second burn and finds the first; it cannot recall a signature.
