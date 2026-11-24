@@ -519,7 +519,7 @@ decoy, which duress mode promises cannot happen. Sealing the library's storage w
 storage layer, so the rule is instead that a session never outlives an unlocked wallet: on every lock
 all sessions and pairings are ended (the dapps are told) and the client's records are cleared, and at
 every start anything left over (the app was killed while unlocked, or an older version kept sessions) is
-cleared before anything reads it (, , test ). The
+cleared before anything reads it (`WcBridge.endAll`, `wipeWcStorage`, test `test/wc-lock.test.ts`). The
 cost: a dapp connected through WalletConnect is connected again after each unlock. The records are
 cleared, not the database deleted, because that works while the client still has it open; the client's
 own identity key may be written back while it runs and names nothing. Checked against a stand-in for
@@ -529,5 +529,5 @@ IndexedDB, not yet on a device.
 could drop out of the wallet for the whole session when a public node turned a burst away (it showed up
 as a test that failed now and then). Detection now tries an unanswered read three times, accepts "no"
 only as the node's own verdict, and is tried again in the background when it could not be done
-(, test in ). The activation path keeps its own reads
+(`src/core/accounts.ts`, test in `test/multi-account.test.ts`). The activation path keeps its own reads
 as they were.
