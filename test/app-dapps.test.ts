@@ -161,14 +161,17 @@ describe("in-app dapp browser (jsdom, fake plugin)", () => {
     await settle();
     expect(fb.replies.find((r) => r.id === "x2")?.error).toMatch(/https/);
     expect(sheet(root)).toBeNull();
-    // the sheet names the WebView's origin, whatever the message body claimed
+    // the sheet names the WebView's origin, whatever the message body claimed; and that origin never
+    // connected, so it was shown no account and cannot ask one to sign (external review 2026-11-27, item 5)
     fb.pageSends({ id: "x3", command: "signer:signMessage", args: { signerAddress: accounts[0]!.address, message: "hi" }, origin: "https://other.example" });
     await settle();
     expect(root.querySelector("#req")?.textContent).toMatch(/other\.example/);
     expect(text(root)).not.toMatch(/whatever-the-page-claims/);
+    expect(text(root)).toMatch(/was not shown that account/);
+    expect(root.querySelector('[data-action="dapp-approve"]')).toBeNull();
     click(root, "dapp-reject");
     await settle();
-    expect(fb.replies.find((r) => r.id === "x3")?.error).toBe("rejected by the user");
+    expect(fb.replies.find((r) => r.id === "x3")?.error).toBe("refused by the wallet");
 
     // a signing request without a signer is refused; a reject answers "rejected by the user" for a real one
     fb.pageSends({ id: "s1", command: "signer:signMessage", args: { signerAddress: accounts[0]!.address, message: "hello" } });

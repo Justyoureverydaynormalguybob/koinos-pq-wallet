@@ -183,7 +183,21 @@ export async function refreshWrappedKey(file: VaultFile, slot: number, passphras
   }
 }
 
-/** When a slot is overwritten by something the current passphrase does not open (a new decoy): its blob becomes filler. */
+/**
+ * After the passphrase of `slot` was changed (a new salt, so a new slot key): if biometrics are this
+ * slot's (told by the OLD key's tag, so no prompt), the wrap is made again for the new key. Otherwise
+ * nothing is touched: they belong to the other wallet, or are off.
+ */
+export async function followPassphraseChange(previous: VaultFile, next: VaultFile, slot: number, oldPassphrase: string, newPassphrase: string, deps: Omit<BioDeps, "biometry">): Promise<void> {
+  const blobs = deps.blobs.load();
+  if (!blobs || !previous.slots[slot]) return;
+  const oldKey = await deriveSlotKeyBytes(previous.slots[slot]!, oldPassphrase);
+  const mine = tagged(blobs[slot]!, oldKey);
+  oldKey.fill(0);
+  if (mine) await enableBiometrics(next, slot, newPassphrase, deps);
+}
+
+/** When a slot is overwritten by something the current passphrase does not open: its blob becomes filler. */
 export function forgetSlot(slot: number, blobs: BlobStore): void {
   const list = blobs.load();
   if (!list) return;

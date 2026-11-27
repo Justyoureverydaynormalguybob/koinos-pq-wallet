@@ -58,7 +58,7 @@ function answer(req: { method: string; params: Record<string, unknown> }): unkno
   if (req.method === "chain.get_head_info") return { head_topology: { height: "100" } };
   if (req.method === "chain.get_account_rc") return { rc: "1500000000" };
   if (req.method === "chain.get_account_nonce") return { nonce: "" };
-  if (req.method === "chain.get_chain_id") return { chain_id: "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==" };
+  if (req.method === "chain.get_chain_id") return { chain_id: "EiAHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==" /* a devnet's own id: the wallet refuses a devnet node that answers with a pinned chain's */ };
   if (req.method === "chain.read_contract") {
     const { contract_id, entry_point } = req.params as { contract_id: string; entry_point: number };
     if (entry_point === 0x5c721497) return { result: uint64(contract_id === KOIN ? 1500000000n : 0n) };
@@ -248,6 +248,61 @@ describe("burn KOIN for VHP (jsdom, a fake node over HTTP)", () => {
     await settle();
     click(root, "burn");
     await submit(root, "burn", { amount: "2" }, ["understood"]);
+    expect(submitted.length).toBe(2);
+  }, 180_000);
+
+  // External review 2026-11-27, item 7: Send had no such hold. The message said "may still go through", and
+  // the next press signed a second transfer.
+  it("a payment the node did not clearly answer is never followed by a second one, nor by a burn", async () => {
+    Object.assign(devnet, { pob: POB, vhp: VHP });
+    submitted.length = 0;
+    mined.clear();
+    burnedInHistory = null;
+    const TO = "1sXttKzfrzH8amTpfRHX8SXT7kynjNpMX";
+    const root = await newWallet();
+    const send = async () => {
+      if (!root.querySelector('form[data-form="send"]')) {
+        click(root, root.querySelector('[data-action="send"]') ? "send" : "back-home");
+        await settle();
+        if (!root.querySelector('form[data-form="send"]')) click(root, "send");
+      }
+      await submit(root, "send", { to: TO, amount: "1" });
+      if (root.querySelector('form[data-form="send-confirm"]')) await submit(root, "send-confirm", {}, ["checked"]);
+    };
+    submitMode = "lost";
+    await send();
+    await new Promise((r) => setTimeout(r, 11_500)); // the wallet looks for the id for about ten seconds first
+    await settle();
+    expect(submitted.length).toBe(1);
+    expect(text(root)).toMatch(/this payment may or may not go through\. Do not send it again yet/);
+    expect(root.querySelector("h1")?.textContent).not.toBe("Submitted");
+
+    // sending again, with the node healthy again: refused, nothing signed
+    submitMode = "ok";
+    await send();
+    expect(submitted.length).toBe(1);
+    expect(text(root)).toMatch(/An earlier payment of 1 KOIN got no clear answer/);
+    // nothing else that moves value leaves the account either
+    click(root, "back-home");
+    await settle();
+    click(root, "burn");
+    await submit(root, "burn", { amount: "1" }, ["understood"]);
+    expect(submitted.length).toBe(1);
+    expect(text(root)).toMatch(/An earlier payment of 1 KOIN got no clear answer/);
+
+    // the first one turns up in a block: the next press shows it and still signs nothing
+    mined.add((submitted[0] as unknown as { id: string }).id);
+    click(root, "back-home");
+    await settle();
+    await send();
+    expect(submitted.length).toBe(1);
+    expect(root.querySelector("h1")?.textContent).toBe("Submitted");
+    expect(text(root)).toMatch(/Your earlier payment of 1 KOIN went through\. Nothing new was sent/);
+
+    // settled: the next payment goes out
+    click(root, "back-home");
+    await settle();
+    await send();
     expect(submitted.length).toBe(2);
   }, 180_000);
 });

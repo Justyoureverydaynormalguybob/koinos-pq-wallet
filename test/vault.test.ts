@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  PAD_BLOCK, SLOT_COUNT, decoySlotFor, decryptVault, encryptVault, fillerSlot, newFile, openVault, opens, toFile, withSlot, type EncryptedVault, type VaultData,
+  PAD_BLOCK, SLOT_COUNT, decryptVault, deriveSlotKeyBytes, encryptVault, fillerSlot, needsRewrite, newFile, openVault, opens, reencryptVault, toFile, withSlot, type EncryptedVault, type VaultData,
 } from "../src/core/vault";
 
 const IT = 20_000; // fewer PBKDF2 iterations: test speed only
@@ -9,9 +9,8 @@ const data: VaultData = {
   seedHex: "00".repeat(32),
   accounts: [{ label: "pqwallet account", mode: "pqwallet", address: "1FqXVbjZnMo2cUNj56LNCrc8R22RWDmq1t" }],
   createdAt: "2026-10-18T00:00:00.000Z",
-  role: "main",
 };
-const decoy: VaultData = { version: 1, seedHex: "11".repeat(32), accounts: [], createdAt: "2026-10-19T00:00:00.000Z", role: "decoy" };
+const decoy: VaultData = { version: 1, seedHex: "11".repeat(32), accounts: [], createdAt: "2026-10-19T00:00:00.000Z" };
 
 describe("vault", () => {
   it("encrypts and decrypts with the passphrase", async () => {
@@ -65,27 +64,52 @@ describe("duress mode (slots)", () => {
     expect(await opens(filler, "")).toBe(false);
   });
 
-  it("a decoy with its own passphrase opens its own slot; the main passphrase still opens the main one", async () => {
-    const { file, slot } = await newFile(data, "correct horse battery", IT);
-    const target = decoySlotFor(slot, "main");
-    expect(target).not.toBe(slot);
-    const withDecoy = withSlot(file, target, await encryptVault(decoy, "a different passphrase", IT));
-    const asMain = await openVault(withDecoy, "correct horse battery");
+  it("a duress wallet is written when the file is made, into the other slot; each passphrase opens its own", async () => {
+    const { file, slot } = await newFile(data, "correct horse battery", IT, { data: decoy, passphrase: "a different passphrase" });
+    expect(file.slots.length).toBe(SLOT_COUNT);
+    const asMain = await openVault(file, "correct horse battery");
     expect(asMain.slot).toBe(slot);
-    expect(asMain.data.role).toBe("main");
-    const asDecoy = await openVault(withDecoy, "a different passphrase");
-    expect(asDecoy.slot).toBe(target);
-    expect(asDecoy.data.role).toBe("decoy");
-    expect(asDecoy.data.seedHex).not.toBe(data.seedHex);
-    // main slot bytes untouched by adding the decoy
-    expect(withDecoy.slots[slot]).toEqual(file.slots[slot]);
+    expect(asMain.data.seedHex).toBe(data.seedHex);
+    const asDecoy = await openVault(file, "a different passphrase");
+    expect(asDecoy.slot).not.toBe(slot);
+    expect(asDecoy.data.seedHex).toBe(decoy.seedHex);
+    // the same passphrase for both would make the second wallet unreachable: refused
+    await expect(newFile(data, "correct horse battery", IT, { data: decoy, passphrase: "correct horse battery" })).rejects.toThrow(/differ/);
   });
 
-  it("from a decoy, 'set up a duress wallet' targets the decoy's own slot, never the main one", () => {
-    expect(decoySlotFor(0, "decoy")).toBe(0);
-    expect(decoySlotFor(1, "decoy")).toBe(1);
-    expect(decoySlotFor(0, "main")).toBe(1);
-    expect(decoySlotFor(1, "main")).toBe(0);
+  it("nothing in a slot says which wallet it is: the two decrypt to the same fields, and a legacy role is never written", async () => {
+    const { file } = await newFile({ ...data, role: "main", hasDecoy: true }, "correct horse battery", IT, { data: { ...decoy, role: "decoy" }, passphrase: "a different passphrase" });
+    const a = (await openVault(file, "correct horse battery")).data, b = (await openVault(file, "a different passphrase")).data;
+    expect(Object.keys(a).sort()).toEqual(["accounts", "createdAt", "seedHex", "version"]);
+    expect(Object.keys(b).sort()).toEqual(Object.keys(a).sort());
+  });
+
+  it("a save under the same passphrase keeps the slot's salt, so its key stays the same (external review 2026-11-27, item 3)", async () => {
+    const { file, slot } = await newFile(data, "correct horse battery", IT);
+    const before = file.slots[slot]!;
+    const after = await reencryptVault(before, { ...data, accounts: [] }, "correct horse battery");
+    expect(after.saltHex).toBe(before.saltHex);
+    expect(after.iterations).toBe(before.iterations);
+    expect(after.ivHex).not.toBe(before.ivHex);
+    expect(after.ciphertextHex).not.toBe(before.ciphertextHex);
+    const k1 = await deriveSlotKeyBytes(before, "correct horse battery"), k2 = await deriveSlotKeyBytes(after, "correct horse battery");
+    expect(Buffer.from(k2).toString("hex")).toBe(Buffer.from(k1).toString("hex"));
+    expect((await decryptVault(after, "correct horse battery")).accounts).toEqual([]);
+    // a new passphrase is a new slot: fresh salt, another key
+    const changed = await encryptVault(data, "another passphrase here", IT);
+    expect(changed.saltHex).not.toBe(before.saltHex);
+  });
+
+  it("a slot written by an older version is written again at unlock: legacy role, or the 4 KiB size", async () => {
+    const now = await encryptVault(data, "correct horse battery", IT);
+    expect(needsRewrite(now, await decryptVault(now, "correct horse battery"))).toBe(false);
+    expect(needsRewrite(now, { ...data, role: "decoy" })).toBe(true);
+    expect(needsRewrite(now, { ...data, hasDecoy: true })).toBe(true);
+    const old = { ...now, ciphertextHex: "00".repeat(4096 + 16) };
+    expect(needsRewrite(old, data)).toBe(true);
+    // rewriting keeps the key and drops the mark
+    const again = await reencryptVault(now, { ...data, role: "decoy" }, "correct horse battery");
+    expect((await decryptVault(again, "correct horse battery")).role).toBeUndefined();
   });
 
   it("refuses to tell a decoy passphrase from the main one (same passphrase check)", async () => {

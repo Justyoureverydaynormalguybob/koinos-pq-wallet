@@ -4,7 +4,7 @@ import { cleanLabel, decodeFields, formatKoin, PQWALLET_ENTRY, TOKEN_ENTRY, type
 import { utils } from "koilib";
 import { allTokens, findToken, formatUnits, type CustomTokens } from "../core/tokens";
 import { NFT_ENTRY } from "../core/nfts";
-import { strictTransfer, type CallContract, type Plan } from "../core/approval";
+import { memoText, strictTransfer, type CallContract, type Plan } from "../core/approval";
 import { addressStrip, card, esc, list, listRow, notice, stat } from "./components";
 import { t as tr } from "../i18n";
 
@@ -27,16 +27,28 @@ type Fields = Map<number, Array<bigint | Uint8Array>>;
  * nothing else. Protobuf lets a field appear twice and the chain then uses the LAST one, so a description
  * read from the first would show one thing while another is signed: an approve of "0.00000001" followed
  * by a second value of everything. Anything that is not in this plain form is never put into words.
- * "uint?" may be left out (protobuf omits a zero).
+ * "uint?" may be left out (protobuf omits a zero). "memo?" is the token standard's `optional string memo`:
+ * at most once, valid text of a sane length (see memoText), shown by memoNote.
  */
-function exactly(f: Fields | null, spec: Record<number, "bytes" | "uint" | "uint?">): f is Fields {
+function exactly(f: Fields | null, spec: Record<number, "bytes" | "uint" | "uint?" | "memo?">): f is Fields {
   if (!f) return false;
   for (const [n, values] of f) {
     const kind = spec[n];
     if (!kind || values.length !== 1) return false;
-    if (kind === "bytes" ? !(values[0] instanceof Uint8Array) : typeof values[0] !== "bigint") return false;
+    if (kind === "memo?") {
+      if (memoText(values[0]) === null) return false;
+    } else if (kind === "bytes" ? !(values[0] instanceof Uint8Array) : typeof values[0] !== "bigint") return false;
   }
-  return Object.entries(spec).every(([n, kind]) => kind === "uint?" || f.has(Number(n)));
+  return Object.entries(spec).every(([n, kind]) => kind === "uint?" || kind === "memo?" || f.has(Number(n)));
+}
+/**
+ * A memo as the sheet shows it: cleaned of control and bidi characters, capped, and marked as the site's own
+ * words, since it is free text a site can put anything into ("refund", "official airdrop").
+ */
+function memoNote(memo: string | null): string {
+  if (memo === null) return "";
+  const shown = cleanLabel(memo, 120);
+  return `<div class="fine" style="margin-top:4px">${tr("Memo (text the site attached; it changes nothing about the call):")} <span class="mono">${shown ? esc(shown) : tr("(empty)")}</span>${shown !== memo ? ` <span class="warn-inline">${tr("hidden characters removed from this display")}</span>` : ""}</div>`;
 }
 /** A call that looks like one the wallet knows but is not encoded plainly: said so, with the raw bytes, never worded. */
 function unusual(what: string, cc: CallContract): string {
@@ -69,7 +81,7 @@ export function describeOperation(cc: CallContract, net: Network, signer: string
     const xfer = strictTransfer(cc.args);
     if (xfer) {
       const fromNote = xfer.from === signer ? "" : ` <span class="warn-inline">${tr("from a different account, {from},", { from: esc(xfer.from) })}</span>`;
-      return tr("Send <strong class=\"mono\">{amount} {symbol}</strong>{note} to {to}", { amount: esc(formatUnits(xfer.value, token.decimals)), symbol: esc(token.symbol), note: fromNote, to: addressStrip(xfer.to, { size: "sm" }) });
+      return tr("Send <strong class=\"mono\">{amount} {symbol}</strong>{note} to {to}", { amount: esc(formatUnits(xfer.value, token.decimals)), symbol: esc(token.symbol), note: fromNote, to: addressStrip(xfer.to, { size: "sm" }) }) + memoNote(xfer.memo);
     }
     return `<span class="warn-inline">${tr("Unusual {symbol} transfer encoding: the amount and recipient cannot be shown reliably.", { symbol: esc(symbol) })}</span> ${tr("Call to {contract}", { contract: addressStrip(cc.contract_id, { size: "sm" }) })}`;
   }
@@ -81,16 +93,16 @@ export function describeOperation(cc: CallContract, net: Network, signer: string
   }
   if (token && cc.entry_point === TOKEN_APPROVE) {
     // approve { owner = 1, spender = 2, value = 3 }: a standing permission for someone else to spend
-    if (!exactly(fields, { 1: "bytes", 2: "bytes", 3: "uint?" })) return unusual(tr("Unusual {symbol} approval encoding: who may spend, and how much, cannot be shown reliably. Do not approve it.", { symbol: esc(symbol) }), cc);
+    if (!exactly(fields, { 1: "bytes", 2: "bytes", 3: "uint?", 4: "memo?" })) return unusual(tr("Unusual {symbol} approval encoding: who may spend, and how much, cannot be shown reliably. Do not approve it.", { symbol: esc(symbol) }), cc);
     const owner = addr(fieldBytes(fields, 1)), spender = addr(fieldBytes(fields, 2)), value = fieldUint(fields, 3) ?? 0n;
     if (owner && spender) {
-      return `<span class="warn-inline">${tr("Allow {spender} to spend up to <strong class=\"mono\">{amount} {symbol}</strong> from {owner}, any time, until revoked", { spender: addressStrip(spender, { size: "sm" }), amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), owner: owner === signer ? tr("your account") : addressStrip(owner, { size: "sm" }) })}</span>`;
+      return `<span class="warn-inline">${tr("Allow {spender} to spend up to <strong class=\"mono\">{amount} {symbol}</strong> from {owner}, any time, until revoked", { spender: addressStrip(spender, { size: "sm" }), amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), owner: owner === signer ? tr("your account") : addressStrip(owner, { size: "sm" }) })}</span>${memoNote(fields.has(4) ? memoText(fields.get(4)![0]) : null)}`;
     }
   }
   if (token && cc.entry_point === TOKEN_BURN) {
-    if (!exactly(fields, { 1: "bytes", 2: "uint?" })) return unusual(tr("Unusual {symbol} burn encoding: the amount cannot be shown reliably. Do not approve it.", { symbol: esc(symbol) }), cc);
+    if (!exactly(fields, { 1: "bytes", 2: "uint?", 3: "memo?" })) return unusual(tr("Unusual {symbol} burn encoding: the amount cannot be shown reliably. Do not approve it.", { symbol: esc(symbol) }), cc);
     const from = addr(fieldBytes(fields, 1)), value = fieldUint(fields, 2) ?? 0n;
-    if (from) return `<span class="warn-inline">${tr("Burn (destroy) <strong class=\"mono\">{amount} {symbol}</strong> from {from}", { amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), from: from === signer ? tr("your account") : addressStrip(from, { size: "sm" }) })}</span>`;
+    if (from) return `<span class="warn-inline">${tr("Burn (destroy) <strong class=\"mono\">{amount} {symbol}</strong> from {from}", { amount: esc(formatUnits(value, token.decimals)), symbol: esc(token.symbol), from: from === signer ? tr("your account") : addressStrip(from, { size: "sm" }) })}</span>${memoNote(fields.has(3) ? memoText(fields.get(3)![0]) : null)}`;
   }
   if (cc.entry_point === PQWALLET_ENTRY.set_public_key) {
     // set_public_key { public_key = 1, proof = 2 }: replaces the key that controls the account.
@@ -144,6 +156,8 @@ export function describePlan(p: Plan, custom: CustomTokens | null = null): strin
         stat(tr("Network"), `<strong>${esc(p.net.name)}</strong>`),
         h.payee ? stat(tr("Payee"), `<span class="mono">${esc(h.payee)}</span>`) : "",
         stat(tr("Mana limit"), `<strong>${esc(formatKoin(BigInt(h.rc_limit ?? "0"), 2))}</strong>${siteSetLimit ? "" : ` <span class="mute">${tr("(the site set no limit: all the mana the account has)")}</span>`}`),
+        p.nonce !== undefined && p.nonce !== null ? stat(tr("Number (nonce)"), `<strong>${esc(p.nonce.toString())}</strong>`) : "",
+        p.coSignatures ? stat(tr("Signatures"), tr("{n} already on it from the site; yours is added", { n: p.coSignatures })) : "",
         stat(tr("Transaction"), esc((tx.id ?? "").slice(0, 22)) + "…"),
       ].join("");
       const payerNote = h.payer !== p.signerAddress ? notice("warn", tr("Mana paid by another account: {payer}", { payer: `<span class="mono">${esc(h.payer)}</span>` })) : "";

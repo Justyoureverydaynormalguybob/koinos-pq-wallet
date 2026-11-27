@@ -58,8 +58,8 @@ const toSettings = (root: HTMLElement) => {
 };
 const text = (root: HTMLElement) => root.textContent ?? "";
 
-/** Create a wallet through the real screens. Returns the 24 words. */
-async function createWallet(root: HTMLElement): Promise<string> {
+/** Create a wallet through the real screens. Returns the 24 words. `duress`: also choose a duress wallet with this passphrase. */
+async function createWallet(root: HTMLElement, duress?: string): Promise<string> {
   click(root, "create");
   const words = [...root.querySelectorAll("ol.words li")].map((li) => li.textContent!.trim());
   expect(words).toHaveLength(24);
@@ -67,7 +67,7 @@ async function createWallet(root: HTMLElement): Promise<string> {
   const labels = [...root.querySelectorAll<HTMLLabelElement>("form[data-form=confirm] label")].map((l) => Number(/Word number (\d+)/.exec(l.textContent!)![1]) - 1);
   await submit(root, "confirm", { w0: words[labels[0]!]!, w1: words[labels[1]!]!, w2: words[labels[2]!]!});
   expect(h1(root)).toMatch(/passphrase/i);
-  await submit(root, "passphrase", { p1: MAIN, p2: MAIN });
+  await submit(root, "passphrase", { p1: MAIN, p2: MAIN, ...(duress ? { d1: duress, d2: duress } : {}) });
   return words.join(" ");
 }
 
@@ -107,50 +107,58 @@ describe("wallet app (jsdom)", () => {
     expect(shown).not.toBe(ZERO_SEED_ADDRESS);
   }, 60_000);
 
-  it("duress: a second passphrase opens a different wallet; the main slot is untouched; the decoy shows no trace", async () => {
+  it("duress: chosen when the wallet is made; a second passphrase opens a different wallet; neither shows a trace of the other", async () => {
     localStorage.clear();
     const { root } = mount();
-    await createWallet(root);
-    const before = localVaultStore.load()!;
-    toSettings(root);
-    expect(text(root)).toMatch(/Duress wallet/);
-    expect(text(root)).toMatch(/never says whether one exists/);
-    click(root, "duress");
-    click(root, "duress-create");
-    expect(root.querySelectorAll("ol.words li")).toHaveLength(24);
-    // refuses the main passphrase as the duress one
-    await submit(root, "duress-save", { d1: MAIN, d2: MAIN, main: MAIN });
-    expect(text(root)).toMatch(/must be different/);
-    // refuses a wrong main passphrase
-    await submit(root, "duress-save", { d1: DURESS, d2: DURESS, main: "not the main one" });
-    expect(text(root)).toMatch(/wrong passphrase/);
-    await submit(root, "duress-save", { d1: DURESS, d2: DURESS, main: MAIN });
-    expect(h1(root)).toBe("Unlock"); // locked after saving
-    const after = localVaultStore.load()!;
-    const fa = await toFile(after), fb = await toFile(before);
-    const mainOpened = await openVault(fa, MAIN);
-    const decoyOpened = await openVault(fa, DURESS);
+    // the main passphrase is refused as the duress one, and so is a weak one: nothing is saved
+    click(root, "create");
+    const words = [...root.querySelectorAll("ol.words li")].map((li) => li.textContent!.trim());
+    click(root, "wrote-down");
+    const labels = [...root.querySelectorAll<HTMLLabelElement>("form[data-form=confirm] label")].map((l) => Number(/Word number (\d+)/.exec(l.textContent!)![1]) - 1);
+    await submit(root, "confirm", { w0: words[labels[0]!]!, w1: words[labels[1]!]!, w2: words[labels[2]!]! });
+    expect(text(root)).toMatch(/Duress wallet \(optional\)/);
+    expect(text(root)).toMatch(/Now or never/);
+    await submit(root, "passphrase", { p1: MAIN, p2: MAIN, d1: MAIN, d2: MAIN });
+    expect(text(root)).toMatch(/must be different from the main one/);
+    await submit(root, "passphrase", { p1: MAIN, p2: MAIN, d1: DURESS, d2: "duress lantern gravel moss" });
+    expect(text(root)).toMatch(/two duress passphrases differ/);
+    expect(localVaultStore.load()).toBeNull();
+    // both wallets are written in the same step, and the duress wallet's own 24 words are shown once
+    await submit(root, "passphrase", { p1: MAIN, p2: MAIN, d1: DURESS, d2: DURESS });
+    expect(h1(root)).toBe("The duress wallet's 24 words");
+    const duressWords = [...root.querySelectorAll("ol.words li")].map((li) => li.textContent!.trim());
+    expect(duressWords).toHaveLength(24);
+    expect(duressWords.join(" ")).not.toBe(words.join(" "));
+    click(root, "duress-done");
+    await settle();
+    expect(root.querySelectorAll("ol.words li")).toHaveLength(0);
+    const file = await toFile(localVaultStore.load()!);
+    const mainOpened = await openVault(file, MAIN);
+    const decoyOpened = await openVault(file, DURESS);
     expect(mainOpened.slot).not.toBe(decoyOpened.slot);
-    expect(mainOpened.data.role).toBe("main");
-    expect(mainOpened.data.hasDecoy).toBeUndefined(); // nothing is written back to the main slot any more
-    expect(decoyOpened.data.role).toBe("decoy");
     expect(decoyOpened.data.seedHex).not.toBe(mainOpened.data.seedHex);
-    // the main slot's bytes are untouched; only the decoy slot replaced its filler
-    expect(fa.slots.length).toBe(fb.slots.length);
-    expect(JSON.stringify(fa.slots[mainOpened.slot])).toBe(JSON.stringify(fb.slots[mainOpened.slot]));
-    expect(JSON.stringify(fa.slots[decoyOpened.slot])).not.toBe(JSON.stringify(fb.slots[decoyOpened.slot]));
-    // unlock as the decoy, then as main: the settings read the same, and neither mentions the other
+    // nothing in either slot says which wallet it is
+    expect(Object.keys(mainOpened.data).sort()).toEqual(Object.keys(decoyOpened.data).sort());
+    expect(JSON.stringify(mainOpened.data)).not.toMatch(/role|decoy|main/i);
+    expect(JSON.stringify(decoyOpened.data)).not.toMatch(/role|decoy|main/i);
+    // unlock as the decoy, then as main: the settings read the same, neither mentions the other, and
+    // neither offers anything that could write the other slot (external review 2026-11-27, item 4)
+    click(root, "lock");
     await submit(root, "unlock", { passphrase: DURESS });
     toSettings(root);
     const decoySettings = text(root).replace(/\s+/g, " ");
     expect(decoySettings).not.toMatch(/decoy/i);
+    expect(root.querySelector('[data-action="duress"], [data-action="duress-create"], form[data-form="duress-save"]')).toBeNull();
     click(root, "lock");
     await submit(root, "unlock", { passphrase: MAIN });
     toSettings(root);
     const mainSettings = text(root).replace(/\s+/g, " ");
     expect(mainSettings).toMatch(/never says whether one exists/);
+    expect(root.querySelector('[data-action="duress"], [data-action="duress-create"], form[data-form="duress-save"]')).toBeNull();
     const same = (t: string) => t.replace(/1[1-9A-HJ-NP-Za-km-z]{25,34}/g, "ADDR").replace(/head [\d,]+/, "head N"); // addresses differ, and the ticker's live head moves
     expect(same(mainSettings)).toBe(same(decoySettings));
+    // the file is the same after both visits: an unlock writes nothing for a wallet saved by this version
+    expect(JSON.stringify(await toFile(localVaultStore.load()!))).toBe(JSON.stringify(file));
   }, 120_000);
 
   it("watch-only: shown with a badge, cannot send; first-time and look-alike recipients are challenged", async () => {

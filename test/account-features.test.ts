@@ -88,7 +88,7 @@ function answer(req: { method: string; params: Record<string, unknown> }): unkno
   if (req.method === "chain.get_head_info") return { head_topology: { height: "100" } };
   if (req.method === "chain.get_account_rc") return { rc: "1600000000" };
   if (req.method === "chain.get_account_nonce") return { nonce: "" };
-  if (req.method === "chain.get_chain_id") return { chain_id: "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==" };
+  if (req.method === "chain.get_chain_id") return { chain_id: "EiAHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==" /* a devnet's own id: the wallet refuses a devnet node that answers with a pinned chain's */ };
   if (req.method === "chain.read_contract") {
     const { contract_id, entry_point } = req.params as { contract_id: string; entry_point: number };
     const pk = active.get(contract_id);

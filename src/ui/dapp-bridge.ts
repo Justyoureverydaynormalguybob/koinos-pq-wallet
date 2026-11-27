@@ -50,6 +50,22 @@ export const RELAY_SHIM = `(() => {
     // leaving the page: tell the wallet the site's data is gone, so it can close the view
     else send({ id: "pq-site-cleared", command: "pq:site-cleared", args: null, origin: window.location.origin });
   };
+  // A real tap in the page itself (not in a frame inside it, and not a script's click()) is reported to the
+  // wallet. It is what lets a WalletConnect link pair without a second question: the native side says "a
+  // gesture started this navigation" also for a tap inside an embedded frame (Android) or a scripted click
+  // on a link (iOS), and only this report tells those apart from the user tapping the page's own button.
+  if (window.top === window) {
+    let last = 0;
+    const tap = (ev) => {
+      if (!ev || ev.isTrusted !== true) return;
+      const now = Date.now();
+      if (now - last < 250) return;
+      last = now;
+      send({ id: "pq-tap", command: "pq:tap", args: null, origin: window.location.origin });
+    };
+    document.addEventListener("pointerdown", tap, true);
+    document.addEventListener("click", tap, true);
+  }
   window.__pqDeliver = (json) => {
     try {
       const m = JSON.parse(json);

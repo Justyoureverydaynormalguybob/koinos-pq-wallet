@@ -94,7 +94,9 @@ Unlocking derives a key for every slot whatever happens and opens whichever one 
 neither the bytes at rest nor the time to unlock reveal whether a decoy exists or where it is. The
 extension's approval window opens the file the same way, so a dapp signature requested under duress
 is made with the decoy's key. From inside a decoy, "set up a duress wallet" writes to the decoy's own
-slot, never the main one (`decoySlotFor`). Limits: balances are public on chain, so the decoy only
+slot, never the main one (`decoySlotFor`). (**Changed in 0.19.0:** a duress wallet is chosen when the
+wallet is created or imported and at no other time, and a slot no longer records a role; see "External
+review 2026-11-27", items 4 and 12.) Limits: balances are public on chain, so the decoy only
 helps against someone who does not already know the main address; a decoy must be funded and used
 to be believable; an attacker who copies the stored file before and after setup can see that one
 slot changed (not which wallet it is); the main slot records `hasDecoy` so Settings can show it,
@@ -499,7 +501,7 @@ Everything left in "Found, not fixed yet" above, taken in turn. Tests: the last 
 
 **Left as they are, with the reason**
 
-- *Two wallets can show in side-store sizes.* Fixing it means one fixed size for every store in every
+- *Two wallets can show in side-store sizes.* (**Closed in 0.19.0**, "External review 2026-11-27", item 12.) Fixing it means one fixed size for every store in every
   slot, and entries that belong to the other slot cannot be re-sealed without its key. That is a change
   of storage format to the part that keeps duress mode honest, and it wants its own design and tests
   rather than a line in a batch. The exposure needs a decoy with more than a kilobyte in one store
@@ -531,3 +533,146 @@ as a test that failed now and then). Detection now tries an unanswered read thre
 only as the node's own verdict, and is tried again in the background when it could not be done
 (`src/core/accounts.ts`, test in `test/multi-account.test.ts`). The activation path keeps its own reads
 as they were.
+
+## External review 2026-11-27 (wallet 0.18.3), fixes in 0.19.0
+
+A reader outside the project (GitHub user **interfecto**) read the source of the 0.18.3 release: this
+repository at `868cffe`, koinos-pq-core at `8b3b04c` and koinos-pq at `13b28d5`, and wrote it up as
+[issue #1](https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/issues/1). Nothing was run;
+every point came from reading. Each point was checked against the code before anything was changed, and
+all of them held. The numbers below are the review's own. The command-line tool, the contract build and
+the pen-test script are in koinos-pq, whose `docs/SECURITY.md` has the matching section (items 1, 15, 16
+and 17).
+
+The core changes are koinos-pq-core `c753ac4`, which this version pins.
+
+Tests: `test/review-2026-11-27.test.ts` (the rules), `test/review-2026-11-27-app.test.ts` (through the
+screens), the last test in `test/app-burn.test.ts`, the changed tests in `test/vault.test.ts`,
+`test/app.test.ts`, `test/pentest-2026-11.test.ts`, and koinos-pq-core `test/review-2026-11-27.test.ts`
+and `test/signer.test.ts`.
+
+### Medium
+
+- **2. The chain id came from the node alone on the dapp path.** A page could say "try it on our
+  devnet", point the wallet at its own node, have that node answer with mainnet's chain id, and collect a
+  signature mainnet accepts, since an account has the same address and key on every network.
+  *Now:* `planRequest` takes the chain id from `Chain.chainId()` (the pin for mainnet and testnet), puts it
+  into the header itself, and refuses a page that names another. On a network with no pin (the devnet)
+  `Chain.chainId()` refuses a node that answers with a pinned chain's id. The signer is made for that
+  chain id and refuses any other (`PqSigner`'s new `chainId`), and it is asked again when the signature
+  is made, so a node that changes its story between the sheet and the signature gets nothing. The
+  extension goes through the same code.
+- **3. Saving any change to the vault emptied the side stores at the next unlock.** "Add account",
+  "Watch an address" and "Remove account" wrote the slot under a fresh salt. That changed the slot's
+  key, and the key the contacts, tokens, allowed sites, collections and account names are sealed under is
+  made from it. After a lock and an unlock they read as empty and the first write overwrote them. That
+  also reset the contacts the look-alike address check compares against. This was a real loss of data
+  for anyone who used those three screens on 0.15 to 0.18.3, and nothing can bring those entries back.
+  *Now:* a save keeps the slot's salt and takes a fresh IV only (`reencryptVault`), so the key stays the
+  same. The salt changes only with the passphrase (item 14), and the stores are sealed again in that
+  same step.
+- **4. Setting up a duress wallet from inside the decoy gave the decoy away.** A decoy could only
+  overwrite itself, so the passphrase the coercer had been given stopped working, a test that takes a
+  minute and no tools. The review suggested three slots with a pointer in each. Worked through, that only
+  moves the tell one step (the coercer sets up a second one from the new wallet), and the pointer itself
+  marks the decoy for anyone with its passphrase and the stored file: any design in which an open wallet
+  can add a duress wallet has to store something that makes a decoy behave differently from a main
+  wallet, and whatever the app can read, so can they.
+  *Now:* the operation is gone. A duress wallet is chosen on the passphrase screen when a wallet is
+  created or imported on the device, written in the same step as the main one, and at no other time.
+  No screen of an open wallet can add, replace or reveal one, so there is nothing to try and nothing
+  stored that says which wallet is which (see item 12). The cost: to add or change a duress wallet later,
+  delete the wallet from the device and import the 24 words again; what is kept only on the device
+  (contacts, added tokens, allowed sites, names) starts empty after that. A wallet that already has a
+  duress wallet keeps it.
+
+### Low
+
+- **5. A site could ask an account to sign without ever having been shown it.** The check ran only for
+  a site that held a grant with a list. A site that never connected, was revoked, or held a grant from
+  before 0.17 could name any address and learn from the answer whether it is this wallet's.
+  *Now:* in the app a page may ask an account to sign only if the user showed that account to that site
+  (`DappHost.pump`). The sheet also names the account the way the user knows it, not only by address.
+  The extension has no grants (every request asks for the passphrase) and is as it was.
+- **6. The page picked the transaction's number and the sheet did not show it.** A signature for a
+  number ahead of the account's next one cannot go through now, but stays good: a site could say "that
+  failed", get the same payment signed again, and use the first signature once the second had landed.
+  *Now:* the number is on the sheet, and a transaction a page has numbered ahead of the account's next
+  one is refused. koilib numbers from the chain's own count, so an honest dapp never asks for a later
+  number; a dapp that signs a chain of transactions in advance would have to put them into one
+  transaction instead.
+- **7. Send had no hold after an unclear answer from the node.** Burn had one. *Now:* one hold for
+  Send, a collectible send and Burn (`settleEarlier`, `held`): after a submission the node gave no clear
+  answer to, nothing else that moves value is signed from that account until the earlier transaction is
+  found in a block (it is then shown and nothing new is signed) or ten minutes have passed and the node
+  says it is in no block. "The node could not be asked" no longer counts as "it is not there"
+  (`Chain.txStatus`). The hold lives in memory: closing the app forgets it.
+- **8. A KCS-4 memo made normal calls look wrong.** The token standard has an optional memo on
+  transfer, approve and burn; the sheet called such a transfer an unusual encoding and told the user not
+  to approve such an approve or burn. *Now:* a memo given once, as valid text of at most 256 bytes, is
+  part of the plain form and is shown, cleaned of control and direction characters and marked as the
+  site's own words. Anything else is still not put into words.
+- **9. The account picker could be skipped.** With one known account no list was shown, and the answer
+  went out with every account the wallet could find, including one found a moment later. *Now:* the
+  answer carries exactly the addresses the sheet showed, and with one account the sheet names it.
+- **10. WalletConnect attribution.** A verify result of INVALID is now a danger notice on the sheet, not
+  the same footnote as "unknown". For a pairing link from a page: the native "a gesture started this" is
+  true also for a tap inside a frame embedded in the page (Android cannot say which frame started a
+  top-level navigation) and for a script's `click()` on a link (iOS). The relay script now reports real
+  taps in the page itself (`isTrusted`, top frame only), and a link counts as tapped only when both
+  agree; otherwise the app asks before pairing. *Needs a device:* that the tap report arrives before the
+  link on both platforms. If it does not, the only effect is the extra question.
+- **11. Signatures already on a transaction were dropped,** so a transaction a payer had signed first
+  failed. *Now:* up to four are kept as they came and the wallet's is added after them; the sheet says
+  how many there are. They cannot change what the wallet signs.
+- **12. The decoy could be recognised with its passphrase and the stored file.** Three signs, all closed:
+  the slot no longer says `role` (nothing in a slot says which wallet it is, and nothing needs to since
+  item 4); every side store entry is 16 KiB whatever it holds, where it used to grow past 1 KiB after
+  about seven recipients (a store past roughly a hundred contacts or sites takes a second block and does
+  show); and a slot or a store entry written by an older version is brought to today's form the first
+  time its wallet is unlocked with the passphrase, with the other slot's store entries lengthened to the
+  same size at the same moment (that needs no key). Until each wallet has been unlocked once on 0.19 its
+  slot keeps what the older version wrote. An unlock by biometrics does not rewrite the slot; the next
+  one by passphrase does.
+- **13. The lock timers were only timers.** A suspended web view does not run them, and on resume the
+  hide timer was cleared. *Now:* both deadlines are clock times (`lockIfOverdue`), checked when the page
+  becomes visible, when the app resumes, on the first tap, and on every poll, so an overdue wallet locks
+  at the first moment the app runs again. *Needs a device* to confirm the resume events arrive as jsdom
+  says they do.
+- **14. There was no way to change the passphrase,** so one chosen before the strength check stayed
+  weak. *Now:* Settings › Security › Change the passphrase. The same strength check as a new wallet; the
+  slot gets a new salt, the side stores are sealed again under the new key, biometrics follow if they
+  were this wallet's, and the wallet locks.
+- **18. CI exposed the keystore to every step.** *Now:* the job has only a yes/no for the `if:`; the
+  keystore is in the environment of the one step that restores it. The workflow has
+  `permissions: contents: read`, as this document already claimed.
+- **19. iOS shell.** The web view's storage is marked "not for backup" at every launch and when the app
+  goes to the background (as `allowBackup="false"` does on Android). The privacy cover for the app
+  switcher moved to the scene delegate, where UIKit calls it in a scene-based app. *Needs a device:* the
+  iOS app is built unsigned by CI and has never been run.
+
+### Small things
+
+- *`PqSigner.signTransaction` signed an id it was handed.* It now works the id out again from the header
+  and the operations and refuses a mismatch; the wallet's dapp path signs through it. `signHash` still
+  signs any digest, because koilib's signer interface has it; its comment now says what that means.
+- *The activation path still took a failed read for "no contract".* `pqwalletInfo` tries three times and
+  then throws; "no contract" is the node's own word only.
+- *History showed the first transfer event.* It now shows the KOIN contract's event when there is one,
+  and says when a transaction has more than one transfer that names the account.
+- *Activating on one network publishes the bootstrap key for all of them.* Said on the activation screen.
+- *The words were typed without the screenshot block.* It is now on for the import screen and the
+  three-word check.
+- *The extension showed no "not encrypted" badge.* It does now.
+- *An answer could be sent after the page had moved to another site.* It is now dropped, as this
+  document already said.
+- *Release files were uploaded by hand.* A tag now publishes its own release from the files that run
+  built, with the run and the hashes in the notes (`.github/workflows/mobile.yml`, job `release`).
+  **Still open:** the hosted web wallet is deployed from a local tree with `railway up`, so nothing ties
+  wallet.koinosproof.com to a commit. Deploying it from CI needs a Railway token as a repository secret.
+
+### Not yet run
+
+Everything above passes its tests on the phone it was written on (jsdom and a fake node). Not run: the
+browser suites (`e2e:ext`, `smoke:web`), the Android and iOS builds (CI does those), and anything on a
+real device, which the three "needs a device" notes above depend on.

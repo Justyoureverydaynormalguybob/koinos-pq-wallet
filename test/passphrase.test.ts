@@ -85,7 +85,7 @@ describe("the gate on the screens (jsdom)", () => {
     });
   });
 
-  it("a new wallet and a duress wallet refuse a weak passphrase, say why, and take a strong one", async () => {
+  it("a new wallet and its duress wallet refuse a weak passphrase, say why, and take a strong one", async () => {
     localStorage.clear();
     document.body.innerHTML = `<div id="app"></div>`;
     const root = document.getElementById("app")!;
@@ -112,20 +112,16 @@ describe("the gate on the screens (jsdom)", () => {
       expect(h1(root), weak).toMatch(/passphrase/i);
       expect(localVaultStore.load(), weak).toBeNull();
     }
-    await submit(root, "passphrase", { p1: STRONG, p2: STRONG });
-    expect(localVaultStore.load()).not.toBeNull();
-
-    // the duress wallet's passphrase goes through the same gate
-    click(root, root.querySelector('[data-action="settings"]') ? "settings" : "setup-cancel");
-    click(root, "duress");
-    click(root, "duress-create");
-    const before = JSON.stringify(localVaultStore.load());
-    await submit(root, "duress-save", { d1: "duress passphrase 5678", d2: "duress passphrase 5678", main: STRONG });
+    // the duress wallet's passphrase, chosen on the same screen, goes through the same gate
+    await submit(root, "passphrase", { p1: STRONG, p2: STRONG, d1: "duress passphrase 5678", d2: "duress passphrase 5678" });
     expect(root.textContent).toMatch(/too easy to guess/);
-    expect(JSON.stringify(localVaultStore.load())).toBe(before);
-    await submit(root, "duress-save", { d1: "duress lantern gravel moth", d2: "duress lantern gravel moth", main: STRONG });
-    expect(h1(root)).toBe("Unlock");
-    expect(JSON.stringify(localVaultStore.load())).not.toBe(before);
+    expect(localVaultStore.load()).toBeNull();
+    await submit(root, "passphrase", { p1: STRONG, p2: STRONG, d1: "short", d2: "short" });
+    expect(root.textContent).toMatch(/at least \d+ characters for the duress passphrase/);
+    expect(localVaultStore.load()).toBeNull();
+    await submit(root, "passphrase", { p1: STRONG, p2: STRONG, d1: "duress lantern gravel moth", d2: "duress lantern gravel moth" });
+    expect(h1(root)).toBe("The duress wallet's 24 words");
+    expect(localVaultStore.load()).not.toBeNull();
   }, 120_000);
 
   it("a wallet saved under a weak passphrase before the gate still unlocks, and its settings still save", async () => {

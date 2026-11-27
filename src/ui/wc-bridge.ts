@@ -321,7 +321,7 @@ export class WcBridge {
           deps.notify((err as Error).message);
         }
       },
-      { alwaysAsk: true, via: summary.name, unverified: summary.verified !== "VALID", startedBy: this.startedBy.get(String((e.params as { pairingTopic?: string }).pairingTopic ?? "").toLowerCase()) },
+      { alwaysAsk: true, via: summary.name, unverified: summary.verified !== "VALID", mismatch: summary.verified === "INVALID", startedBy: this.startedBy.get(String((e.params as { pairingTopic?: string }).pairingTopic ?? "").toLowerCase()) },
     );
   }
 
@@ -367,7 +367,7 @@ export class WcBridge {
       await respond({ error: "that account is not part of this session" });
       return;
     }
-    await host.submit(t.req, respond, { via: d.name, unverified: e.verifyContext.verified.validation !== "VALID" });
+    await host.submit(t.req, respond, { via: d.name, unverified: e.verifyContext.verified.validation !== "VALID", mismatch: e.verifyContext.verified.validation === "INVALID" });
   }
 }
 

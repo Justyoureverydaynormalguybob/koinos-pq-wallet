@@ -43,8 +43,18 @@ function currentNetwork(): Network {
 function render(html: string, net: Network = currentNetwork()) {
   root.innerHTML = `<div class="shell">${header('<span class="hexstrip">request</span>')}${ticker(net.name, null, false, "what you see is what you sign")}<div class="content plain">${html}<p class="foot">Keys never leave this window · a test build, not audited</p></div></div>`;
 }
+/** The asking site; a page that is not encrypted is marked, as in the app's sheet (anyone on the network can alter such a page). */
+function originHeading(origin: string): string {
+  let plain = false;
+  try {
+    plain = new URL(origin).protocol === "http:";
+  } catch {
+    /* shown as it came */
+  }
+  return `<h1 style="font-size:22px">${esc(origin)}${plain ? ` <span class="badge-http">not encrypted</span>` : ""}</h1>`;
+}
 const refuse = (origin: string, why: string) =>
-  render(`<h1 style="font-size:22px">${esc(origin)}</h1>${notice("danger", `This site sent a request the wallet will not sign. ${esc(why)}`)}<div class="row">${button("Close", { variant: "ghost", attrs: "data-refuse" })}</div>`);
+  render(`${originHeading(origin)}${notice("danger", `This site sent a request the wallet will not sign. ${esc(why)}`)}<div class="row">${button("Close", { variant: "ghost", attrs: "data-refuse" })}</div>`);
 
 async function main() {
   root.addEventListener("click", (e) => {
@@ -60,7 +70,7 @@ async function main() {
     render(`<h1>No wallet yet</h1><p>This extension has no wallet. Open it, create or import one, then try again from the site.</p><div class="row">${button("Open the wallet", { variant: "primary", attrs: "data-open" })}${button("Reject", { variant: "ghost", attrs: "data-reject" })}</div>`);
     return;
   }
-  render(`<h1 style="font-size:22px">${esc(req.origin)}</h1>${notice("busy", "Checking the request…")}`);
+  render(`${originHeading(req.origin)}${notice("busy", "Checking the request…")}`);
   let p: Plan;
   try {
     p = await planRequest(req, currentNetwork());
@@ -69,7 +79,7 @@ async function main() {
     return;
   }
   render(`
-    <h1 style="font-size:22px">${esc(req.origin)}</h1>
+    ${originHeading(req.origin)}
     ${describePlan(p)}
     <form data-form="approve">
       ${field("Passphrase", input({ name: "passphrase", type: "password", required: true, autofocus: true, autocomplete: "off" }))}

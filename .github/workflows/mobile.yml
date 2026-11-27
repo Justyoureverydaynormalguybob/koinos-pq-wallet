@@ -6,11 +6,19 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Every job reads the repository and nothing else. The one job that writes (publishing a release for a tag)
+# asks for that itself.
+permissions:
+  contents: read
+
 jobs:
   android:
     runs-on: ubuntu-24.04 # ubuntu-latest moves to 26 from 2026-10-19; pin what we tested
     env:
-      KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      # Only whether a keystore is configured, for the `if:` below (a step's `if` cannot read `secrets`).
+      # The keystore itself is given to the one step that restores it: npm, vite, the tests and cap sync
+      # never have it in their environment.
+      HAS_KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -29,7 +37,7 @@ jobs:
         # The keystore is exposed to this step only: npm, vite and the test runner never see it.
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        if: env.KS_B64 != ''
+        if: env.HAS_KS == 'true'
         run: |
           echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
@@ -110,3 +118,38 @@ jobs:
         with:
           name: ios-app-unsigned
           path: koinos-pq-wallet-ios-unsigned.zip
+
+  # A tag (v*) publishes its own release: the files on the release page are the ones the jobs above built in
+  # this run, from the tagged commit, and the notes say which run that was and what each file hashes to.
+  # Nothing is uploaded by hand, so "install only from the release page and check the hash" checks against
+  # something this repository's history and this run's log can confirm.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, extension, ios]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish the release with the files this run built
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          cd out
+          rm -f ./*.aab ./*.aab.sha256 # the bundle is for a store upload, not for installing
+          sha256sum koinos-pq-wallet-* | grep -v '\.sha256$' > SHA256SUMS
+          {
+            echo "Built by CI from commit $GITHUB_SHA, in run $RUN_URL."
+            echo "Every file below was produced by that run; none was uploaded by hand."
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } > notes.md
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file notes.md --verify-tag \
+            koinos-pq-wallet-*.apk koinos-pq-wallet-*.apk.sha256 koinos-pq-wallet-extension-*.zip koinos-pq-wallet-extension-*.zip.sha256 koinos-pq-wallet-ios-unsigned.zip SHA256SUMS

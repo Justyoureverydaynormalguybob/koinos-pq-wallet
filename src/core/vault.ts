@@ -9,6 +9,19 @@
 // always doing all the key derivations, so neither the stored bytes nor the unlock time say whether a
 // decoy exists or which slot it is. What opens is whatever the passphrase opens.
 //
+// A wallet does not know which of the two it is. Nothing inside a slot says "main" or "decoy", and no
+// screen of an open wallet can write the other slot: the decoy is chosen when the file is made (a wallet
+// created or imported on this device) and at no other time. Until 0.18 an open wallet could set up or
+// replace the duress wallet, which meant it had to know its own role (stored in the slot), and a decoy
+// asked to do it could only overwrite itself: its passphrase then stopped working, which told whoever
+// was holding the phone that it was the decoy (external review 2026-11-27, item 4). Two slots cannot
+// make that operation look the same from both wallets, so the operation is gone.
+//
+// A slot's salt is kept for the life of its passphrase. The slot's key is what the biometric wrap and the
+// side stores' key are made from; a save under a fresh salt changed that key and left the side stores
+// (contacts, tokens, allowed sites, names) unreadable at the next unlock (same review, item 3). A save
+// takes a fresh IV only. The salt changes when the passphrase does, and the stores are sealed again then.
+//
 // WebCrypto only, no custom crypto. The decrypted seed lives in memory while unlocked and is wiped on lock.
 import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { AccountMode } from "koinos-pq-core";
@@ -23,17 +36,14 @@ export interface AccountRecord {
   address: string;
 }
 
-export type VaultRole = "main" | "decoy";
-
 export interface VaultData {
   version: 1;
   seedHex: string;
   accounts: AccountRecord[];
   createdAt: string;
-  /** absent in wallets saved before duress mode existed: treated as "main" */
-  role?: VaultRole;
-  /** main wallet only: a decoy has been written to the other slot (shown in Settings; a decoy never has this) */
-  /** legacy (written until 0.13): a main wallet once recorded that it had a decoy; never written or read now, since it told the two apart */
+  /** legacy (written until 0.18): which of the two wallets this is. Never written now and removed at the next unlock: it told a decoy apart for anyone with its passphrase and the stored file. */
+  role?: "main" | "decoy";
+  /** legacy (written until 0.13): a main wallet once recorded that it had a decoy. Never written now; removed at the next unlock. */
   hasDecoy?: boolean;
 }
 
@@ -87,8 +97,7 @@ function padded(json: string): Uint8Array {
   return out;
 }
 
-async function encryptBytes(plaintext: Uint8Array, passphrase: string, iterations: number): Promise<EncryptedVault> {
-  const salt = randomBytes(16);
+async function encryptBytes(plaintext: Uint8Array, passphrase: string, iterations: number, salt: Uint8Array = randomBytes(16)): Promise<EncryptedVault> {
   const iv = randomBytes(12);
   const key = await deriveAesKey(passphrase, salt, iterations);
   const ct = new Uint8Array(await subtle().encrypt({ name: "AES-GCM", iv: iv as BufferSource }, key, plaintext as BufferSource));
@@ -96,9 +105,35 @@ async function encryptBytes(plaintext: Uint8Array, passphrase: string, iteration
   return { v: 1, kdf: "PBKDF2-SHA256", iterations, saltHex: bytesToHex(salt), ivHex: bytesToHex(iv), ciphertextHex: bytesToHex(ct) };
 }
 
+/** What is written into a slot: the wallet without the legacy fields that told a main wallet from a decoy. */
+function stored(data: VaultData): string {
+  const { role: _role, hasDecoy: _hasDecoy, ...clean } = data;
+  return JSON.stringify(clean);
+}
+
+/** A slot for a NEW passphrase (a new wallet, or a changed passphrase): fresh salt, so a new slot key. */
 export async function encryptVault(data: VaultData, passphrase: string, iterations = PBKDF2_ITERATIONS): Promise<EncryptedVault> {
   if (passphrase.length < MIN_PASSPHRASE_LENGTH) throw new Error(`passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
-  return encryptBytes(padded(JSON.stringify(data)), passphrase, iterations);
+  return encryptBytes(padded(stored(data)), passphrase, iterations);
+}
+
+/**
+ * The same slot with new contents, under the SAME passphrase: its salt and iteration count are kept, so
+ * the slot key (and with it the biometric wrap and the side stores' key) stays what it was; only the IV is
+ * new. This is what every save of an open wallet uses.
+ */
+export async function reencryptVault(previous: EncryptedVault, data: VaultData, passphrase: string): Promise<EncryptedVault> {
+  if (previous.v !== 1 || previous.kdf !== "PBKDF2-SHA256") throw new Error("unknown vault format");
+  return encryptBytes(padded(stored(data)), passphrase, previous.iterations, hexToBytes(previous.saltHex));
+}
+
+/**
+ * True when an opened slot should be written again as it is (reencryptVault): it still carries a legacy
+ * field, or it is not the size slots have now (4 KiB until 0.14). Done at unlock for whichever wallet
+ * opened, so nothing a wallet was written with in an older version stays behind to tell it apart.
+ */
+export function needsRewrite(enc: EncryptedVault, data: VaultData): boolean {
+  return data.role !== undefined || data.hasDecoy !== undefined || enc.ciphertextHex.length !== 2 * (PAD_BLOCK + 16);
 }
 
 /**
@@ -152,8 +187,6 @@ async function decryptWith(enc: EncryptedVault, key: CryptoKey): Promise<VaultDa
   return data;
 }
 
-export const roleOf = (v: VaultData): VaultRole => v.role ?? "main";
-
 /** A legacy single-slot store value becomes a file by adding filler for the missing slots. */
 export async function toFile(stored: VaultFile | EncryptedVault): Promise<VaultFile> {
   if ("slots" in stored && stored.v === 2) return stored;
@@ -188,11 +221,27 @@ export async function openVault(file: VaultFile, passphrase: string): Promise<Op
   return opened;
 }
 
-/** A new file for a fresh wallet: the wallet in a random slot, filler in the others. */
-export async function newFile(data: VaultData, passphrase: string, iterations = PBKDF2_ITERATIONS): Promise<{ file: VaultFile; slot: number; key: Uint8Array }> {
+/**
+ * A new file for a fresh wallet: the wallet in a random slot; in the other, the duress wallet when one was
+ * chosen, else filler. This is the only place a duress wallet is ever written.
+ */
+export async function newFile(
+  data: VaultData,
+  passphrase: string,
+  iterations = PBKDF2_ITERATIONS,
+  duress?: { data: VaultData; passphrase: string },
+): Promise<{ file: VaultFile; slot: number; key: Uint8Array }> {
+  if (duress && duress.passphrase.normalize("NFKD") === passphrase.normalize("NFKD")) throw new Error("the duress passphrase must differ from the main one");
   const slot = randomBytes(1)[0]! % SLOT_COUNT;
   const slots: EncryptedVault[] = [];
-  for (let i = 0; i < SLOT_COUNT; i++) slots.push(i === slot ? await encryptVault(data, passphrase, iterations) : await fillerSlot(iterations));
+  let duressPlaced = false;
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    if (i === slot) slots.push(await encryptVault(data, passphrase, iterations));
+    else if (duress && !duressPlaced) {
+      slots.push(await encryptVault(duress.data, duress.passphrase, iterations));
+      duressPlaced = true;
+    } else slots.push(await fillerSlot(iterations));
+  }
   const key = await deriveSlotKeyBytes(slots[slot]!, passphrase);
   return { file: { v: 2, slots }, slot, key };
 }
@@ -203,17 +252,7 @@ export function withSlot(file: VaultFile, index: number, slot: EncryptedVault): 
   return { v: 2, slots: file.slots.map((s, i) => (i === index ? slot : s)) };
 }
 
-/**
- * Which slot a decoy goes into. From the main wallet: the other slot (never its own). From a decoy: its
- * own slot, so a "set up duress wallet" done under duress looks and works the same but can never touch
- * the main wallet.
- */
-export function decoySlotFor(openedSlot: number, role: VaultRole): number {
-  if (role === "decoy") return openedSlot;
-  return (openedSlot + 1) % SLOT_COUNT;
-}
-
-/** True when the passphrase opens the given slot (used to refuse a decoy passphrase equal to the main one). */
+/** True when the passphrase opens the given slot. */
 export async function opens(slot: EncryptedVault, passphrase: string): Promise<boolean> {
   try {
     await decryptVault(slot, passphrase);

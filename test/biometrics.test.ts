@@ -3,14 +3,16 @@
 import { describe, expect, it } from "vitest";
 import { webcrypto } from "node:crypto";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, forgetSlot, refreshWrappedKey, type Biometry, type BlobStore, type KeyStore } from "../src/core/biometrics";
-import { decoySlotFor, encryptVault, newFile, openVault, withSlot, type VaultData } from "../src/core/vault";
+import { encryptVault, newFile, openVault, withSlot, type VaultData } from "../src/core/vault";
 
 if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
 
 const ITER = 1000; // fast derivations in tests; the format is the same
 const MAIN = "main kettle orbit plank", DECOY = "decoy lantern gravel moth";
-const mainData: VaultData = { version: 1, seedHex: "11".repeat(32), accounts: [], createdAt: "2026-10-19", role: "main" };
-const decoyData: VaultData = { version: 1, seedHex: "22".repeat(32), accounts: [], createdAt: "2026-10-19", role: "decoy" };
+const mainData: VaultData = { version: 1, seedHex: "11".repeat(32), accounts: [], createdAt: "2026-10-19" };
+const decoyData: VaultData = { version: 1, seedHex: "22".repeat(32), accounts: [], createdAt: "2026-10-19" };
+/** which wallet opened, told by its seed (nothing in a slot says "main" or "decoy" any more) */
+const which = (o: { data: VaultData } | null | undefined) => (o?.data.seedHex === mainData.seedHex ? "main" : o?.data.seedHex === decoyData.seedHex ? "decoy" : undefined);
 
 function fakes(opts: { available?: boolean; passPrompt?: boolean } = {}) {
   let blobs: string[] | null = null;
@@ -80,19 +82,18 @@ describe("biometric unlock", () => {
 
   it("duress: biometrics belong to one wallet at a time; enabling from the decoy switches them to the decoy; a new decoy forgets its slot", async () => {
     const f = fakes();
-    const { file: f0, slot: mainSlot } = await newFile(mainData, MAIN, ITER);
-    const decoySlot = decoySlotFor(mainSlot, "main");
-    const file = withSlot(f0, decoySlot, await encryptVault(decoyData, DECOY, ITER));
-    expect((await openVault(file, DECOY)).slot).toBe(decoySlot);
+    const { file, slot: mainSlot } = await newFile(mainData, MAIN, ITER, { data: decoyData, passphrase: DECOY });
+    const decoySlot = (await openVault(file, DECOY)).slot;
+    expect(decoySlot).not.toBe(mainSlot);
     await enableBiometrics(file, mainSlot, MAIN, f);
-    expect((await biometricUnlock(file, f))?.data.role).toBe("main");
+    expect(which(await biometricUnlock(file, f))).toBe("main");
     // refreshing the decoy's slot does nothing (biometrics are not its): the main still opens
     await refreshWrappedKey(file, decoySlot, DECOY, f);
-    expect((await biometricUnlock(file, f))?.data.role).toBe("main");
+    expect(which(await biometricUnlock(file, f))).toBe("main");
     // under duress the decoy's user enables biometrics: now only the decoy opens, and the main's blob became filler
     const before = f.state.blobs![mainSlot];
     await enableBiometrics(file, decoySlot, DECOY, f);
-    expect((await biometricUnlock(file, f))?.data.role).toBe("decoy");
+    expect(which(await biometricUnlock(file, f))).toBe("decoy");
     expect(f.state.blobs![mainSlot]).not.toBe(before);
     expect(f.state.blobs![mainSlot]!.length).toBe(f.state.blobs![decoySlot]!.length);
     // a decoy written over the slot that held biometrics: that slot is forgotten, nothing opens

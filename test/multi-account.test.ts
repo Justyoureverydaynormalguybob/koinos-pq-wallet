@@ -44,7 +44,7 @@ function answer(req: { method: string; params: Record<string, unknown> }): unkno
   if (req.method === "chain.get_head_info") return { head_topology: { height: "100" } };
   if (req.method === "chain.get_account_rc") return { rc: manaOf.get((req.params as { account: string }).account) ?? "500000000" };
   if (req.method === "chain.get_account_nonce") return { nonce: "" };
-  if (req.method === "chain.get_chain_id") return { chain_id: "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==" };
+  if (req.method === "chain.get_chain_id") return { chain_id: "EiAHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==" /* a devnet's own id: the wallet refuses a devnet node that answers with a pinned chain's */ };
   if (req.method === "chain.get_resource_limits") return { resource_limit_data: { disk_storage_cost: "10", network_bandwidth_cost: "5", compute_bandwidth_cost: "1" } };
   if (req.method === "chain.read_contract") {
     const { contract_id, entry_point } = req.params as { contract_id: string; entry_point: number };

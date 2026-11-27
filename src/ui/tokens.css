@@ -131,7 +131,7 @@ mark { background: var(--signal); color: var(--on-signal); padding: 0 1px; }
 @media (max-width: 480px) { .mark .hex { display: none; } }
 .mark { white-space: nowrap; }
 .btn.mini[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
-.sheet .badge-http { display: inline-block; font: 700 11px/1 var(--mono); letter-spacing: 0.1em; padding: 3px 6px; margin-left: 8px; background: var(--signal); color: #fff; vertical-align: middle; }
+.badge-http { display: inline-block; font: 700 11px/1 var(--mono); letter-spacing: 0.1em; padding: 3px 6px; margin-left: 8px; background: var(--signal); color: #fff; vertical-align: middle; }
 .ticker {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 4px 16px; font: 500 11px/1.6 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--mute);

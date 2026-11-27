@@ -24,6 +24,8 @@ export interface PendingApproval {
   via?: string;
   /** shown on the sheet when the source could not be verified (WalletConnect's verify result) */
   unverified?: boolean;
+  /** WalletConnect's verify result was INVALID: the request does not come from the domain it names. A danger notice, not a footnote. */
+  mismatch?: boolean;
   /** WalletConnect: the origin of the page in the in-app browser whose link started this pairing, when one did */
   startedBy?: string;
   /** what will be done if approved; null when the request was refused (see `refused`) */
@@ -44,6 +46,8 @@ export interface HostEvents {
 
 /** a page gets one pairing attempt per this many ms, so a script cannot keep the wallet pairing */
 export const WC_LINK_GAP_MS = 3000;
+/** how long before a pairing link the page itself must have reported a real tap for the link to count as tapped */
+export const WC_TAP_WINDOW_MS = 3000;
 
 export interface HostDeps {
   network: () => Network;
@@ -98,6 +102,7 @@ interface Queued {
   alwaysAsk?: boolean;
   via?: string;
   unverified?: boolean;
+  mismatch?: boolean;
   startedBy?: string;
 }
 
@@ -110,6 +115,8 @@ export class DappHost {
   private generation = 0;
   private providerCalls = new Map<string, number[]>();
   private lastWcLink = 0;
+  /** when the page itself (main frame, the open page's origin) last reported a real tap; see the relay script */
+  private lastPageTap = 0;
   url = "";
   title = "";
   canGoBack = false;
@@ -157,8 +164,12 @@ export class DappHost {
         } catch {
           /* no page address yet: the app is told so, and asks before pairing */
         }
-        // gesture: only an explicit true counts as a tap. A native side that does not say is treated as "no tap".
-        this.events.onWcLink?.(uri, { origin, gesture: e?.gesture === true });
+        // gesture: only an explicit true counts as a tap, and only when the page itself reported one just
+        // before. The native "a gesture started this" is also true for a tap inside a frame embedded in the
+        // page (Android cannot say which frame started a top-level navigation) and for a script's click() on
+        // a link (iOS); neither is the user tapping the page's own button, and for both the app asks first.
+        const tapped = e?.gesture === true && now - this.lastPageTap < WC_TAP_WINDOW_MS;
+        this.events.onWcLink?.(uri, { origin, gesture: tapped });
       }),
     );
   }
@@ -278,7 +289,7 @@ export class DappHost {
    * `respond` carries the answer back. `alwaysAsk` shows the sheet even for a site already allowed
    * (a new pairing is always a decision). Resolves once queued; the answer comes through `respond`.
    */
-  async submit(req: DappRequest, respond: Respond, o: { alwaysAsk?: boolean; via?: string; unverified?: boolean; startedBy?: string } = {}): Promise<void> {
+  async submit(req: DappRequest, respond: Respond, o: { alwaysAsk?: boolean; via?: string; unverified?: boolean; mismatch?: boolean; startedBy?: string } = {}): Promise<void> {
     if (!APPROVAL_COMMANDS.has(req.command)) {
       await respond({ error: `unsupported command ${req.command}` });
       return;
@@ -289,7 +300,7 @@ export class DappHost {
       await respond({ error: "too many requests waiting for approval" });
       return;
     }
-    this.queue.push({ key: crypto.randomUUID(), req, createdAt: Date.now(), source: "wc", respond, alwaysAsk: o.alwaysAsk, via: o.via, unverified: o.unverified, startedBy: o.startedBy });
+    this.queue.push({ key: crypto.randomUUID(), req, createdAt: Date.now(), source: "wc", respond, alwaysAsk: o.alwaysAsk, via: o.via, unverified: o.unverified, mismatch: o.mismatch, startedBy: o.startedBy });
     void this.pump();
   }
   /** A read for another source, under the page's denylist and rate limit. */
@@ -322,6 +333,10 @@ export class DappHost {
       return;
     }
     if (!m || typeof m.id !== "string" || m.id.length > 128 || typeof m.command !== "string") return;
+    if (m.command === "pq:tap") {
+      if (mainFrame && nativeOrigin !== "" && nativeOrigin === originOf(this.url)) this.lastPageTap = Date.now();
+      return; // nothing is answered
+    }
     if (m.command === "pq:site-cleared") {
       if (mainFrame) this.cleared?.(); // the relay script's word that the site's data is gone; nothing is answered
       return;
@@ -395,7 +410,7 @@ export class DappHost {
     if (!next) return; // idle: the app re-renders on onApproval(null) and places the page view itself
     // Claim the slot before anything asynchronous: a second message arriving while this one is being
     // planned must queue behind it, never replace the sheet under the user's finger.
-    const claim: PendingApproval & { respond?: Respond } = { key: next.key, req: next.req, source: next.source, via: next.via, unverified: next.unverified, startedBy: next.startedBy, respond: next.respond, plan: null, refused: null, status: "planning" };
+    const claim: PendingApproval & { respond?: Respond } = { key: next.key, req: next.req, source: next.source, via: next.via, unverified: next.unverified, mismatch: next.mismatch, startedBy: next.startedBy, respond: next.respond, plan: null, refused: null, status: "planning" };
     this.current = claim;
     const gen = this.generation;
     const closedMeanwhile = () => (next.source === "page" ? gen !== this.generation : false) || this.current !== claim;
@@ -408,11 +423,14 @@ export class DappHost {
       refused = (e as Error).message || String(e);
     }
     if (closedMeanwhile()) return; // the page closed meanwhile; close() already answered it
-    // A site that was shown some of the accounts may ask only those to sign. Another account of this wallet
-    // (its address is usually findable on the chain) must not reach the sheet as if it were the connected one.
-    if (plan && next.source === "page" && plan.signerAddress) {
+    // A page may ask an account to sign only after the user has shown that account to that site. Another
+    // account of this wallet (its address is usually findable on the chain) must not reach the sheet as if
+    // it were the connected one, and a site that never connected, was revoked, or holds a grant from before
+    // there was a list has been shown nothing: without this rule it could name any address and learn from
+    // the answer whether it belongs to this wallet.
+    if (plan && next.source === "page" && next.req.command !== "getAccounts") {
       const shown = this.deps.permissions()?.accountsFor(next.req.origin);
-      if (shown && !shown.includes(plan.signerAddress)) {
+      if (!plan.signerAddress || !shown?.includes(plan.signerAddress)) {
         plan = null;
         refused = "This site was not shown that account. Connect it to the site first.";
       }
@@ -422,7 +440,7 @@ export class DappHost {
     // later". Such a site is simply asked again, once, and the answer is then remembered with its list.
     const remembered = this.deps.permissions()?.accountsFor(next.req.origin);
     if (plan && !next.alwaysAsk && next.req.command === "getAccounts" && this.deps.permissions()?.isAllowed(next.req.origin) && remembered) {
-      await this.execute(claim, plan, remembered); // the same accounts as were chosen then
+      await this.execute(claim, plan, remembered, () => !closedMeanwhile()).catch(() => undefined); // the same accounts as were chosen then
       if (closedMeanwhile()) return;
       this.current = null;
       this.events.onApproval(null);
@@ -435,7 +453,11 @@ export class DappHost {
     this.events.onApproval(claim);
   }
 
-  private async execute(q: { req: DappRequest; respond?: Respond }, plan: Plan, only?: ReadonlyArray<string>): Promise<string[] | undefined> {
+  /**
+   * `alive`: false once the page that asked has gone to another site. Its answer is then not sent at all:
+   * the reply channel is the page view, and whatever is in it now is a different site.
+   */
+  private async execute(q: { req: DappRequest; respond?: Respond }, plan: Plan, only?: ReadonlyArray<string>, alive: () => boolean = () => true): Promise<string[] | undefined> {
     const req = q.req;
     const keys = this.deps.keys();
     if (!keys) {
@@ -448,6 +470,7 @@ export class DappHost {
         this.events.onApproval(this.current);
       }
     }, only);
+    if (!alive()) return undefined;
     await this.answer(q, "error" in outcome ? { error: outcome.error } : { result: outcome.result });
     if ("error" in outcome && outcome.status) throw new Error(outcome.status); // the asker got its answer; the user sees why it failed
     // for a request to see the accounts: the addresses that were in the answer
@@ -476,7 +499,7 @@ export class DappHost {
     const gen = this.generation;
     const stillHere = () => (c.source === "page" ? gen === this.generation : true);
     try {
-      const shown = await this.execute(c, c.plan, c.req.command === "getAccounts" ? only : undefined);
+      const shown = await this.execute(c, c.plan, c.req.command === "getAccounts" ? only : undefined, stillHere);
       // what is remembered is exactly the accounts that were shown, never an open-ended "all"
       if (stillHere() && c.source === "page" && c.req.command === "getAccounts" && shown) this.deps.permissions()?.allow(c.req.origin, shown);
     } finally {

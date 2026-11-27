@@ -114,9 +114,11 @@ your 24 words into it and it finds your account.
 
 ## New in 0.4.0: things to try
 
-- **Duress wallet.** Settings → Duress wallet → create. Then lock and unlock with the duress passphrase:
-  you should see a different, empty wallet with no mention of the main one. Activate and fund it a little
-  if you want it to look real.
+- **Duress wallet.** Since 0.19.0 it is chosen when a wallet is created or imported: on the "Choose a
+  passphrase" screen open "Duress wallet (optional)" and give it its own passphrase. Its 24 words are
+  shown once. Then lock and unlock with the duress passphrase: you should see a different, empty wallet
+  with no mention of the main one, and no way in either wallet's Settings to add or replace one. Activate
+  and fund it a little if you want it to look real.
 - **Sending to a new address** asks you to tick that you compared the whole address. Sending to an address
   that looks like one you used before (same start and end) shows both with the differences marked and
   asks for its last six characters.

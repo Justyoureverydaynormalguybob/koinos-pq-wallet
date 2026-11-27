@@ -15,12 +15,12 @@ import {
   type SetupCosts, type SetupResult, type SetupStatus,
 } from "koinos-pq-core";
 import {
-  decoySlotFor, decryptVault, encryptVault, localVaultStore, MAX_ACCOUNTS, MIN_PASSPHRASE_LENGTH, newFile, openVault, roleOf, SLOT_COUNT, toFile, withSlot,
+  decryptVault, deriveSlotKeyBytes, encryptVault, localVaultStore, MAX_ACCOUNTS, MIN_PASSPHRASE_LENGTH, needsRewrite, newFile, openVault, reencryptVault, SLOT_COUNT, toFile, withSlot,
   type AccountRecord, type VaultData, type VaultFile,
 } from "../core/vault";
 import { MAX_DERIVED_ACCOUNTS, accountKeys, accountName, canSign, detectAccounts, displayLabel, nextAccountKey, walletAccounts, wipeAccountKeys, type FoundAccount } from "../core/accounts";
 import { AddressBook, addressBookNamespace, localBookStore, type Assessment } from "../core/addressbook";
-import { SealedStore, fillerValue, storeKeyFrom } from "../core/sealed-store";
+import { SealedStore, fillerValue, lengthen, seal, storeKeyFrom } from "../core/sealed-store";
 import { WcBridge, type WcSession, wipeWcStorage } from "./wc-bridge";
 import { CLIPBOARD_WIPE_SECONDS, copyWithWipe } from "../core/clipboard";
 import { CustomTokens, allTokens, customTokensNamespace, findToken, formatUnits, parseUnits, type Token } from "../core/tokens";
@@ -33,7 +33,7 @@ import { AccountNames } from "../core/names";
 import { fmtDuration, fmtUsd, koinUsd, manaFullIn, usdValue } from "../core/price";
 import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr } from "../i18n";
 import { scanAddress, type Scanner } from "./scan";
-import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, localBlobStore, nativeBiometry, nativeKeyStore, refreshWrappedKey, type BioDeps } from "../core/biometrics";
+import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, followPassphraseChange, localBlobStore, nativeBiometry, nativeKeyStore, type BioDeps } from "../core/biometrics";
 import { SitePermissions, permissionsNamespace } from "../core/permissions";
 import { passphraseStrength, STRENGTH_LABELS } from "../core/passphrase";
 import { Collections, NFT_ENTRY, collectionCandidates, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
@@ -44,14 +44,14 @@ import dappList from "../data/dapps.json";
 
 type Screen =
   | "welcome" | "create" | "confirm" | "passphrase" | "import" | "unlock" | "home" | "send" | "send-confirm" | "sent" | "receive" | "history"
-  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress" | "duress-words" | "bio-enable" | "nfts" | "nft" | "nft-send" | "burn";
+  | "dapps" | "settings" | "export" | "setup" | "save" | "contacts" | "duress-words" | "change-pass" | "bio-enable" | "nfts" | "nft" | "nft-send" | "burn";
 
 /** Screens that live under the tab bar, and which tab they belong to. */
 const TAB_OF: Partial<Record<Screen, string>> = {
   home: "account", send: "account", "send-confirm": "account", sent: "account", receive: "account", setup: "account", nfts: "account", nft: "account", "nft-send": "account", burn: "account",
   history: "activity",
   dapps: "dapps",
-  settings: "settings", export: "settings", save: "settings", contacts: "settings", duress: "settings", "duress-words": "settings", "bio-enable": "settings",
+  settings: "settings", export: "settings", save: "settings", contacts: "settings", "change-pass": "settings", "bio-enable": "settings",
 };
 
 interface SetupState {
@@ -188,7 +188,7 @@ interface State {
   sendCheck: SendCheck | null;
   setup: SetupState | null;
   /** a burn that was signed and sent but got no clear answer from the node: no new burn from that account until it is settled */
-  unconfirmedBurn: { txId: string; account: string; network: string; amount: string; at: number } | null;
+  unconfirmed: Record<string, { txId: string; amount: string; symbol: string; burned: boolean; at: number }>;
   /** per network: the activated account found from the seed (null: none; missing: not checked yet) */
   detected: Record<string, FoundAccount[]>;
   /** per network: the next account of these words when it holds funds but is not activated (null: it holds nothing; missing: not checked) */
@@ -230,7 +230,17 @@ const emptyStore = (_kind: StoreKind) => fillerValue();
 const storeKey = (kind: StoreKind, ns: string) => `koinos-pq-wallet/${kind}/${ns}`;
 function ensureStored(key: string, empty: string) {
   try {
-    if (globalThis.localStorage?.getItem(key) === null) globalThis.localStorage?.setItem(key, empty);
+    const ls = globalThis.localStorage;
+    if (!ls) return;
+    const have = ls.getItem(key);
+    if (have === null) {
+      ls.setItem(key, empty);
+      return;
+    }
+    // a value from the 1 KiB padding (before 0.19): made the one size every entry has now, for every slot
+    // alike (it takes no key), so the sizes say nothing about which slot holds a used wallet
+    const sized = lengthen(have);
+    if (sized !== have) ls.setItem(key, sized);
   } catch {
     /* a blocked store: nothing persists, the wallet still works */
   }
@@ -243,13 +253,6 @@ function moveStored(from: string, to: string) {
     if (v === null) return;
     if (ls.getItem(to) === null) ls.setItem(to, v);
     ls.removeItem(from);
-  } catch {
-    /* as above */
-  }
-}
-function resetStored(key: string, empty: string) {
-  try {
-    globalThis.localStorage?.setItem(key, empty);
   } catch {
     /* as above */
   }
@@ -313,7 +316,7 @@ export function sameSite(a: string, b: string): boolean {
 export function bannerMs(text: string, kind: "notice" | "error"): number {
   return Math.min(12_000, Math.max(6_000, 4_000 + 50 * text.length)) + (kind === "error" ? 3_000 : 0);
 }
-/** How long an unanswered burn blocks another one from the same account (a node drops a waiting transaction well before this). */
+/** How long an unanswered send or burn blocks another one from the same account (a node drops a waiting transaction well before this). */
 const UNCONFIRMED_HOLD_MS = 10 * 60_000;
 const PRICE_TTL_MS = 5 * 60_000;
 /** how long a hidden tab may stay unlocked */
@@ -366,6 +369,9 @@ export class App {
   private root: HTMLElement;
   private lockTimer: number | undefined;
   private hideTimer: number | undefined;
+  /** when the app was last used, and when it was hidden (0: it is not): the lock deadlines are worked out from these */
+  private usedAt = 0;
+  private hiddenAt = 0;
   private liveTimer: number | undefined;
   private noticeTimer: number | undefined;
   private liveBusy = false;
@@ -444,7 +450,7 @@ export class App {
       wcSessions: [],
       wcLog: [],
       storeKey: null,
-      unconfirmedBurn: null,
+      unconfirmed: {},
       detected: {},
       waiting: {},
       waitingAt: {},
@@ -465,6 +471,11 @@ export class App {
             if (r === "minimize") void CapApp.minimizeApp();
           });
         });
+        // the app came back to the front: the same clock check as when the page becomes visible (not every
+        // web view reports that after a long sleep)
+        void CapApp.addListener("resume", () => {
+          this.lockIfOverdue();
+        });
         // a WalletConnect link from a dapp or a QR app: paired now, or right after the next unlock
         void CapApp.addListener("appUrlOpen", ({ url }) => {
           if (!/^wc:/i.test(url)) return;
@@ -480,19 +491,31 @@ export class App {
     // unlocked, or a version before 0.18.3 kept sessions across locks) goes before anything can read it.
     void wipeWcStorage();
     root.addEventListener("input", (e) => this.onInput(e));
-    for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => this.touch(), { passive: true });
+    for (const ev of ["pointerdown", "keydown"]) {
+      document.addEventListener(ev, () => {
+        if (!this.lockIfOverdue()) this.touch();
+      }, { passive: true });
+    }
     window.addEventListener("resize", () => this.placeDapp());
     // a tab that is hidden (another tab, minimised, screen off) locks after HIDDEN_LOCK_SECONDS
     const livePollMs = opts.livePollMs ?? LIVE_POLL_MS;
     if (livePollMs > 0) this.liveTimer = window.setInterval(() => void this.liveTick(), livePollMs);
     document.addEventListener("visibilitychange", () => {
       window.clearTimeout(this.hideTimer);
-      if (document.visibilityState === "visible" && livePollMs > 0) void this.liveTick();
-      if (document.visibilityState === "hidden" && this.s.lockOnHide && this.unlocked()) {
-        this.hideTimer = window.setTimeout(() => {
-          if (document.visibilityState === "hidden" && !this.s.setup?.running) this.lock("Locked while the tab was hidden.");
-        }, HIDDEN_LOCK_SECONDS * 1000);
+      if (document.visibilityState === "hidden") {
+        if (!this.hiddenAt) this.hiddenAt = Date.now();
+        if (this.s.lockOnHide && this.unlocked()) {
+          this.hideTimer = window.setTimeout(() => {
+            if (document.visibilityState === "hidden") this.lockIfOverdue();
+          }, HIDDEN_LOCK_SECONDS * 1000);
+        }
+        return;
       }
+      // Back in view. A phone suspends a hidden web view, and a suspended timer does not fire: the lock above
+      // may never have run. So the deadlines are checked against the clock here, before anything is shown.
+      const locked = this.lockIfOverdue();
+      this.hiddenAt = 0;
+      if (!locked && livePollMs > 0) void this.liveTick();
     });
     this.render();
   }
@@ -572,11 +595,31 @@ export class App {
   private touch() {
     // the 24 words on the create screens count as unlocked too
     if (!this.s.keys && !this.s.pendingMnemonic && !this.s.pendingSeed) return;
+    this.usedAt = Date.now();
     window.clearTimeout(this.lockTimer);
     this.lockTimer = window.setTimeout(() => {
       if (this.s.setup?.running) return this.touch(); // never pull the key out from under an activation
       this.lock("Locked after inactivity.");
     }, this.s.autolockMinutes * 60_000);
+  }
+  /**
+   * Locks when a lock deadline has passed by the clock, whether or not its timer fired: hidden for longer
+   * than HIDDEN_LOCK_SECONDS (with that setting on), or unused for longer than the auto-lock time. The timers
+   * are only the usual way there; a suspended web view does not run them, and then this is what locks, at
+   * the first moment the app runs again. Returns true when it locked.
+   */
+  private lockIfOverdue(): boolean {
+    if (!this.unlocked() || this.s.setup?.running) return false;
+    const now = Date.now();
+    if (this.s.lockOnHide && this.hiddenAt && now - this.hiddenAt >= HIDDEN_LOCK_SECONDS * 1000) {
+      this.lock("Locked while the tab was hidden.");
+      return true;
+    }
+    if (this.usedAt && now - this.usedAt >= this.s.autolockMinutes * 60_000) {
+      this.lock("Locked after inactivity.");
+      return true;
+    }
+    return false;
   }
   private lock(notice?: string) {
     this.wc.detach();
@@ -626,6 +669,7 @@ export class App {
     this.s.error = null;
     window.clearTimeout(this.lockTimer);
     window.clearTimeout(this.hideTimer);
+    this.usedAt = 0;
     this.render();
   }
   /** Clears `text` from the notice line after `ms`, unless something else has replaced it by then. */
@@ -668,6 +712,7 @@ export class App {
   private go(screen: Screen) {
     this.s.screen = screen;
     this.s.exportWords = null; // the recovery words never outlive the screen they were shown on
+    if (screen !== "duress-words") this.s.pendingDecoy = null; // nor the duress wallet's
     this.s.error = null;
     this.s.notice = null;
     this.render();
@@ -803,6 +848,7 @@ export class App {
     if (mana > 0n && this.s.screen === "home" && !this.s.busy) this.render();
   }
   private async liveTick() {
+    if (this.lockIfOverdue()) return;
     void this.checkWaiting();
     if (this.s.keys && this.account()) this.refreshPrice(); // does nothing while the price shown is fresh
     if (this.liveBusy || !this.s.keys || this.s.busy || this.s.setup?.running) return;
@@ -959,11 +1005,25 @@ export class App {
     void this.primeHistory();
     if (!this.account() && this.network.name !== "devnet" && this.s.detected[this.network.name] !== undefined) this.startSetup();
   }
-  private async finishSetup(passphrase: string) {
+  /**
+   * Saves the new wallet. `duressPass`: the user chose a duress wallet on the passphrase screen; it gets its
+   * own fresh 24 words and goes into the other slot of the same file, written in the same step. This is the
+   * only moment a duress wallet can be made: nothing an open wallet can do afterwards adds, replaces or
+   * reveals one, so a decoy cannot be told from a main wallet by trying (see vault.ts).
+   */
+  private async finishSetup(passphrase: string, duressPass?: string) {
     const seed = this.s.pendingSeed;
     if (!seed) throw new Error(tr("nothing to save"));
-    const vault: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: this.s.pendingAccounts, createdAt: new Date().toISOString(), role: "main" };
-    const { file, slot, key } = await newFile(vault, passphrase);
+    const createdAt = new Date().toISOString();
+    const vault: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: this.s.pendingAccounts, createdAt };
+    let duress: { data: VaultData; passphrase: string } | undefined, duressWords: string | null = null;
+    if (duressPass) {
+      duressWords = newMnemonic();
+      const dseed = mnemonicToSeed(duressWords);
+      duress = { data: { version: 1, seedHex: bytesToHex(dseed), accounts: [], createdAt }, passphrase: duressPass };
+      wipe(dseed);
+    }
+    const { file, slot, key } = await newFile(vault, passphrase, undefined, duress);
     if (!localVaultStore.save(file)) throw new Error(tr("this browser blocks local storage; the wallet cannot be saved here"));
     this.s.file = file;
     this.s.slot = slot;
@@ -975,6 +1035,12 @@ export class App {
     this.s.accountIndex = this.s.vault.accounts.length ? 1 : 0;
     this.s.notice = null;
     this.touch();
+    if (duressWords) {
+      // its 24 words, shown once, before anything else; "duress-done" goes on to the account
+      this.s.pendingDecoy = duressWords;
+      this.s.screen = "duress-words";
+      return;
+    }
     await this.enterHome();
   }
   /**
@@ -1060,10 +1126,11 @@ export class App {
     if (!change || !this.s.file) throw new Error(tr("nothing to save"));
     const vault = await this.reopenCurrent(passphrase); // also checks the passphrase
     change.apply(vault);
-    const previous = this.s.file;
-    const file = withSlot(this.s.file, this.s.slot, await encryptVault(vault, passphrase));
+    // The slot keeps its salt, so its key stays the same: the side stores (sealed under a key made from it)
+    // and the biometric wrap go on working. A fresh salt here used to empty the contacts, tokens, allowed
+    // sites and names at the next unlock.
+    const file = withSlot(this.s.file, this.s.slot, await reencryptVault(this.s.file.slots[this.s.slot]!, vault, passphrase));
     if (!localVaultStore.save(file)) throw new Error(tr("could not write to local storage"));
-    await refreshWrappedKey(file, this.s.slot, passphrase, this.bio, previous).catch(() => undefined); // biometrics, if on for this slot, follow the new salt (no prompt)
     this.s.file = file;
     this.s.vault = vault;
     this.s.change = null;
@@ -1071,34 +1138,44 @@ export class App {
     this.s.notice = tr("Saved.");
   }
   /**
-   * Duress mode: writes a decoy wallet (its own seed, its own passphrase) into the slot decoySlotFor()
-   * picks. The main passphrase is required so only the owner can do it; the decoy passphrase must open
-   * nothing that exists. The session locks afterwards so the same thing happens whichever wallet did it.
+   * A new passphrase for the open wallet. The slot gets a fresh salt, so its key changes, and everything
+   * made from that key follows in the same step: the side stores are read under the old key and sealed
+   * under the new one, and the biometric wrap (if it is this wallet's) is renewed. The vault and the five
+   * stores are written one after another with nothing in between, then the wallet locks, so the next thing
+   * the user does is open it with the new passphrase.
+   *
+   * The new passphrase may not open anything on this device already (the same message whichever wallet is
+   * open, as when a duress passphrase is chosen).
    */
-  private async saveDecoy(mainPass: string, decoyPass: string) {
-    const file = this.s.file, words = this.s.pendingDecoy, vault = this.s.vault;
-    if (!file || !words || !vault) throw new Error(tr("nothing to save"));
-    const current = await this.reopenCurrent(mainPass);
+  private async changePassphrase(current: string, next: string) {
+    const file = this.s.file, oldStoreKey = this.s.storeKey;
+    if (!file || !oldStoreKey) throw new Error(tr("no wallet"));
+    const vault = await this.reopenCurrent(current); // also checks the current passphrase
     let taken = false;
     try {
-      await openVault(file, decoyPass);
+      await openVault(file, next);
       taken = true;
     } catch {
-      /* good: the decoy passphrase opens nothing yet */
+      /* good: the new passphrase opens nothing yet */
     }
-    if (taken) throw new Error(tr("The duress passphrase must be different from any passphrase this wallet already uses."));
-    const seed = mnemonicToSeed(words);
-    const decoy: VaultData = { version: 1, seedHex: bytesToHex(seed), accounts: [], createdAt: new Date().toISOString(), role: "decoy" };
-    wipe(seed);
-    const target = decoySlotFor(this.s.slot, roleOf(current));
-    const next = withSlot(file, target, await encryptVault(decoy, decoyPass));
-    if (!localVaultStore.save(next)) throw new Error(tr("could not write to local storage"));
-    for (const kind of STORE_KINDS) resetStored(storeKey(kind, `slot${target}`), emptyStore(kind)); // nothing of a previous decoy carries over
-    // Exactly the same work whichever wallet did this: nothing is written back to the current slot, and
-    // biometrics go off for every slot (the owner turns them on again from the wallet they should open).
-    // Nothing stored says which slot is which.
-    await disableBiometrics(this.bio).catch(() => undefined);
-    this.lock("Duress wallet saved. Unlock with either passphrase: each opens its own wallet. Biometric unlock is off; turn it on again from the wallet it should open.");
+    if (taken) throw new Error(tr("The new passphrase must be different from any passphrase this wallet already uses."));
+    const enc = await encryptVault(vault, next);
+    const slotKey = await deriveSlotKeyBytes(enc, next);
+    const newStoreKey = storeKeyFrom(slotKey);
+    wipe(slotKey);
+    const ns = `slot${this.s.slot}`;
+    const old = new SealedStore(oldStoreKey, localBookStore);
+    const resealed = STORE_KINDS.map((kind) => {
+      const key = storeKey(kind, ns);
+      const text = old.get(key); // null: never written by this wallet (filler)
+      return [key, text === null ? emptyStore(kind) : seal(newStoreKey, text)] as const;
+    });
+    wipe(newStoreKey);
+    const nextFile = withSlot(file, this.s.slot, enc);
+    if (!localVaultStore.save(nextFile)) throw new Error(tr("could not write to local storage"));
+    for (const [key, value] of resealed) localBookStore.set(key, value);
+    await followPassphraseChange(file, nextFile, this.s.slot, current, next, this.bio).catch(() => undefined);
+    this.lock("Passphrase changed. Unlock with the new one.");
   }
 
   // ---------- account activation (the pqwallet contract on the seed's own address) ----------
@@ -1214,7 +1291,8 @@ export class App {
       const left = avail - valueBase, cap = 1_000_000_000n, half = avail / 2n;
       rcLimit = [left, cap, half].reduce((x, y) => (y < x ? y : x));
     }
-    const res = await chain.sendKoin({ from: a.address, to, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet", contract, rcLimit });
+    if (await this.settleEarlier(a, chain)) return;
+    const res = await this.held(a, { amount, symbol: token.symbol, burned: false }, () => chain.sendKoin({ from: a.address, to, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet", contract, rcLimit }));
     this.s.book?.recordSend(to, name);
     this.s.sendCheck = null;
     if (contract) delete this.s.balances[contract]; // read again on the next refresh
@@ -1230,6 +1308,58 @@ export class App {
         this.s.error = tr("Sent, but still waiting for a block: {why}", { why: (err as Error).message });
       }
       await this.refresh();
+    }
+  }
+  /**
+   * THE HOLD. A send, a collectible send or a burn that the node gave no clear answer to may still go
+   * through, so nothing else that moves value is signed from that account until it is known what became of
+   * it: signing "the same thing again" is how a payment goes out twice. The earlier transaction is looked
+   * up by id. In a block: it is shown, and nothing new is signed (returns true). Not in a block: the hold
+   * stays for UNCONFIRMED_HOLD_MS, by which time a node has dropped a waiting transaction. If the node
+   * cannot be asked, the hold stays however long it has been ("the node could not say" is not "it is not
+   * there").
+   */
+  private async settleEarlier(a: Account, chain: Chain): Promise<boolean> {
+    const key = `${this.network.name}:${a.address}`;
+    const earlier = this.s.unconfirmed[key];
+    if (!earlier) return false;
+    const status = await chain.txStatus(earlier.txId);
+    const what = { amount: earlier.amount, unit: earlier.symbol };
+    if (status === "landed") {
+      // it went through after all: show that one, and sign nothing new
+      delete this.s.unconfirmed[key];
+      this.s.balances = {};
+      this.s.sendCheck = null;
+      this.s.sent = { txId: earlier.txId, bytes: 0, rcUsed: "?", block: null, waiting: false, amount: earlier.amount, symbol: earlier.symbol, burned: earlier.burned };
+      this.s.screen = "sent";
+      this.s.notice = earlier.burned ? tr("Your earlier burn of {amount} {unit} went through. Nothing new was sent.", what) : tr("Your earlier payment of {amount} {unit} went through. Nothing new was sent.", what);
+      await this.refresh();
+      return true;
+    }
+    if (status === "unknown" || Date.now() - earlier.at < UNCONFIRMED_HOLD_MS) {
+      throw new Error(
+        earlier.burned
+          ? tr("An earlier burn of {amount} {unit} got no clear answer from the node and may still go through. Wait a few minutes and look at Activity before burning again.", what)
+          : tr("An earlier payment of {amount} {unit} got no clear answer from the node and may still go through. Wait a few minutes and look at Activity before sending anything else from this account.", what),
+      );
+    }
+    delete this.s.unconfirmed[key]; // the node says it is in no block, long past the time one keeps a waiting transaction
+    return false;
+  }
+  /** Runs a send; when the node gives no clear answer, the hold above is set and the user is told not to repeat it. */
+  private async held<T>(a: Account, what: { amount: string; symbol: string; burned: boolean }, send: () => Promise<T>): Promise<T> {
+    try {
+      return await send();
+    } catch (e) {
+      if (e instanceof UnconfirmedSendError) {
+        this.s.unconfirmed[`${this.network.name}:${a.address}`] = { txId: e.txId, ...what, at: Date.now() };
+        throw new Error(
+          what.burned
+            ? tr("The node gave no clear answer, so this burn may or may not go through. Do not burn again yet: look at Activity in a few minutes.")
+            : tr("The node gave no clear answer, so this payment may or may not go through. Do not send it again yet: look at Activity in a few minutes."),
+        );
+      }
+      throw e;
     }
   }
   /** The most the account can burn now: KOIN that still has its mana, less what always stays behind (BURN_KEEP). */
@@ -1249,34 +1379,11 @@ export class App {
     const valueBase = parseUnits(amount, this.koinToken().decimals);
     const chain = this.chain();
     // A burn cannot be undone, so one that may already be on its way is never followed by another.
-    const earlier = this.s.unconfirmedBurn;
-    if (earlier && earlier.account === a.address && earlier.network === this.network.name) {
-      if (await chain.landed(earlier.txId)) {
-        // it went through after all: show that one, and sign nothing new
-        this.s.unconfirmedBurn = null;
-        if (this.network.vhp) delete this.s.balances[this.network.vhp];
-        this.s.sent = { txId: earlier.txId, bytes: 0, rcUsed: "?", block: null, waiting: false, amount: earlier.amount, symbol: this.unit(), burned: true };
-        this.s.screen = "sent";
-        this.s.notice = tr("Your earlier burn of {amount} {unit} went through. Nothing new was sent.", { amount: earlier.amount, unit: this.unit() });
-        await this.refresh();
-        return;
-      }
-      if (Date.now() - earlier.at < UNCONFIRMED_HOLD_MS) throw new Error(tr("An earlier burn of {amount} {unit} got no clear answer from the node and may still go through. Wait a few minutes and look at Activity before burning again.", { amount: earlier.amount, unit: this.unit() }));
-      this.s.unconfirmedBurn = null; // long past the time a node keeps a waiting transaction
-    }
+    if (await this.settleEarlier(a, chain)) return;
     const [balance, mana] = await Promise.all([chain.balance(a.address), chain.mana(a.address)]);
     const most = this.burnable(balance, mana) ?? 0n;
     if (valueBase > most) throw new Error(tr("The most this account can burn right now is {most} {unit}.", { most: formatKoin(most), unit: this.unit() }));
-    let res;
-    try {
-      res = await chain.burnKoin({ from: a.address, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" });
-    } catch (e) {
-      if (e instanceof UnconfirmedSendError) {
-        this.s.unconfirmedBurn = { txId: e.txId, account: a.address, network: this.network.name, amount, at: Date.now() };
-        throw new Error(tr("The node gave no clear answer, so this burn may or may not go through. Do not burn again yet: look at Activity in a few minutes."));
-      }
-      throw e;
-    }
+    const res = await this.held(a, { amount, symbol: this.unit(), burned: true }, () => chain.burnKoin({ from: a.address, valueBase, keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" }));
     if (this.network.vhp) delete this.s.balances[this.network.vhp]; // read again on the next refresh
     this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount, symbol: this.unit(), burned: true };
     this.s.screen = "sent";
@@ -1457,12 +1564,13 @@ export class App {
     const a = this.account();
     if (!a || !this.s.keys || !canSign(a)) throw new Error(tr("locked"));
     const chain = this.chain();
-    const res = await chain.sendCall({ from: a.address, contract: token.collection, entryPoint: NFT_ENTRY.transfer, args: encodeNftTransferArgs(a.address, to, token.idHex), keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" });
+    if (await this.settleEarlier(a, chain)) return;
+    const symbol = `${this.collectionList().find((c) => c.address === token.collection)?.symbol ?? "NFT"} #${token.label}`;
+    const res = await this.held(a, { amount: "1", symbol, burned: false }, () => chain.sendCall({ from: a.address, contract: token.collection, entryPoint: NFT_ENTRY.transfer, args: encodeNftTransferArgs(a.address, to, token.idHex), keys: this.keysFor(a), mode: a.mode as "native" | "pqwallet" }));
     this.s.book?.recordSend(to, name);
     this.s.sendCheck = null;
     this.s.nft.tokens[token.collection] = null; // read again next time
-    const col = this.collectionList().find((c) => c.address === token.collection);
-    this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount: "1", symbol: `${col?.symbol ?? "NFT"} #${token.label}` };
+    this.s.sent = { txId: res.txId, bytes: res.entryBytes, rcUsed: String(res.receipt.rc_used ?? "?"), block: null, waiting: this.network.autoBlocks, amount: "1", symbol };
     this.s.screen = "sent";
     this.render();
     if (this.network.autoBlocks) {
@@ -1576,12 +1684,13 @@ export class App {
       return "page";
     }
     const none = document.createElement("span");
-    const toSettings: Screen[] = ["export", "save", "contacts", "duress", "duress-words", "bio-enable"];
+    const toSettings: Screen[] = ["export", "save", "contacts", "change-pass", "bio-enable"];
     const toHome: Screen[] = ["send", "send-confirm", "sent", "receive", "nfts", "nft", "nft-send", "burn"];
     const toWelcome: Screen[] = ["create", "confirm", "passphrase", "import"];
     if (toSettings.includes(s.screen)) this.act("settings", none);
     else if (toHome.includes(s.screen)) this.act("back-home", none);
     else if (toWelcome.includes(s.screen)) this.act("welcome", none);
+    else if (s.screen === "duress-words") this.act("duress-done", none);
     else return "minimize";
     return "screen";
   }
@@ -1817,13 +1926,16 @@ export class App {
       case "dapp-reject":
         if (action === "dapp-approve" && Date.now() - this.sheetShownAt < this.approveDelayMs) break; // a tap meant for the page
         {
-          // a request to see the accounts, in a wallet with several: only the ticked ones are shown to the site
+          // A request to see the accounts is answered with exactly the addresses the sheet showed: the ticked
+          // ones in a wallet with several, the one named on the sheet otherwise. Never "all the wallet has":
+          // an account found on the chain a moment after the sheet was drawn would go out unseen.
           const pending = this.s.dapp.approval;
           let only: string[] | undefined;
-          if (action === "dapp-approve" && pending?.req.command === "getAccounts" && this.shareable().length > 1) {
-            only = this.picked(pending.key);
+          if (action === "dapp-approve" && pending?.req.command === "getAccounts") {
+            const options = this.shareable();
+            only = options.length > 1 ? this.picked(pending.key) : options.map((a) => a.address);
             if (!only.length) {
-              this.s.error = tr("Choose at least one account.");
+              this.s.error = options.length ? tr("Choose at least one account.") : tr("This wallet has no account on {net} to show yet. Reject the request, or wait a moment and try again.", { net: this.network.name });
               this.render();
               break;
             }
@@ -1873,16 +1985,13 @@ export class App {
         this.render();
         break;
       }
-      case "duress":
-        this.go("duress");
-        break;
-      case "duress-create":
-        this.s.pendingDecoy = newMnemonic();
-        this.go("duress-words");
-        break;
-      case "duress-cancel":
+      case "duress-done":
+        // the duress wallet's words were on screen once; on to the wallet that was just made
         this.s.pendingDecoy = null;
-        this.go("settings");
+        void this.run("Loading", () => this.enterHome());
+        break;
+      case "change-pass":
+        this.go("change-pass");
         break;
       case "send-cancel":
         this.s.sendCheck = null;
@@ -2034,16 +2143,51 @@ export class App {
           this.render();
           return;
         }
-        void this.run("Encrypting", () => this.finishSetup(p1));
+        // the optional duress wallet: same gate as the main passphrase, and it must not be the main one
+        const d1 = field("d1"), d2 = field("d2");
+        if (d1 || d2) {
+          const bad =
+            d1.length < MIN_PASSPHRASE_LENGTH ? tr("Use at least {n} characters for the duress passphrase.", { n: MIN_PASSPHRASE_LENGTH })
+            : weakPassphraseError(d1) ?? (d1 !== d2 ? tr("The two duress passphrases differ.") : d1.normalize("NFKD") === p1.normalize("NFKD") ? tr("The duress passphrase must be different from the main one.") : null);
+          if (bad) {
+            this.s.error = bad;
+            this.render();
+            return;
+          }
+        }
+        void this.run("Encrypting", () => this.finishSetup(p1, d1 || undefined));
+        break;
+      }
+      case "change-pass": {
+        const p1 = field("p1"), p2 = field("p2");
+        const bad =
+          p1.length < MIN_PASSPHRASE_LENGTH ? tr("Use at least {n} characters.", { n: MIN_PASSPHRASE_LENGTH })
+          : weakPassphraseError(p1) ?? (p1 !== p2 ? tr("The two passphrases differ.") : null);
+        if (bad) {
+          this.s.error = bad;
+          this.render();
+          return;
+        }
+        void this.run("Changing the passphrase", () => this.changePassphrase(field("current"), p1));
         break;
       }
       case "unlock": {
         void this.run("Unlocking", async () => {
           const stored = localVaultStore.load();
           if (!stored) throw new Error(tr("no wallet in this browser"));
-          const file = await toFile(stored);
+          let file = await toFile(stored);
           const opened = await openVault(file, field("passphrase"));
-          if (!("slots" in stored)) localVaultStore.save(file); // a pre-duress wallet: store it in the slot format from now on
+          let rewrite = !("slots" in stored); // a pre-duress wallet: store it in the slot format from now on
+          if (needsRewrite(file.slots[opened.slot]!, opened.data)) {
+            // written by an older version (a stored "main"/"decoy" mark, or the 4 KiB slot size): the same
+            // wallet is written again as every wallet is written now, under the same key. Whichever wallet
+            // opened, so afterwards nothing in a slot is left to tell one from the other.
+            file = withSlot(file, opened.slot, await reencryptVault(file.slots[opened.slot]!, opened.data, field("passphrase")));
+            delete opened.data.role;
+            delete opened.data.hasDecoy;
+            rewrite = true;
+          }
+          if (rewrite) localVaultStore.save(file);
           this.s.file = file;
           this.s.slot = opened.slot;
           this.s.vault = opened.data;
@@ -2242,27 +2386,6 @@ export class App {
         this.go("save");
         break;
       }
-      case "duress-save": {
-        const d1 = field("d1"), d2 = field("d2");
-        if (d1.length < MIN_PASSPHRASE_LENGTH) {
-          this.s.error = tr("Use at least {n} characters for the duress passphrase.", { n: MIN_PASSPHRASE_LENGTH });
-          this.render();
-          return;
-        }
-        const weakD = weakPassphraseError(d1);
-        if (weakD) {
-          this.s.error = weakD;
-          this.render();
-          return;
-        }
-        if (d1 !== d2) {
-          this.s.error = tr("The two duress passphrases differ.");
-          this.render();
-          return;
-        }
-        void this.run("Saving the duress wallet", () => this.saveDecoy(field("main"), d1));
-        break;
-      }
       case "add-account": {
         const addr = field("address").trim();
         if (!isAddress(addr)) {
@@ -2380,7 +2503,8 @@ export class App {
   private applyCapture() {
     if (!this.native) return;
     const s = this.s;
-    const words = s.screen === "create" || s.screen === "duress-words" || (s.screen === "export" && !!s.exportWords);
+    // shown (create, duress words, export) or typed (the check after creating, and import: all 24 of them)
+    const words = s.screen === "create" || s.screen === "confirm" || s.screen === "import" || s.screen === "duress-words" || (s.screen === "export" && !!s.exportWords);
     const on = s.blockCapture || words;
     if (on === this.secureOn) return;
     this.secureOn = on;
@@ -2410,8 +2534,8 @@ export class App {
       setup: () => this.vSetup(),
       save: () => this.vSave(),
       contacts: () => this.vContacts(),
-      duress: () => this.vDuress(),
       "duress-words": () => this.vDuressWords(),
+      "change-pass": () => this.vChangePass(),
       "bio-enable": () => this.vBioEnable(),
       nfts: () => this.vNfts(),
       nft: () => this.vNft(),
@@ -2482,6 +2606,13 @@ export class App {
         <p class="fine" id="pw-strength" aria-live="polite" style="margin-top:-4px"></p>
         <p class="fine">${tr("Four or more unrelated words work well. Length counts for more than symbols.")}</p>
         ${field(tr("Repeat it"), input({ name: "p2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
+        <details class="adv"><summary>${tr("Duress wallet (optional)")}</summary>
+          <p class="fine">${tr("A second passphrase that opens a separate, small wallet with its own 24 words, to show if someone forces you to unlock. Nothing on this device shows that another wallet exists, and unlocking takes the same time either way.")}</p>
+          <p class="fine">${tr("<strong>Now or never.</strong> It can only be chosen here, while the wallet is being saved. Afterwards no screen can add, replace or reveal one: an open wallet that could do that would also give a duress wallet away to anyone who tried it. To add or change one later, delete the wallet from this device and import your 24 words again.")}</p>
+          <p class="fine">${tr("<strong>What it cannot do.</strong> Balances are public on the chain. Anyone who already knows your main address can look it up. The decoy protects you from someone who does not, and only if it looks lived-in: give it a little KOIN and use it now and then.")}</p>
+          ${field(tr("Duress passphrase ({n}+ characters, different from your main one)", { n: MIN_PASSPHRASE_LENGTH }), input({ name: "d1", type: "password", autocomplete: "new-password" }))}
+          ${field(tr("Repeat it"), input({ name: "d2", type: "password", autocomplete: "new-password" }))}
+        </details>
         <div class="row">${button(tr("Create wallet"), { variant: "primary" })}${button(tr("Cancel"), { action: "welcome", variant: "ghost" })}</div>
       </form>`;
   }
@@ -2782,7 +2913,7 @@ export class App {
           main = `<span class="t">${tr("Burned")} ${esc(value)} ${esc(this.unit())}</span> <span class="s">${tr("for VHP")}${i.reverted ? " " + tr("(reverted)") : ""}</span>`;
           amt = `<span class="amt">−${esc(value)}</span>`;
         }
-        const meta = [i.txId ? esc(short(i.txId)) : "", i.blockHeight ? `block ${esc(fmtAmount(i.blockHeight))}` : ""].filter(Boolean).join(" · ");
+        const meta = [i.txId ? esc(short(i.txId)) : "", i.blockHeight ? `block ${esc(fmtAmount(i.blockHeight))}` : "", i.transfers > 1 ? tr("{n} transfers in this transaction; one is shown", { n: i.transfers }) : ""].filter(Boolean).join(" · ");
         const explorer = i.txId && this.network.explorerTx ? this.network.explorerTx(i.txId) : null;
         const acts = [
           i.counterparty ? linkButton(tr("copy address"), "copy", { copy: i.counterparty }) : "",
@@ -2829,6 +2960,8 @@ export class App {
                 ${a.source === "wc" ? `<p class="fine">${tr("Through WalletConnect, as <strong>{name}</strong>.", { name: esc(a.via ?? "") })}${a.unverified ? ` <span class="warn-inline">${tr("The relay could not verify that this request really comes from that site. Check the address above against the dapp you are using.")}</span>` : ""}</p>` : ""}
                 ${a.source === "wc" && a.startedBy && !sameSite(a.startedBy, a.req.origin) ? notice("danger", tr("This request says it comes from the address above, but it was started by the page {page}. Reject it unless you expected that.", { page: `<strong class="mono">${esc(a.startedBy)}</strong>` })) : ""}
                 ${wc?.chains?.length ? `<p class="fine">${tr("The dapp asks for: {chains}.", { chains: esc(wc.chains.join(", ")) })}</p>` : ""}
+                ${a.source === "wc" && a.mismatch ? notice("danger", tr("WalletConnect's own check says this request does NOT come from the address above: the site that sent it is a different one. Reject it unless you are certain what it is.")) : ""}
+                ${a.plan && a.plan.signerAddress && a.req.command !== "getAccounts" ? this.signerLine(a.plan.signerAddress) : ""}
                 ${a.plan ? describePlan(a.plan, this.s.tokens) : notice("danger", tr("This site sent a request the wallet will not sign. {why}", { why: esc(a.refused ?? "") }))}
                 ${a.plan && !a.status ? this.accountChoice(a) : ""}
               </div>
@@ -2844,6 +2977,11 @@ export class App {
             </section>`;
   }
 
+  /** Which of the user's accounts a signature is asked of, by the name the user knows it by (the sheet otherwise shows only an address). */
+  private signerLine(address: string): string {
+    const acct = this.accounts().find((x) => x.address === address);
+    return acct ? `<p class="fine">${tr("Asked of your account:")} <strong>${esc(acct.label)}</strong></p>` : "";
+  }
   /** The accounts that can be shown to a site: the ones this wallet signs for on the current network. */
   private shareable(): Account[] {
     return this.visibleAccounts().filter((a) => canSign(a));
@@ -2855,11 +2993,12 @@ export class App {
     const cur = this.account();
     return cur && options.some((a) => a.address === cur.address) ? [cur.address] : options.slice(0, 1).map((a) => a.address);
   }
-  /** On a "see your accounts" request, with several accounts: which of them this site gets. Nothing with one account. */
+  /** On a "see your accounts" request: which accounts this site gets. Tick boxes with several; with one, that one named. */
   private accountChoice(a: PendingApproval): string {
     if (a.req.command !== "getAccounts") return "";
     const options = this.shareable();
-    if (options.length <= 1) return "";
+    if (options.length === 0) return `<p class="fine">${tr("This wallet has no account on {net} to show yet.", { net: esc(this.network.name) })}</p>`;
+    if (options.length === 1) return `<p class="fine">${tr("It will see this account:")} <strong>${esc(options[0]!.label)}</strong> <span class="s mono">${esc(shortAddr(options[0]!.address))}</span></p>`;
     const on = this.picked(a.key);
     return `<fieldset class="pick"><legend class="fine">${tr("Choose the accounts this site may see:")}</legend>${options
       .map((o) => `<label class="check"><input type="checkbox" name="dapp-acct" value="${esc(o.address)}" ${on.includes(o.address) ? "checked" : ""}> ${esc(o.label)} <span class="s mono">${esc(shortAddr(o.address))}</span></label>`)
@@ -2967,6 +3106,9 @@ export class App {
         <div class="row tight">${button(tr("Save"))}</div>
       </form>
 
+      <p class="mute" style="margin-top:12px">${tr("The passphrase that opens this wallet on this device can be changed. A passphrase chosen before the wallet checked their strength stays as weak as it was until it is.")}</p>
+      <div class="row tight">${button(tr("Change the passphrase"), { action: "change-pass" })}</div>
+
       ${section(null, tr("Backup"))}
       <p class="mute">${tr("Show the 24 words again (asks for the passphrase).")}</p>
       <div class="row tight">${button(tr("Show recovery words"), { action: "export" })}</div>
@@ -2976,8 +3118,8 @@ export class App {
       <div class="row tight">${button(tr("Open contacts"), { action: "contacts" })}</div>
 
       ${section(null, tr("Duress wallet"))}
-      <p class="mute">${tr("A second passphrase opens a separate, small wallet to show under pressure. This screen never says whether one exists.")}${this.native ? ` ${tr("Setting one up turns biometric unlock off for every wallet on this device; either wallet can turn it back on afterwards.")}` : ""}</p>
-      <div class="row tight">${button(tr("Set up or replace the duress wallet"), { action: "duress" })}</div>
+      <p class="mute">${tr("A second passphrase can open a separate, small wallet to show under pressure. It is chosen when a wallet is created or imported on this device and at no other time; this screen never says whether one exists, and nothing here can add or replace one.")}</p>
+      <p class="fine">${tr("To add or change one: make sure you have your 24 words, delete the wallet from this device (Danger, below), import the words again and open \"Duress wallet\" on the passphrase screen. Contacts and the other things kept only on this device start empty after that.")}</p>
 
       ${section(null, tr("WalletConnect"), this.wcProjectId() ? tr("on") : tr("off"))}
       <p class="mute">${tr("Connects dapps on other devices (KoinDX, Vortex Bridge) through the WalletConnect relay. It needs a project id: create a free one at cloud.reown.com and paste it here. The id is a public identifier, not a secret.")}</p>
@@ -3056,6 +3198,7 @@ export class App {
       }` : ""}
       ${st.failed ? `${notice("danger", tr("Activation stopped: {why}", { why: esc(st.failed) }))}<div class="row tight">${button(tr("Try again"), { action: "setup-retry", variant: "primary" })}</div>` : ""}
       <p class="fine" style="margin-top:12px">${tr("As soon as it holds enough, the wallet activates it by itself: it installs the post-quantum check on the account and registers your key, together in one transaction signed here. From then on only your 24 words can move the account. The {unit} stays yours; activation is paid with the account's mana, which refills over five days. Keep this page open until it says the account is ready.", { unit: esc(unit) })}</p>
+      <p class="fine">${tr("Good to know: the activation is signed once with an ordinary (not post-quantum) key made from your words, and that publishes its public key. The same words give this same address on every Koinos network, so until the account is activated on another network too, that old kind of key is what controls the address there. Do not keep funds at this address on a network where you have not activated it.")}</p>
       <div class="row">${button(tr("Settings"), { action: "setup-cancel", variant: "ghost" })}</div>`;
   }
 
@@ -3111,29 +3254,28 @@ export class App {
       <div class="row">${button(tr("Back"), { action: "settings", variant: "ghost" })}</div>`;
   }
 
-  private vDuress() {
-    return `
-      ${section("04", tr("Settings"), "duress")}
-      <h1>${tr("Duress wallet")}</h1>
-      <p>${tr("A second, separate wallet with its own 24 words and its own passphrase. If someone forces you to unlock, you type the duress passphrase and they see that wallet, with whatever small amount you keep in it. Nothing on this device shows that another wallet exists, and unlocking takes the same time either way.")}</p>
-      <p>${tr("<strong>What it cannot do.</strong> Balances are public on the chain. Anyone who already knows your main address can look it up. The decoy protects you from someone who does not, and only if it looks lived-in: give it a little KOIN and use it now and then.")}</p>
-      <p class="fine">${tr("Setting it up asks for your main passphrase (so only you can), and a new passphrase for the decoy. The decoy's 24 words are shown once; write them down if you want to recover it, otherwise just note that losing them loses only the decoy.")}</p>
-      <div class="row">${button(tr("Create the duress wallet"), { action: "duress-create", variant: "primary" })}${button(tr("Back"), { action: "duress-cancel", variant: "ghost" })}</div>`;
-  }
-
   private vDuressWords() {
     const w = (this.s.pendingDecoy ?? "").split(" ");
     return `
-      ${section("04", tr("Settings"), "duress")}
       <h1>${tr("The duress wallet's 24 words")}</h1>
       ${card(words(w))}
-      <form data-form="duress-save">
-        ${field(tr("Duress passphrase ({n}+ characters, different from your main one)", { n: MIN_PASSPHRASE_LENGTH }), input({ name: "d1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autofocus: true, autocomplete: "new-password" }))}
+      <p>${tr("Your wallet is saved, and so is the duress wallet: the duress passphrase opens it, your main passphrase opens yours. These are the duress wallet's own 24 words, shown this once. Write them down if you want to be able to recover it; losing them loses only the duress wallet.")}</p>
+      <p class="fine">${tr("To look lived-in it needs a little KOIN and some use: unlock with the duress passphrase, activate its account and fund it like any new wallet.")}</p>
+      <div class="row">${button(tr("Done"), { action: "duress-done", variant: "primary" })}</div>`;
+  }
+
+  private vChangePass() {
+    return `
+      ${section("04", tr("Settings"), "passphrase")}
+      <h1>${tr("Change the passphrase")}</h1>
+      <p>${tr("The passphrase that opens this wallet on this device. Your 24 words and your accounts stay the same. The wallet locks afterwards; unlock with the new passphrase.")}</p>
+      <form data-form="change-pass">
+        ${field(tr("Current passphrase"), input({ name: "current", type: "password", required: true, autofocus: true, autocomplete: "current-password" }))}
+        ${field(tr("New passphrase ({n}+ characters)", { n: MIN_PASSPHRASE_LENGTH }), input({ name: "p1", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
         <p class="fine" id="pw-strength" aria-live="polite" style="margin-top:-4px"></p>
-        ${field(tr("Repeat it"), input({ name: "d2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
-        ${field(tr("Your main passphrase (to confirm)"), input({ name: "main", type: "password", required: true, autocomplete: "off" }))}
-        <p class="fine">${tr("After saving, the wallet locks. Unlock with your main passphrase as usual; the duress passphrase opens the decoy, where you can activate its account and fund it like any new wallet.")}</p>
-        <div class="row">${button(tr("Save duress wallet"), { variant: "danger" })}${button(tr("Cancel"), { action: "duress-cancel", variant: "ghost" })}</div>
+        <p class="fine">${tr("Four or more unrelated words work well. Length counts for more than symbols.")}</p>
+        ${field(tr("Repeat it"), input({ name: "p2", type: "password", minlength: MIN_PASSPHRASE_LENGTH, required: true, autocomplete: "new-password" }))}
+        <div class="row">${button(tr("Change passphrase"), { variant: "primary" })}${button(tr("Cancel"), { action: "settings", variant: "ghost" })}</div>
       </form>`;
   }
 

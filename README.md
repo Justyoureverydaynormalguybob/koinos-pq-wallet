@@ -16,11 +16,18 @@ developer are welcome to use it, share it or build on it. Companion to
 native node change, the measurements).
 
 Since 0.4.0 (2026-10-19): **duress mode** (a second passphrase opens a separate decoy wallet; the stored
-file always has two same-sized slots, so nothing shows whether a decoy exists), **address-poisoning
+file always has two same-sized slots, so nothing shows whether a decoy exists; since 0.19.0 it is chosen
+when the wallet is created or imported and at no other time), **address-poisoning
 protection** (first-time recipients must be confirmed; an address that merely resembles one you have used
 is flagged with the differing characters marked and needs its last six characters typed), **watch-only
 accounts**, **lock when the tab is hidden**, and a **timed clipboard wipe** after copying an address.
 `docs/SECURITY.md` has the design notes and limits of each.
+
+0.19.0 (2026-11-27) answers an outside review of 0.18.3 ([issue #1](https://github.com/Justyoureverydaynormalguybob/koinos-pq-wallet/issues/1)):
+a dapp can no longer get a signature for another chain through a lying node; a saved change no longer
+empties contacts and the other side stores; the passphrase can be changed; Send holds back after an
+unclear answer the way Burn did; and the rest of the list, in `docs/SECURITY.md` under "External review
+2026-11-27".
 
 Since 0.7.0: **KCS-4 tokens**. The Account tab lists the network's tokens (a curated list in `src/data/`,
 every entry checked against the chain) with balances read per contract, a token can be added by its
