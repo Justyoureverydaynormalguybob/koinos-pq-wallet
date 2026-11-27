@@ -2,7 +2,11 @@
 // a duress wallet): never at unlock, so a wallet made before this check still opens with what it has.
 //
 // The vault is PBKDF2-SHA256 at 600,000 iterations, so someone who copies it guesses offline at roughly
-// 10^4 to 10^5 tries a second per graphics card. 45 bits is then years of one card; 30 bits is hours.
+// 10^4 tries a second per graphics card. The line is where zxcvbn's top score starts, 10^10 guesses
+// (33.2 bits): about two weeks of one card. Until 0.19.2 it was 45 bits (a century of one card), which
+// refused nearly every hand-made password, including ones every other tool calls strong; the owner
+// chose the standard line on 2026-11-27. From 45 bits the wallet says "Strong"; between the two it says
+// "Good" and that longer is safer.
 //
 // Two estimates, combined (see `passphraseStrength`):
 //
@@ -18,16 +22,20 @@
 // Both follow NIST SP 800-63B in rewarding length and never demanding symbols. Until the dictionaries
 // have loaded (or if they cannot be), the wallet's own count is used alone.
 
-/** Below this the wallet refuses a newly chosen passphrase. */
-export const MIN_PASSPHRASE_BITS = 45;
+/** Below this the wallet refuses a newly chosen passphrase: 10^10 guesses, where zxcvbn's top score starts. */
+export const MIN_PASSPHRASE_BITS = 33.2;
+/** From here the wallet calls a passphrase strong and has nothing to add. */
+export const STRONG_PASSPHRASE_BITS = 45;
 
 export interface PassphraseStrength {
   /** estimated guessing work, in bits (0 for a passphrase refused outright) */
   bits: number;
-  /** 0 very weak, 1 weak, 2 fair (accepted from here), 3 good, 4 strong */
+  /** 0 very weak, 1 weak (both refused), 3 good, 4 strong (both accepted; 2 is no longer given) */
   score: 0 | 1 | 2 | 3 | 4;
-  /** why it is refused or weak, as an English sentence that is also the translation key */
+  /** why it is refused, or advice for one that is accepted but not strong: an English sentence that is also the translation key */
   warning?: string;
+  /** what zxcvbn recognised in a refused passphrase ("a name", "a year"), as translation keys, most telling first */
+  found?: string[];
 }
 
 export const STRENGTH_LABELS = ["Very weak", "Weak", "Fair", "Good", "Strong"] as const;
@@ -50,6 +58,7 @@ const COMMON = new Set(
 interface ZxMatch {
   pattern: string;
   token: string;
+  dictionaryName?: string;
 }
 interface Zx {
   check(pw: string): { guesses: number; sequence: ZxMatch[] };
@@ -224,7 +233,30 @@ function digitBits(run: string, seen: Set<string>): number {
   return 3.32 * run.length;
 }
 
-const scoreOf = (bits: number): 0 | 1 | 2 | 3 | 4 => (bits < 25 ? 0 : bits < MIN_PASSPHRASE_BITS ? 1 : bits < 60 ? 2 : bits < 80 ? 3 : 4);
+const scoreOf = (bits: number): 0 | 1 | 2 | 3 | 4 => (bits < 20 ? 0 : bits < MIN_PASSPHRASE_BITS ? 1 : bits < STRONG_PASSPHRASE_BITS ? 3 : 4);
+
+/** What kind of thing zxcvbn recognised, in words a person can act on. */
+function kindOf(m: ZxMatch): string | null {
+  if ([...m.token].length < 3) return null;
+  switch (m.pattern) {
+    case "dictionary": {
+      const d = m.dictionaryName ?? "";
+      return /password/i.test(d) ? "a common password" : /name/i.test(d) ? "a name" : "a common word";
+    }
+    case "date":
+      return "a date";
+    case "regex":
+      return "a year";
+    case "spatial":
+      return "a keyboard pattern";
+    case "repeat":
+      return "a repeat";
+    case "sequence":
+      return "a run like abc or 123";
+    default:
+      return null;
+  }
+}
 
 export function passphraseStrength(pw: string): PassphraseStrength {
   const chars = [...pw];
@@ -279,31 +311,38 @@ export function passphraseStrength(pw: string): PassphraseStrength {
     }
     i = j;
   }
-  // zxcvbn's verdict. Where it recognised something (a third of the characters or more sit in a word,
-  // a keyboard walk, a date, a repeat), the lower of the two estimates stands. Where it recognised
-  // nothing, its ten guesses a character is a floor, and the count above may say more (random letters).
-  // A phrase of words is never priced above the wallet's own count.
-  let recognised = false;
+  // zxcvbn's verdict. For a passphrase written as one piece it is the verdict: where zxcvbn recognised
+  // something (a third of the characters or more sit in a word, a name, a keyboard walk, a date, a
+  // repeat) its estimate stands as it is, so the wallet agrees with every other place that uses it.
+  // Where it recognised nothing, its ten guesses a character is a floor and the count above may say
+  // more (random letters). A phrase of words is never priced above the wallet's own count, because
+  // zxcvbn is too kind to phrases.
+  let found: string[] | undefined;
   if (zx) {
     const z = zx.check(pw);
     const zbits = Math.log2(Math.max(1, z.guesses));
-    const found = z.sequence.reduce((a, m) => (m.pattern === "bruteforce" || m.pattern === "separator" ? a : a + [...m.token].length), 0);
-    recognised = found >= chars.length / 3;
-    if (inPhrase || recognised) {
-      if (zbits < bits && recognised) patterned = chars.length;
-      bits = Math.min(bits, zbits);
-    } else bits = Math.max(bits, zbits);
+    const covered = z.sequence.reduce((a, m) => (m.pattern === "bruteforce" || m.pattern === "separator" ? a : a + [...m.token].length), 0);
+    const recognised = covered >= chars.length / 3;
+    if (inPhrase) bits = Math.min(bits, zbits);
+    else if (recognised) bits = zbits;
+    else bits = Math.max(bits, zbits);
+    if (recognised) {
+      patterned = chars.length;
+      found = [...new Set(z.sequence.map(kindOf).filter((k): k is string => k !== null))];
+    }
   }
   bits = Math.round(bits * 10) / 10;
   const score = scoreOf(bits);
-  if (score >= 2) return { bits, score };
+  if (score === 4) return { bits, score };
+  if (score >= 2) return { bits, score, warning: "Longer is safer if someone copies your wallet file." };
+  if (found && found.length === 0) found = undefined;
   const warning =
     patterned > chars.length / 2
       ? "Mostly common words or patterns. Add unrelated words."
       : chars.length < 14
         ? "Too short. Four or more unrelated words work well."
         : "Add another unrelated word or two.";
-  return { bits, score, warning };
+  return found ? { bits, score, warning, found } : { bits, score, warning };
 }
 
 /** Throws, with the reason, when a newly chosen passphrase is too easy to guess. */

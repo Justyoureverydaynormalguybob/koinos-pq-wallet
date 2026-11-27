@@ -424,5 +424,16 @@
   "(empty)": "(vacía)",
   "Number (nonce)": "Número (nonce)",
   "Signatures": "Firmas",
-  "{n} already on it from the site; yours is added": "{n} ya puesta(s) por el sitio; se añade la tuya"
+  "{n} already on it from the site; yours is added": "{n} ya puesta(s) por el sitio; se añade la tuya",
+  "Longer is safer if someone copies your wallet file.": "Más larga es más segura si alguien copia el archivo de tu cartera.",
+  "It contains {what}, which is tried first.": "Contiene {what}, que es lo primero que se prueba.",
+  "Make it longer or less predictable.": "Hazla más larga o menos previsible.",
+  "a common password": "una contraseña común",
+  "a name": "un nombre",
+  "a common word": "una palabra común",
+  "a date": "una fecha",
+  "a year": "un año",
+  "a keyboard pattern": "un patrón de teclado",
+  "a repeat": "una repetición",
+  "a run like abc or 123": "una serie como abc o 123"
 }

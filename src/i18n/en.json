@@ -424,5 +424,16 @@
   "(empty)": "(empty)",
   "Number (nonce)": "Number (nonce)",
   "Signatures": "Signatures",
-  "{n} already on it from the site; yours is added": "{n} already on it from the site; yours is added"
+  "{n} already on it from the site; yours is added": "{n} already on it from the site; yours is added",
+  "Longer is safer if someone copies your wallet file.": "Longer is safer if someone copies your wallet file.",
+  "It contains {what}, which is tried first.": "It contains {what}, which is tried first.",
+  "Make it longer or less predictable.": "Make it longer or less predictable.",
+  "a common password": "a common password",
+  "a name": "a name",
+  "a common word": "a common word",
+  "a date": "a date",
+  "a year": "a year",
+  "a keyboard pattern": "a keyboard pattern",
+  "a repeat": "a repeat",
+  "a run like abc or 123": "a run like abc or 123"
 }

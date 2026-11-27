@@ -768,3 +768,40 @@ dictionary here (French, German, Irish) pass from about 14 letters, as they do i
 
 Checked in a browser against the built bundle (dictionaries load from their own chunks; the main
 bundle grew by 3 kB). Tests: `test/passphrase.test.ts`, 151 pass in all.
+
+## Passphrase check: the line moved to zxcvbn's top score (0.19.3)
+
+0.19.2 still refused the owner's passphrase: 14 characters with letters, a capital, digits and a symbol.
+The estimate was no longer the fault. The line was. At 45 bits the wallet refused nearly every password
+a person makes by hand, including ones zxcvbn gives its top score. Measured on generated 14-character
+passwords of the usual kinds, accepted by zxcvbn's top score and by the wallet's 45-bit line:
+
+| kind (14 characters) | zxcvbn top score | wallet at 45 bits |
+|---|---|---|
+| a first name, a year, a symbol, stray letters | 24% | 0% |
+| two words with digits and a symbol between | 72% | 0% |
+| a l33t word, a symbol, digits, stray letters | 87% | 0% |
+| a surname, a symbol, four digits, initials | 94% | 1% |
+| two initials, a word, a symbol, four digits | 98% | 4% |
+| letters, digits and a symbol with no pattern | 100% | 99% |
+
+*Decision (the owner, 2026-11-27).* The line is where zxcvbn's top score starts: 10^10 guesses, 33.2
+bits (`MIN_PASSPHRASE_BITS`). For a passphrase written as one piece the wallet now takes zxcvbn's
+estimate as it stands wherever zxcvbn recognised something, so the wallet agrees with every other place
+that uses it. From 45 bits the screen says "Strong"; between the two it says "Good" and "Longer is safer
+if someone copies your wallet file". The refused list, the wallet's own words in the dictionary and the
+rule that a phrase of words is never priced above the wallet's own count are unchanged.
+
+*What this costs.* A copied vault is guessed at very roughly 10^4 tries a second per graphics card
+(PBKDF2-SHA256, 600,000 rounds). 10^10 guesses is about two weeks of one card; the old line was about a
+century. The vault file sits in the app's private storage, so an attacker has to get it off the device
+first. This is still stricter than other wallets, which mostly ask for eight characters, but a passphrase
+rated "Good" is not safe against someone who has the file and money to spend. The screen says so in one
+line; nothing forces more. Three words with spaces now pass ("Good"), as do words run together in a
+language with no dictionary here.
+
+*Also new.* A refused passphrase is told what was recognised in it ("It contains a name, a year, which
+is tried first"), in English, Spanish and Portuguese, so a refusal can be acted on without guessing.
+
+Checked in a browser against the built bundle. Tests: `test/passphrase.test.ts` ("draws the line where
+zxcvbn's top score starts", "says what it recognised"), 153 pass in all.

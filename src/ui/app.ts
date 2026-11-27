@@ -280,13 +280,19 @@ function clearWalletStores() {
 function weakPassphraseError(passphrase: string): string | null {
   const s = passphraseStrength(passphrase);
   if (s.score >= 2) return null;
-  return tr("That passphrase is too easy to guess ({rating}). {why}", { rating: tr(STRENGTH_LABELS[s.score]).toLowerCase(), why: tr(s.warning ?? "Add unrelated words.") });
+  return tr("That passphrase is too easy to guess ({rating}). {why}", { rating: tr(STRENGTH_LABELS[s.score]).toLowerCase(), why: strengthReason(s) });
+}
+/** Why a passphrase is rated as it is: what was recognised in it, when something was, then the advice. */
+function strengthReason(s: ReturnType<typeof passphraseStrength>): string {
+  const advice = tr(s.warning ?? "Add unrelated words.");
+  if (!s.found?.length) return advice;
+  return tr("It contains {what}, which is tried first.", { what: s.found.map((k) => tr(k)).join(", ") }) + " " + tr("Make it longer or less predictable.");
 }
 /** "Strength: Fair." and the reason when there is one, for the line under a passphrase being chosen. */
 function strengthLine(passphrase: string): string {
   if (!passphrase) return "";
   const s = passphraseStrength(passphrase);
-  return tr("Strength: {rating}.", { rating: tr(STRENGTH_LABELS[s.score]) }) + (s.warning ? " " + tr(s.warning) : "");
+  return tr("Strength: {rating}.", { rating: tr(STRENGTH_LABELS[s.score]) }) + (s.warning ? " " + strengthReason(s) : "");
 }
 /**
  * What a burn always leaves behind, in base units (10 KOIN). Mana comes only from KOIN and every transaction

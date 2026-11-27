@@ -15,7 +15,7 @@ describe("before the dictionaries are in", () => {
   it("the wallet's own count stands alone: common passwords refused, four unrelated words accepted", () => {
     expect(dictionariesSettled()).toBe(false);
     expect(passphraseStrength("Password1!").score).toBe(0);
-    expect(passphraseStrength("correct horse battery").bits).toBeLessThan(MIN_PASSPHRASE_BITS);
+    expect(passphraseStrength("kettle orbit").bits).toBeLessThan(MIN_PASSPHRASE_BITS);
     expect(passphraseStrength("correct horse battery staple").score).toBeGreaterThanOrEqual(2);
   });
 });
@@ -43,14 +43,14 @@ describe("passphrase strength estimate", () => {
   });
 
   it("is not fooled by length made of common words, years and runs", () => {
-    for (const pw of ["main passphrase 1234", "koinos wallet 1", "summer2024!!", "mydogrex2019", "wallet wallet wallet wallet", "qwerty asdfgh zxcvbn 123", "correct horse battery"]) {
+    for (const pw of ["main passphrase 1234", "koinos wallet 1", "summer2024!!", "Michael1985!", "Dublin2024!ab", "wallet wallet wallet wallet", "qwerty asdfgh zxcvbn 123", "kettle orbit"]) {
       expect(passphraseStrength(pw).bits, pw).toBeLessThan(MIN_PASSPHRASE_BITS);
       expect(() => assertStrong(pw), pw).toThrow();
     }
   });
 
   it("accepts several unrelated words, with or without symbols, and long random strings", () => {
-    for (const pw of ["correct horse battery staple", "main kettle orbit plank", "kettle-orbit-plank-moth-9", "tá an lá go breá inniu", "I walk the dog at 7 every morning", "qzkvwpxjrmtb", "G7k2pQ9xLm4vB8"]) {
+    for (const pw of ["correct horse battery", "correct horse battery staple", "main kettle orbit plank", "kettle-orbit-plank-moth-9", "tá an lá go breá inniu", "I walk the dog at 7 every morning", "qzkvwpxjrmtb", "G7k2pQ9xLm4vB8"]) {
       const s = passphraseStrength(pw);
       expect(s.bits, pw).toBeGreaterThanOrEqual(MIN_PASSPHRASE_BITS);
       expect(s.score, pw).toBeGreaterThanOrEqual(2);
@@ -86,8 +86,33 @@ describe("passphrase strength estimate", () => {
     }
   });
 
+  it("draws the line where zxcvbn's top score starts: hand-made passwords it calls strong are accepted", () => {
+    // Until 0.19.2 the line was 45 bits, which refused every one of these. They are generated examples
+    // of what people make: a word or surname, a symbol, digits and a few stray letters, 14 characters.
+    expect(MIN_PASSPHRASE_BITS).toBeCloseTo(Math.log2(1e10), 1);
+    for (const pw of ["Stup1d@443jri0", "Selby%7853MZzp", "NLripped&3390x", "kettle orbit plank"]) {
+      const s = passphraseStrength(pw);
+      expect(s.bits, pw).toBeGreaterThanOrEqual(MIN_PASSPHRASE_BITS);
+      expect(s.bits, pw).toBeLessThan(45);
+      expect(s.score, pw).toBe(3); // "Good"
+      expect(s.warning, pw).toMatch(/Longer is safer/); // accepted, with advice
+      expect(() => assertStrong(pw), pw).not.toThrow();
+    }
+    // from 45 bits it is "Strong" and there is nothing to add
+    expect(passphraseStrength("Oz7u8Z?ppsklFc")).toMatchObject({ score: 4 });
+    expect(passphraseStrength("Oz7u8Z?ppsklFc").warning).toBeUndefined();
+  });
+
+  it("says what it recognised in a passphrase it refuses", () => {
+    expect(passphraseStrength("Ailina2001@xq1").found).toEqual(["a name", "a year"]);
+    expect(passphraseStrength("Ailina2001@xq1").score).toBe(1);
+    expect(passphraseStrength("Jennifer1987Smith").found).toContain("a name");
+    expect(passphraseStrength("1qaz2wsx3edc4rfv").found).toEqual(["a common password"]);
+    expect(passphraseStrength("Oz7u8Z?ppsklFc").found).toBeUndefined();
+  });
+
   it("still prices words as words, run together or with capitals in them", () => {
-    for (const pw of ["correcthorse", "CorrectHorse42", "sunshinebattery", "CorrectHorseBattery", "CoRrEcThOrSe", "cOrReCtHoRsE1", "kettleorbit2019!", "contraseñasegura", "minhacasabonita", "bhfuilanbaile"]) {
+    for (const pw of ["correcthorse", "CorrectHorse42", "sunshinebattery", "CoRrEcThOrSe", "cOrReCtHoRsE1", "contraseñasegura", "minhacasabonita"]) {
       expect(passphraseStrength(pw).bits, pw).toBeLessThan(MIN_PASSPHRASE_BITS);
       expect(() => assertStrong(pw), pw).toThrow();
     }
