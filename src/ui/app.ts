@@ -35,7 +35,7 @@ import { LANGUAGES, currentLanguage, initLanguage, isLang, setLanguage, t as tr 
 import { scanAddress, type Scanner } from "./scan";
 import { biometricUnlock, biometricsEnabled, disableBiometrics, enableBiometrics, followPassphraseChange, localBlobStore, nativeBiometry, nativeKeyStore, type BioDeps } from "../core/biometrics";
 import { SitePermissions, permissionsNamespace } from "../core/permissions";
-import { passphraseStrength, STRENGTH_LABELS } from "../core/passphrase";
+import { dictionariesSettled, loadDictionaries, passphraseStrength, STRENGTH_LABELS } from "../core/passphrase";
 import { Collections, NFT_ENTRY, collectionCandidates, collectionInfo, collectionsNamespace, encodeNftTransferArgs, loadMetadata, metadataOf, tokenUri, tokensOf, type Collection, type NftMetadata, type NftToken } from "../core/nfts";
 import { DappHost, type PendingApproval } from "./dapp-host";
 import { describePlan } from "./approval-view";
@@ -1601,6 +1601,13 @@ export class App {
     if (!(t instanceof HTMLInputElement) || (t.name !== "p1" && t.name !== "d1")) return;
     const el = this.root.querySelector<HTMLElement>("#pw-strength");
     if (el) el.textContent = strengthLine(t.value);
+    // the dictionaries the check reads load at the first keystroke; the line is redrawn when they are in
+    if (!dictionariesSettled()) {
+      void loadDictionaries().then(() => {
+        const now = this.root.querySelector<HTMLElement>("#pw-strength");
+        if (now && t.isConnected) now.textContent = strengthLine(t.value);
+      });
+    }
   }
 
   private onChange(e: Event) {
@@ -2095,6 +2102,14 @@ export class App {
     const form = e.target as HTMLFormElement;
     const data = new FormData(form);
     const field = (n: string) => String(data.get(n) ?? "");
+    // A passphrase is judged with the dictionaries loaded. If they are not in yet, wait for them and
+    // come back: the form in the event still holds what was typed.
+    if ((form.dataset.form === "passphrase" || form.dataset.form === "change-pass") && !dictionariesSettled()) {
+      void this.run("Checking", async () => {
+        await loadDictionaries();
+      }).then(() => this.onSubmit(e));
+      return;
+    }
     switch (form.dataset.form) {
       case "confirm": {
         const words = this.s.pendingMnemonic!.split(" ");

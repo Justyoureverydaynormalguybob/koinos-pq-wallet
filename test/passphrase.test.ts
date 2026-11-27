@@ -8,10 +8,24 @@ import { webcrypto } from "node:crypto";
 if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
 vi.mock("qrcode", () => ({ default: { toCanvas: async () => undefined } }));
 const { App } = await import("../src/ui/app");
-const { MIN_PASSPHRASE_BITS, assertStrong, passphraseStrength } = await import("../src/core/passphrase");
+const { MIN_PASSPHRASE_BITS, assertStrong, dictionariesSettled, loadDictionaries, passphraseStrength } = await import("../src/core/passphrase");
 const { encryptVault, localVaultStore } = await import("../src/core/vault");
 
+describe("before the dictionaries are in", () => {
+  it("the wallet's own count stands alone: common passwords refused, four unrelated words accepted", () => {
+    expect(dictionariesSettled()).toBe(false);
+    expect(passphraseStrength("Password1!").score).toBe(0);
+    expect(passphraseStrength("correct horse battery").bits).toBeLessThan(MIN_PASSPHRASE_BITS);
+    expect(passphraseStrength("correct horse battery staple").score).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("passphrase strength estimate", () => {
+  beforeAll(async () => {
+    expect(await loadDictionaries()).toBe(true);
+    expect(dictionariesSettled()).toBe(true);
+  });
+
   it("refuses the passwords anyone would try first, however they are dressed up", () => {
     for (const pw of ["password12", "Password1!", "P@ssw0rd123!", "qwertyuiop", "letmein2024", "iloveyou123", "Passphrase!!", "koinos2026!", "sparan1234"]) {
       const s = passphraseStrength(pw);
@@ -46,12 +60,29 @@ describe("passphrase strength estimate", () => {
 
   it("accepts random letters and digits even when the letters happen to hold vowels", () => {
     // Each of these was made by a random generator and was refused as weak by 0.19.0, which priced a
-    // random run of letters with a few vowels in it as one dictionary word. (Not every random string
-    // passes: about one in forty of 15 mixed letters and digits still lands a little under the line.)
-    for (const pw of ["zegcoSJzYCMG761", "UtmEyTNoRzohcty", "smui6e4umjirgbt", "wmUfnhXoudZF735", "sXOhJPHIyJxj934", "UnPVHORFaegIDVv", "q7kuuundt2edjmc", "yie33BYsszj9dvE", "yrnadadainqt", "kpaynavqnokd"]) {
+    // random run of letters with a few vowels in it as one dictionary word. The last three 0.19.1
+    // still refused.
+    for (const pw of ["X2WNyfLDiaIdEXO", "ft39OZPeENoI5a5", "YiFSkINigRZBiFa", "zegcoSJzYCMG761", "UtmEyTNoRzohcty", "smui6e4umjirgbt", "wmUfnhXoudZF735", "sXOhJPHIyJxj934", "UnPVHORFaegIDVv", "q7kuuundt2edjmc", "yie33BYsszj9dvE", "vkfkoyiatxju"]) {
       const s = passphraseStrength(pw);
       expect(s.bits, pw).toBeGreaterThanOrEqual(MIN_PASSPHRASE_BITS);
       expect(() => assertStrong(pw), pw).not.toThrow();
+    }
+  });
+
+  it("accepts made-up syllables no dictionary knows, the kind people invent and password tools make", () => {
+    // 0.19.0 refused every one of these and 0.19.1 about half: letters that read like a word were
+    // priced as one word although no dictionary has them.
+    for (const pw of ["Kav7Rin3Tol9Mep", "TavorimekulaNo42", "Rlb4gtrmoAeaeXL", "gowsup-Nybhe3-xafmek", "BodkezVumgasPil7", "zuvapelodrimtak9"]) {
+      const s = passphraseStrength(pw);
+      expect(s.bits, pw).toBeGreaterThanOrEqual(MIN_PASSPHRASE_BITS);
+      expect(() => assertStrong(pw), pw).not.toThrow();
+    }
+  });
+
+  it("refuses what zxcvbn recognises and the wallet's own count does not: keyboard walks, l33t words", () => {
+    for (const pw of ["1qaz2wsx3edc4rfv", "Tr0ub4dor&3", "zaq12wsxcde34rfv", "Jennifer1987Smith"]) {
+      expect(passphraseStrength(pw).bits, pw).toBeLessThan(MIN_PASSPHRASE_BITS);
+      expect(() => assertStrong(pw), pw).toThrow();
     }
   });
 

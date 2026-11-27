@@ -711,3 +711,60 @@ made without a dictionary; it errs towards refusing.
 
 Tests: `test/passphrase.test.ts` ("accepts random letters and digits even when the letters happen to
 hold vowels", "still prices words as words, run together or with capitals in them").
+
+## Passphrase check: zxcvbn and its dictionaries (0.19.2)
+
+0.19.1 was not enough: the owner's passphrase was still refused. Measured afterwards, 0.19.1 still
+refused about half of 15-character passphrases made of invented syllables ("Kav7Rin3Tol9Mep",
+"TavorimekulaNo42"), and 0.19.0 refused all of them. The fault was the same one: letters that could be
+a word were priced as one dictionary word, with no dictionary to say whether they were.
+
+*Now.* The check uses **zxcvbn**, the open-source estimator written at Dropbox and the usual tool for
+this, in its maintained build (`@zxcvbn-ts/core` 4.3.0, MIT), with the common-password list and the
+English, Spanish and Portuguese dictionaries (the wallet's three languages) and the wallet's own short
+list (koinos, sparan, wallet and the like). Versions are exact in `package.json`; the files ship with
+the app and nothing is fetched. The dictionaries are a few megabytes, so they load the first time a
+passphrase is typed on a "choose a passphrase" screen, and a passphrase submitted before they are in
+waits for them. If they cannot be loaded the wallet's own count from 0.19.1 is used alone.
+
+How the two estimates are combined (`passphraseStrength` in `src/core/passphrase.ts`):
+
+- *A run of letters in a passphrase written as one piece* is a word only if a dictionary has it. Words
+  run together are priced word by word. A stretch no dictionary knows costs ten guesses a character,
+  which is zxcvbn's own figure for what it does not recognise.
+- *Where zxcvbn recognises something* in a third of the characters or more (words, names, a keyboard
+  walk, a date, l33t, a repeat), the lower of the two estimates stands. This closes a hole the wallet's
+  own count had: it accepted "1qaz2wsx3edc4rfv", a keyboard walk on every cracking list.
+- *Where zxcvbn recognises nothing*, its estimate is a floor and the wallet's count may say more.
+- *A phrase of three or more words with spaces* is never priced above the wallet's own count, because
+  zxcvbn prices phrases too kindly ("main passphrase 1234" gets 53 bits from it).
+
+The line itself has not moved: 45 bits, about four unrelated words or 14 random characters. That is
+well above what websites call strong (zxcvbn's top score starts at 33 bits) because a copied vault can
+be guessed offline with no limit on tries.
+
+*Measured, 3,000 generated passphrases of each kind, accepted by 0.19.0, 0.19.1, 0.19.2:*
+
+| kind | 0.19.0 | 0.19.1 | 0.19.2 |
+|---|---|---|---|
+| 15 random mixed letters and digits | 71% | 98% | 99.8% |
+| 14 random mixed letters and digits | 61% | 95% | 99% |
+| 15 characters of invented syllables with 3 digits | 0% | 49% | 94% |
+| invented syllables with dashes and a digit, 20 characters | 0% | 43% | 100% |
+| one word and a year | 0% | 0% | 0% |
+| two words run together | 0.1% | 0.3% | 0.4% |
+| two capitalised words and two digits | 0.5% | 0.8% | 3.8% |
+| three English words run together | under 2% | under 2% | 0% |
+| three Spanish or Portuguese words run together | about 2% | about 2% | 23% |
+| three words with spaces (en/es/pt) | 9% | 10% | 10% |
+| four English words with spaces | 97% | 97% | 97% |
+
+*Limits, all in the direction of accepting.* (1) Words run together in Spanish or Portuguese pass more
+often than before, because many of the rarer words in the test lists are not in zxcvbn's dictionaries
+for those languages and so count as unknown letters. (2) Words run together in a language with no
+dictionary here (French, German, Irish) pass from about 14 letters, as they do in zxcvbn everywhere.
+(3) Random small letters alone, 12 or 13 of them, are refused a little more often than in 0.19.1
+(88% accepted against 96%), when they happen to spell a short word. (4) The estimate is an estimate.
+
+Checked in a browser against the built bundle (dictionaries load from their own chunks; the main
+bundle grew by 3 kB). Tests: `test/passphrase.test.ts`, 151 pass in all.

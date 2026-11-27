@@ -4,12 +4,19 @@
 // The vault is PBKDF2-SHA256 at 600,000 iterations, so someone who copies it guesses offline at roughly
 // 10^4 to 10^5 tries a second per graphics card. 45 bits is then years of one card; 30 bits is hours.
 //
-// No dependency and no word list worth the name: the estimate splits the passphrase into runs of
-// letters, digits and symbols and prices each the way a guesser would try them (a common word, a year,
-// "1234", "aaaa", a keyboard row are cheap; unrelated words and length are what add up). It follows
-// NIST SP 800-63B in rewarding length and never demanding symbols. A plain "characters x alphabet"
-// count would call "Password1!" strong, which is why the patterns are priced and the well-known
-// passwords refused outright.
+// Two estimates, combined (see `passphraseStrength`):
+//
+// 1. zxcvbn (the open-source estimator Dropbox wrote, here the maintained @zxcvbn-ts build), with its
+//    English, Spanish and Portuguese dictionaries: common passwords, words, names, keyboard walks,
+//    dates, l33t. It is the standard tool, and it is what tells a word from letters that only look
+//    like one. Loaded on first use (`loadDictionaries`), because the dictionaries are megabytes.
+// 2. The wallet's own count, which splits the passphrase into runs of letters, digits and symbols and
+//    prices each the way a guesser would try them (a common word, a year, "1234", "aaaa", a keyboard
+//    row are cheap; unrelated words and length are what add up). zxcvbn prices a phrase of several
+//    words too kindly; this count does not.
+//
+// Both follow NIST SP 800-63B in rewarding length and never demanding symbols. Until the dictionaries
+// have loaded (or if they cannot be), the wallet's own count is used alone.
 
 /** Below this the wallet refuses a newly chosen passphrase. */
 export const MIN_PASSPHRASE_BITS = 45;
@@ -38,6 +45,71 @@ const COMMON = new Set(
     "ireland dublin cavan"
   ).split(" "),
 );
+
+// ---- the dictionaries ----
+interface ZxMatch {
+  pattern: string;
+  token: string;
+}
+interface Zx {
+  check(pw: string): { guesses: number; sequence: ZxMatch[] };
+}
+let zx: Zx | null = null;
+let settled = false;
+let loading: Promise<boolean> | null = null;
+
+/** True once `loadDictionaries` has finished, whether or not it worked. */
+export const dictionariesSettled = (): boolean => settled;
+
+/**
+ * Loads zxcvbn and its dictionaries, once. Resolves false if they cannot be loaded; the check then
+ * falls back to the wallet's own count. Nothing is fetched from the network: the files ship with the app.
+ */
+export function loadDictionaries(): Promise<boolean> {
+  loading ??= (async () => {
+    try {
+      const [core, common, en, es, pt] = await Promise.all([
+        import("@zxcvbn-ts/core"),
+        import("@zxcvbn-ts/language-common"),
+        import("@zxcvbn-ts/language-en"),
+        import("@zxcvbn-ts/language-es-es"),
+        import("@zxcvbn-ts/language-pt-br"),
+      ]);
+      zx = new core.ZxcvbnFactory({
+        translations: en.translations,
+        graphs: common.adjacencyGraphs,
+        dictionary: { ...common.dictionary, ...en.dictionary, ...es.dictionary, ...pt.dictionary, wallet: [...COMMON] },
+      }) as unknown as Zx;
+      return true;
+    } catch {
+      zx = null;
+      return false;
+    } finally {
+      settled = true;
+    }
+  })();
+  return loading;
+}
+
+/** An unknown word: about what one word out of a few thousand is worth, a little more when long. */
+const wordBits = (n: number): number => Math.min(4.7 * n, 7 + 0.9 * Math.min(n, 8) + 1.5 * Math.max(0, n - 8));
+
+/**
+ * What the dictionaries make of a run of letters: one entry as it stands (`whole`), or the price of its
+ * pieces, where each dictionary word inside it costs what a word costs and every stretch no dictionary
+ * knows costs ten guesses a character (zxcvbn's own figure). Null when the dictionaries are not loaded.
+ */
+function dictionaryPrice(lower: string): { whole: boolean; bits: number } | null {
+  if (!zx) return null;
+  const seq = zx.check(lower).sequence;
+  if (seq.length === 1 && seq[0]!.pattern === "dictionary") return { whole: true, bits: 0 };
+  let bits = 0;
+  for (const m of seq) {
+    const n = [...m.token].length;
+    bits += m.pattern === "bruteforce" ? 3.32 * n : Math.min(3.32 * n, m.pattern === "dictionary" ? wordBits(n) : 4);
+  }
+  return { whole: false, bits };
+}
 
 const LEET: Record<string, string> = { "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "@": "a", $: "s", "!": "i" };
 const ROWS = ["abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "asdfghjkl", "zxcvbnm", "qwertzuiop", "azertyuiop"];
@@ -118,7 +190,14 @@ function isAlternating(run: string): boolean {
   return up.every((u, i) => i === 0 || u !== up[i - 1]);
 }
 
-function letterBits(run: string, seen: Set<string>): number {
+/**
+ * `inPhrase`: the run is one of several space-separated words. There a run that reads like a word is
+ * priced as a word in whatever language. In a passphrase written as one piece, a run is a word only if
+ * a dictionary has it; letters that merely could be a word are priced as zxcvbn prices what it does
+ * not know, ten guesses a character (3.32 bits), and words run together are priced word by word.
+ * Pricing letters no dictionary knows as one word is what refused strong passphrases in 0.19.0 and 0.19.1.
+ */
+function letterBits(run: string, seen: Set<string>, inPhrase: boolean): number {
   const lower = run.toLowerCase();
   const n = [...run].length;
   if (seen.has(lower)) return 1; // the same word again
@@ -131,9 +210,10 @@ function letterBits(run: string, seen: Set<string>): number {
   if (new Set(lower).size === 1) return 3 + caseBits; // "aaaa"
   if (isRow(lower)) return 4 + caseBits;
   if (COMMON.has(lower)) return 6 + caseBits;
-  if (looksRandom(lower)) return 4.2 * n + (scattered ? 0.8 * n : caseBits);
-  // an unknown word: about what one word out of a few thousand is worth, a little more when long
-  return Math.min(4.7 * n, 7 + 0.9 * Math.min(n, 8) + 1.5 * Math.max(0, n - 8)) + (scattered ? n - 1 : caseBits);
+  const dict = n >= 3 && !inPhrase ? dictionaryPrice(lower) : null;
+  if (!dict?.whole && looksRandom(lower)) return 4.2 * n + (scattered ? 0.8 * n : caseBits);
+  if (dict && !dict.whole) return dict.bits + (scattered ? Math.min(0.8 * n, n - 1) : caseBits);
+  return wordBits(n) + (scattered ? n - 1 : caseBits);
 }
 
 function digitBits(run: string, seen: Set<string>): number {
@@ -173,15 +253,16 @@ export function passphraseStrength(pw: string): PassphraseStrength {
   const seen = new Set<string>();
   let i = 0;
   let lastSymbol = "";
+  const inPhrase = pw.trim().split(/\s+/).length >= 3;
   while (i < chars.length) {
     const c = chars[i]!;
     let j = i + 1;
     if (isLetter(c)) {
       while (j < chars.length && isLetter(chars[j]!)) j++;
       const run = chars.slice(i, j).join("");
-      const b = letterBits(run, new Set(seen));
+      const b = letterBits(run, new Set(seen), inPhrase);
       if (b <= 6 + 2) patterned += j - i;
-      bits += letterBits(run, seen);
+      bits += letterBits(run, seen, inPhrase);
       lastSymbol = "";
     } else if (isDigit(c)) {
       while (j < chars.length && isDigit(chars[j]!)) j++;
@@ -197,6 +278,21 @@ export function passphraseStrength(pw: string): PassphraseStrength {
       lastSymbol = c;
     }
     i = j;
+  }
+  // zxcvbn's verdict. Where it recognised something (a third of the characters or more sit in a word,
+  // a keyboard walk, a date, a repeat), the lower of the two estimates stands. Where it recognised
+  // nothing, its ten guesses a character is a floor, and the count above may say more (random letters).
+  // A phrase of words is never priced above the wallet's own count.
+  let recognised = false;
+  if (zx) {
+    const z = zx.check(pw);
+    const zbits = Math.log2(Math.max(1, z.guesses));
+    const found = z.sequence.reduce((a, m) => (m.pattern === "bruteforce" || m.pattern === "separator" ? a : a + [...m.token].length), 0);
+    recognised = found >= chars.length / 3;
+    if (inPhrase || recognised) {
+      if (zbits < bits && recognised) patterned = chars.length;
+      bits = Math.min(bits, zbits);
+    } else bits = Math.max(bits, zbits);
   }
   bits = Math.round(bits * 10) / 10;
   const score = scoreOf(bits);
