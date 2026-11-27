@@ -805,3 +805,39 @@ is tried first"), in English, Spanish and Portuguese, so a refusal can be acted 
 
 Checked in a browser against the built bundle. Tests: `test/passphrase.test.ts` ("draws the line where
 zxcvbn's top score starts", "says what it recognised"), 153 pass in all.
+
+## WalletConnect: one client for the whole run (0.19.4)
+
+Reported by the owner on 2026-11-27: connected to KoinDX inside the in-app browser, a swap was sent and
+no approval sheet came up; KoinDX kept waiting. (On a phone KoinDX offers WalletConnect, not Kondor, so
+"connected" there means a WalletConnect session even though the page is inside the wallet.)
+
+*Cause.* Since 0.18.3 a lock dropped the WalletConnect client and the next unlock made a new one. The
+library cannot be started twice in one page: the second client shares the first one's relay and events
+(the library warns "Core is already initialized ... can lead to unexpected behavior"). Measured against
+the live relay with the wallet's own `WcBridge` and a dapp connecting as KoinDX does: with one client the
+proposal arrives once and the dapp's `koinos_signAndSendTransaction` is answered with the wallet's
+answer; after one lock and unlock every event arrived twice (two proposals, two approvals) and the dapp's
+request came back with an empty error instead of the wallet's answer. Changing the passphrase locks the
+wallet, so the owner had been through exactly that before opening KoinDX. The transaction itself was not
+at fault: KoinDX's swap (an allowance, then the swap) was captured from its real page and goes through
+planning and the sheet's description as it should.
+
+*Now.* `WcBridge` makes the client once and keeps it for as long as the app runs (`client`). A lock
+still ends every session and pairing and wipes what the client stored, and nothing is served or listed
+while locked (`kit` is null); the next unlock takes the same client up again. A proposal or request that
+reaches a locked wallet is answered "the wallet is locked".
+
+*What that changes at rest.* Nothing that names a wallet: after a lock the client holds no session and
+no pairing, and that is what it writes back. Its own relay identity key now lasts for the run instead of
+being renewed at each lock, so the relay could tell that two wallets unlocked in one run (main, then
+duress) used the same app instance. It could already tell that from the connection; nobody holding the
+phone learns anything from it.
+
+*Not confirmed on the device.* The fault and the fix were measured here against the live relay and in
+the app's screens with a stand-in client; the owner's phone was not instrumented. If a transaction still
+does not reach the sheet after this, the Dapps tab's "WalletConnect log" says whether the request arrived.
+
+Tests: `test/wc-app.test.ts` (KoinDX's page open, a lock and unlock, pairing from the page's link, the
+proposal and then the swap on the sheet, one answer back; fails on 0.19.3 with "a second WalletConnect
+client was made"), `test/wc-lock.test.ts` unchanged.

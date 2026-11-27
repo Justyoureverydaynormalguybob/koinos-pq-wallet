@@ -100,6 +100,15 @@ export async function wipeWcStorage(): Promise<void> {
 }
 
 export class WcBridge {
+  /**
+   * The WalletConnect client, made once and kept for as long as the app runs. The library cannot be
+   * started twice in one page: a second client shares the first one's relay and events, and from then on
+   * every proposal and request arrives twice and the answers collide (the library says so itself: "Core is
+   * already initialized"). Until 0.19.3 a lock dropped the client and the next unlock made another, so after
+   * one lock and unlock in the same run a dapp could connect but its requests went astray.
+   */
+  private client: Kit | null = null;
+  /** The client while a wallet is open; null while locked, so nothing is served or listed then. */
   private kit: Kit | null = null;
   private utils: UtilsModule | null = null;
   private host: DappHost | null = null;
@@ -135,8 +144,8 @@ export class WcBridge {
    */
   endAll(): Promise<void> {
     if (this.ending) return this.ending;
-    const kit = this.kit, utils = this.utils;
-    this.kit = null; // the next unlock starts a fresh client
+    const kit = this.kit ?? this.client, utils = this.utils;
+    this.kit = null; // nothing more is served until the next unlock, which takes the same client up again
     this.startedBy.clear();
     this.ending = (async () => {
       if (kit && utils) {
@@ -158,9 +167,16 @@ export class WcBridge {
   }
 
   private async start(): Promise<Kit> {
-    if (this.ending) await this.ending; // a lock still tidying up: the new client starts on clean storage
+    if (this.ending) await this.ending; // a lock still tidying up: sessions are served again only on clean storage
     if (this.kit) return this.kit;
     if (this.starting) return this.starting;
+    if (this.client) {
+      // after a lock: the same client, which by now holds no session and no pairing
+      this.kit = this.client;
+      this.deps?.log?.("using the relay connection again");
+      await this.reconcile();
+      return this.kit;
+    }
     const projectId = this.deps?.projectId();
     if (!projectId) throw new Error("WalletConnect needs a project id: Settings › WalletConnect.");
     this.starting = (async () => {
@@ -178,6 +194,7 @@ export class WcBridge {
         this.deps?.log?.("a dapp ended its session");
         this.deps?.onSessionsChanged();
       });
+      this.client = kit;
       this.kit = kit;
       await this.reconcile();
       return kit;
@@ -274,10 +291,10 @@ export class WcBridge {
   }
 
   private async onProposal(e: { id: number; params: Parameters<typeof summariseProposal>[0]; verifyContext: { verified: { validation: "VALID" | "INVALID" | "UNKNOWN"; isScam?: boolean } } }) {
-    const kit = this.kit, utils = this.utils, deps = this.deps, host = this.host;
+    const kit = this.client, utils = this.utils, deps = this.deps, host = this.host;
     if (!kit || !utils) return;
     const reject = (message: string) => kit.rejectSession({ id: e.id, reason: { code: 5000, message } }).catch(() => undefined);
-    if (!deps || !host) {
+    if (!deps || !host || !this.kit) {
       await reject("the wallet is locked");
       return;
     }
@@ -326,7 +343,7 @@ export class WcBridge {
   }
 
   private async onRequest(e: { id: number; topic: string; params: { request: { method: string; params: unknown }; chainId: string }; verifyContext: { verified: { validation: "VALID" | "INVALID" | "UNKNOWN" } } }) {
-    const kit = this.kit;
+    const kit = this.client;
     this.deps?.log?.(`request ${e.params.request.method} on ${e.params.chainId}`);
     if (!kit) return;
     const respond = (o: Outcome) =>
@@ -337,7 +354,7 @@ export class WcBridge {
         })
         .catch(() => undefined);
     const deps = this.deps, host = this.host;
-    if (!deps || !host || !this.owned.has(e.topic)) {
+    if (!deps || !host || !this.kit || !this.owned.has(e.topic)) {
       await respond({ error: "the wallet is locked" });
       return;
     }
