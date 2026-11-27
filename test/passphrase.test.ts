@@ -44,6 +44,27 @@ describe("passphrase strength estimate", () => {
     }
   });
 
+  it("accepts random letters and digits even when the letters happen to hold vowels", () => {
+    // Each of these was made by a random generator and was refused as weak by 0.19.0, which priced a
+    // random run of letters with a few vowels in it as one dictionary word. (Not every random string
+    // passes: about one in forty of 15 mixed letters and digits still lands a little under the line.)
+    for (const pw of ["zegcoSJzYCMG761", "UtmEyTNoRzohcty", "smui6e4umjirgbt", "wmUfnhXoudZF735", "sXOhJPHIyJxj934", "UnPVHORFaegIDVv", "q7kuuundt2edjmc", "yie33BYsszj9dvE", "yrnadadainqt", "kpaynavqnokd"]) {
+      const s = passphraseStrength(pw);
+      expect(s.bits, pw).toBeGreaterThanOrEqual(MIN_PASSPHRASE_BITS);
+      expect(() => assertStrong(pw), pw).not.toThrow();
+    }
+  });
+
+  it("still prices words as words, run together or with capitals in them", () => {
+    for (const pw of ["correcthorse", "CorrectHorse42", "sunshinebattery", "CorrectHorseBattery", "CoRrEcThOrSe", "cOrReCtHoRsE1", "kettleorbit2019!", "contraseñasegura", "minhacasabonita", "bhfuilanbaile"]) {
+      expect(passphraseStrength(pw).bits, pw).toBeLessThan(MIN_PASSPHRASE_BITS);
+      expect(() => assertStrong(pw), pw).toThrow();
+    }
+    // capitals scattered through a word add one bit a letter, not the price of random letters
+    expect(passphraseStrength("corREctIoN").bits).toBeLessThan(30);
+    expect(passphraseStrength("corREctIoN").bits).toBeGreaterThan(passphraseStrength("Correction").bits);
+  });
+
   it("never rates a passphrase lower for having another unrelated word added", () => {
     const words = ["kettle", "orbit", "plank", "moth", "gravel", "lantern", "thistle"];
     let last = -1;

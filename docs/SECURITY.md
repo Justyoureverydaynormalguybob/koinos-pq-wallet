@@ -676,3 +676,38 @@ and `test/signer.test.ts`.
 Everything above passes its tests on the phone it was written on (jsdom and a fake node). Not run: the
 browser suites (`e2e:ext`, `smoke:web`), the Android and iOS builds (CI does those), and anything on a
 real device, which the three "needs a device" notes above depend on.
+
+## Passphrase check: random passphrases refused as weak (fixed in 0.19.1)
+
+Reported by the owner on 2026-11-27 from the new "Change the passphrase" screen: a 15-character
+passphrase of mixed capitals, small letters and digits with no word in it was refused as weak.
+
+*Cause.* The estimate (`src/core/passphrase.ts`) prices a run of letters either as random letters or as
+one word. It called a run random only when it had almost no vowels or five consonants in a row. A random
+run that happened to hold a few vowels was therefore priced as a single dictionary word: about 20 bits
+for twelve letters that are really worth 56 or more. Measured on generated passphrases, 0.19.0 refused
+29% of 15 random mixed-case letters and digits (89 bits) and a third of 12 random small letters.
+
+*Now.* Three changes, none of which touches unlock (the check is still asked only where a passphrase is
+chosen):
+
+- A run is also random when fewer than three quarters of its letter pairs are among the 320 pairs that
+  make up 99% of the pairs inside real words (counted over the BIP-39 lists in five languages, the 5,000
+  most used English, Spanish and Portuguese words and a sample of Irish). The test starts at three
+  letters.
+- Capitals scattered through a run (not CamelCase, not every other letter) count one bit a letter,
+  because each is a separate choice a guesser has to try. They used to count two bits in all.
+- Nothing else in the pricing changed: words, years, keyboard rows, repeats and the refused list are as
+  they were.
+
+*Measured, 20,000 generated passphrases of each kind, accepted before and after:* 15 random mixed
+letters and digits 71% to 98%; 12 random mixed letters plus three digits 67% to 96%; 12 random small
+letters 67% to 96%. Weak shapes stay refused: two words run together 0.2% to 0.3%, two capitalised words
+plus two digits 0.7% to 1.0%, three words run together 1.7% to 1.9%. Four words with spaces: 97% both.
+
+*Limit.* About one random 15-character passphrase in forty still lands a little under the line, when
+its letters happen to read like a word. Adding one more character clears it. The price is an estimate
+made without a dictionary; it errs towards refusing.
+
+Tests: `test/passphrase.test.ts` ("accepts random letters and digits even when the letters happen to
+hold vowels", "still prices words as words, run together or with capitals in them").

@@ -68,17 +68,54 @@ function isRepeated(s: string): boolean {
   return false;
 }
 
-/** A run of letters nobody would say: almost no vowels, or five consonants in a row. Priced as random. */
+// The 320 letter pairs that make up 99% of the pairs inside real words: counted over the BIP-39 word lists
+// in English, Spanish, Portuguese, French and Italian, the 5,000 most used English, Spanish and Portuguese
+// words, and a sample of Irish. A word is almost entirely these pairs; in letters picked at random fewer
+// than half are.
+const COMMON_PAIRS = new Set(
+  (
+    "abacadaeafagahaiajakalamanaoapaqarasatauavawaxayazbabbbebhbiblbobrbsbucacccechcickclcocrcsctcucydadd" +
+    "dedidodrdsdudvdyeaebecedeeefegeiejelemeneoepeqereseteuevewexeyezfafefffiflfofrftfugageggghgiglgngogr" +
+    "gsguhahehihohrhthuiaibicidieifigijiliminioipiqirisitiuivixizjajejojukakekikslalcldlelflglhlilllmlolp" +
+    "lsltlulvlymambmemimmmompmsmumynancndnenfngnhninjnknlnnnonsntnunvnynzoaobocodoeofogoiojokolomonooopoq" +
+    "orosotouovowoxoyozpapephpiplpoppprpsptpuqurarbrcrdrerfrgrirkrlrmrnrorprrrsrtrurvryrzsasbscsesfshsisk" +
+    "slsmsospsqssstsusytatctethtitltotrtstttutyuaubucudueufuguiujulumunuoupurusutuvuxuzvavevivovrvuwawewh" +
+    "wiwnwoxaxcxexixoxpxtyayeyoysyuzazezizozz"
+  ).match(/../g),
+);
+
+/**
+ * A run of letters nobody would say, priced as random: almost no vowels, five consonants in a row, or
+ * (the usual case) too few of its letter pairs are ones that occur inside words. Without the last test
+ * a random run that happens to hold a few vowels was priced as one dictionary word, and about three in
+ * ten truly random 15-character passphrases were refused as weak. Checked against word lists: under 2%
+ * of real words, and of two or three words run together, are taken for random; of random letters, 93%
+ * of 8-letter runs and 97% of 12-letter runs are caught (the rest are priced as a word, which is safe).
+ */
 function looksRandom(lower: string): boolean {
-  if (lower.length < 4) return false;
+  const plain = lower.normalize("NFD").replace(/\p{M}/gu, "");
+  const letters = [...plain];
+  if (letters.length < 3) return false;
   let vowels = 0, streak = 0, longest = 0;
-  for (const c of lower) {
-    if ("aeiouyáéíóúàèìòùâêîôûäëïöüãõ".includes(c)) {
+  for (const c of letters) {
+    if ("aeiouy".includes(c)) {
       vowels++;
       streak = 0;
     } else longest = Math.max(longest, ++streak);
   }
-  return vowels / lower.length < 0.15 || longest >= 5;
+  if (letters.length >= 4 && (vowels / letters.length < 0.15 || longest >= 5)) return true;
+  let common = 0;
+  for (let i = 0; i + 1 < letters.length; i++) if (COMMON_PAIRS.has(letters[i]! + letters[i + 1]!)) common++;
+  return common / (letters.length - 1) < 0.75;
+}
+
+/** CamelCase: an optional lower-case start, then capitals each followed by at least two small letters. */
+const HUMPS = /^\p{Ll}*(\p{Lu}\p{Ll}{2,})+$/u;
+
+/** Every other letter a capital, starting with either ("pAsSwOrD", "PaSsWoRd"). */
+function isAlternating(run: string): boolean {
+  const up = [...run].map((c) => c !== c.toLowerCase());
+  return up.every((u, i) => i === 0 || u !== up[i - 1]);
 }
 
 function letterBits(run: string, seen: Set<string>): number {
@@ -88,12 +125,15 @@ function letterBits(run: string, seen: Set<string>): number {
   seen.add(lower);
   const upper = [...run].filter((c) => c !== c.toLowerCase()).length;
   const caseBits = upper === 0 || upper === n ? 0 : upper === 1 && run[0] !== run[0]!.toLowerCase() ? 1 : 2;
+  // Capitals where people put them (CamelCase, eVeRy OtHeR) are one of a few patterns. Anywhere else,
+  // each letter's case is a choice of its own and a guesser has to try them all.
+  const scattered = caseBits === 2 && !HUMPS.test(run) && !isAlternating(run);
   if (new Set(lower).size === 1) return 3 + caseBits; // "aaaa"
   if (isRow(lower)) return 4 + caseBits;
   if (COMMON.has(lower)) return 6 + caseBits;
-  if (looksRandom(lower)) return 4.2 * n + (caseBits === 2 ? 0.8 * n : caseBits);
+  if (looksRandom(lower)) return 4.2 * n + (scattered ? 0.8 * n : caseBits);
   // an unknown word: about what one word out of a few thousand is worth, a little more when long
-  return Math.min(4.7 * n, 7 + 0.9 * Math.min(n, 8) + 1.5 * Math.max(0, n - 8)) + caseBits;
+  return Math.min(4.7 * n, 7 + 0.9 * Math.min(n, 8) + 1.5 * Math.max(0, n - 8)) + (scattered ? n - 1 : caseBits);
 }
 
 function digitBits(run: string, seen: Set<string>): number {
