@@ -228,6 +228,11 @@ describe("a failure in words", () => {
     const chain = (m: string) => new Error(JSON.stringify({ error: m, code: 1, logs: [] }));
     expect(explainFailure(chain("insufficient rc"), 825_000_000n, false).status).toMatch(/used more mana than its limit of 8\.25/);
     expect(explainFailure(chain("payer does not have the rc to cover transaction rc limit"), K, true).status).toMatch(/mana fell/);
+    // KoinDX's swap contract reads the signatures into a 1 KiB buffer: what the owner's phone showed on 0.19.5
+    expect(explainFailure(chain("return buffer is not large enough for the return value"), K, true)).toEqual({
+      error: "return buffer is not large enough for the return value",
+      status: expect.stringMatching(/^Not sent: a contract in this transaction checks signatures itself.*cannot be used from a post-quantum account/),
+    });
     expect(explainFailure(new Error("fetch failed"), K, false)).toEqual({ error: "no clear answer from the node", status: expect.stringMatching(/may still go through/) });
   });
 });

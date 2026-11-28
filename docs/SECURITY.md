@@ -895,3 +895,39 @@ above a single swap should need 5 to 7.5 KOIN of mana from a post-quantum accoun
 Tests: `test/mana-limit.test.ts` (a node that refuses what does not fit its limit: the trial and the
 fitted send, both signed; too little mana; a refusal and a revert; a node that is away; mana that fell
 while the sheet was open; what is left alone; sign only; a failed send answered).
+
+## KoinDX's swap contract cannot be used from a post-quantum account (found 2026-11-28)
+
+With the mana limit set by the wallet, the trial of the owner's swap (60 KOIN for vUSDT, mainnet) came
+back "return buffer is not large enough for the return value", and nothing was sent.
+
+*Why.* KoinDX's swap contract (`17e1q6Fh5RgnuA8K7v4KvXXH4k9qHgsT5s`, bytecode read from the chain's
+state and disassembled) authorises `from` by itself, in one function shared by swapping and by adding and
+removing liquidity:
+
+1. `from` must be set ("KOINDX: FROM_IS_NULL");
+2. if a contract is calling, that contract must be `from` ("KOINDX: CALLER_IS_UNAUTHORIZED");
+3. otherwise it reads the transaction's `signatures` and `id`, recovers a secp256k1 public key from each
+   signature, and one of the addresses must be `from` ("KOINDX: UNAUTHORIZED").
+
+It never calls the chain's `check_authority`, so an account whose authority is a contract is never asked.
+For this wallet step 3 fails twice over: the signatures are read into the SDK's 1,024-byte buffer and one
+ML-DSA-44 signature is 2,420 bytes (the error above), and with a larger buffer no secp256k1 signature
+would recover to the account anyway.
+
+*What that means.* Not a fault in the wallet or in the account contract, and not something a limit or a
+retry changes. Any contract that checks signatures itself instead of asking the chain is closed to
+contract-controlled accounts in the same way; token transfers, the burn and contracts that use
+`check_authority` are not affected.
+
+*Ways forward, none taken yet.*
+
+- KoinDX changes that function to ask `check_authority`. The right fix, and theirs to make.
+- The account contract gains an entry point that makes a call on the account's behalf, so step 2 passes
+  (the caller is `from`). A new contract version, to be reviewed like the first, and every account would
+  have to install it (the account's own key can authorise that; about 45 to 60 KOIN of mana).
+- Signing the swap with the account's first secp256k1 key in a separate transaction paid by someone
+  else. Rejected: it makes the key this wallet exists to retire matter again.
+
+The wallet now says so in words when the chain gives this answer (0.19.6).
+

@@ -240,7 +240,12 @@ export function explainFailure(e: unknown, limit: bigint, trial: boolean): Failu
       ? `Not sent: it needs more mana than this account has now (${manaText(limit)}). Mana refills by itself over five days, and an account that holds more KOIN has more.`
       : `It used more mana than its limit of ${manaText(limit)}. Nothing was paid. Try again.`;
   } else if (/rc to cover/i.test(text)) status = "The account's mana fell while this was being signed. Nothing was sent. Try again.";
-  else if (/pending account resources/i.test(text)) status = "An earlier transaction of this account is still waiting for a block and holds its mana. Try again in a minute.";
+  else if (/return buffer is not large enough/i.test(text)) {
+    // A contract that reads the transaction's signatures itself, into the SDK's 1 KiB buffer. A post-quantum
+    // signature is 2,420 bytes, so the read fails before the contract gets to judge anything. KoinDX's swap
+    // contract does this (found 2026-11-28): it never asks the chain, and so never the account's own contract.
+    status = `${trial ? "Not sent" : "Refused by the chain"}: a contract in this transaction checks signatures itself and has room only for an ordinary one, so it cannot be used from a post-quantum account. Nothing was paid.`;
+  } else if (/pending account resources/i.test(text)) status = "An earlier transaction of this account is still waiting for a block and holds its mana. Try again in a minute.";
   else status = `${trial ? "Not sent: the chain would refuse it" : "The chain refused it"}: ${text}`;
   return { error: text, status };
 }
