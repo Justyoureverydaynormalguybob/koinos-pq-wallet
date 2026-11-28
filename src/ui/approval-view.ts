@@ -155,10 +155,13 @@ export function describePlan(p: Plan, custom: CustomTokens | null = null): strin
       const rows = [
         stat(tr("Network"), `<strong>${esc(p.net.name)}</strong>`),
         h.payee ? stat(tr("Payee"), `<span class="mono">${esc(h.payee)}</span>`) : "",
-        stat(tr("Mana limit"), `<strong>${esc(formatKoin(BigInt(h.rc_limit ?? "0"), 2))}</strong>${siteSetLimit ? "" : ` <span class="mute">${tr("(the site set no limit: all the mana the account has)")}</span>`}`),
+        p.mana
+          ? // the wallet sets the limit: the most is all the account's mana, and what is sent is what a trial on the node used plus a margin
+            stat(tr("Mana limit"), `<strong>${tr("at most {mana}", { mana: esc(formatKoin(BigInt(h.rc_limit ?? "0"), 2)) })}</strong> <span class="mute">${p.mana.site !== null ? tr("(the site asked for {mana}; the wallet tries the transaction first and sets what it needs)", { mana: esc(formatKoin(p.mana.site, 2)) }) : tr("(the wallet tries the transaction first and sets what it needs)")}</span>`)
+          : stat(tr("Mana limit"), `<strong>${esc(formatKoin(BigInt(h.rc_limit ?? "0"), 2))}</strong>${siteSetLimit ? "" : ` <span class="mute">${tr("(the site set no limit: all the mana the account has)")}</span>`}`),
         p.nonce !== undefined && p.nonce !== null ? stat(tr("Number (nonce)"), `<strong>${esc(p.nonce.toString())}</strong>`) : "",
         p.coSignatures ? stat(tr("Signatures"), tr("{n} already on it from the site; yours is added", { n: p.coSignatures })) : "",
-        stat(tr("Transaction"), esc((tx.id ?? "").slice(0, 22)) + "…"),
+        p.mana ? "" : stat(tr("Transaction"), esc((tx.id ?? "").slice(0, 22)) + "…"), // with the wallet's own limit the id is only known once the limit is
       ].join("");
       const payerNote = h.payer !== p.signerAddress ? notice("warn", tr("Mana paid by another account: {payer}", { payer: `<span class="mono">${esc(h.payer)}</span>` })) : "";
       return `<p>${tr("wants {who} to <strong>{verb}</strong> a transaction:", { who, verb })}</p>

@@ -834,10 +834,64 @@ being renewed at each lock, so the relay could tell that two wallets unlocked in
 duress) used the same app instance. It could already tell that from the connection; nobody holding the
 phone learns anything from it.
 
-*Not confirmed on the device.* The fault and the fix were measured here against the live relay and in
-the app's screens with a stand-in client; the owner's phone was not instrumented. If a transaction still
-does not reach the sheet after this, the Dapps tab's "WalletConnect log" says whether the request arrived.
+*On the device.* The fault and the fix were measured here against the live relay and in the app's
+screens with a stand-in client; the owner's phone was not instrumented. The owner's next report
+(2026-11-28) was the chain's own answer to the swap ("insufficient rc", see 0.19.5 below), so the request
+did reach the sheet and was approved. If a transaction does not reach the sheet, the Dapps tab's
+"WalletConnect log" says whether the request arrived.
 
 Tests: `test/wc-app.test.ts` (KoinDX's page open, a lock and unlock, pairing from the page's link, the
 proposal and then the swap on the sheet, one answer back; fails on 0.19.3 with "a second WalletConnect
 client was made"), `test/wc-lock.test.ts` unchanged.
+
+## The mana limit of a dapp's transaction is the wallet's to set (0.19.5)
+
+*What happened.* With the swap now reaching the sheet, approving it gave the node's raw answer,
+`{"error":"insufficient rc","code":1,…}`, and KoinDX went on waiting.
+
+*Why.* "insufficient rc" is the chain running out of the transaction's own mana limit while executing it
+(koinos-chain `session::use_rc`); an account that lacks the mana gets a different message. KoinDX sets
+that limit itself: the account's mana or 1 KOIN, whichever is less (`calculateDefaultMana`, read from its
+page on 2026-11-28). Of the 500 transactions that last called its swap contract, none used less than
+1.43 KOIN of mana, so the figure is too low for any wallet; the limits on those transactions follow what
+they used (about 1.1 times plus 0.4 KOIN), which is other wallets trying the transaction first and
+replacing the site's number. On top of that, an account behind the post-quantum contract pays 2.3 to
+2.8 million compute ticks for every authority check (about 1.2 KOIN of mana each at that day's price of
+47 per tick): a swap has two or three.
+
+A second fault showed with it: a send the node refused threw inside `executePlan`, so the page or the
+WalletConnect session was never answered, and the user saw koilib's JSON.
+
+*Now.* For a transaction this account pays for, on which the page brought no signature of its own:
+
+- The sheet says **"Mana limit: at most N"**, N being all the mana the account has, with what the site
+  asked for next to it. No transaction id is shown, because it is only known once the limit is.
+- After approval the transaction is signed with that most and given to the node with `broadcast: false`:
+  the node runs it against the chain's present state, tells what it used, and neither sends it on nor
+  holds mana for it (koinos-chain `controller.cpp`: the pending-mana check and the "accepted" broadcast
+  are both inside `if (request.broadcast())`).
+- The transaction that is sent carries what the trial used, a quarter more, and half a KOIN (`fitLimit`):
+  never less than the site asked for, never more than the account has. It gets a new id and is signed again.
+- If the trial fails, nothing is sent and both sides are told why in words: not enough mana (with the
+  figure), the chain's own reason, or no answer from the node. A refused send is an answer too now.
+- A request that only wants a signature gets the same treatment, and falls back to the site's own limit
+  when the trial fails, since others may still have to sign that transaction.
+
+Left as the page made them: a transaction that already carries a signature (a changed limit would break
+it), one another account pays for, a request that is itself a dry run, and `prepareTransaction`.
+
+*What a trial gives away.* The trial is a real signature, over the operations the sheet showed, with the
+limit the sheet named as the most. A node that sent it on against the instruction would have sent what
+the user approved, at up to all the account's mana rather than the fitted figure. Mana that is not used
+is not charged, and what is used comes back over five days. The node is the one the wallet already
+trusts to carry every transaction.
+
+*Checked.* On Harbinger with the project's own contract account (`1FqXVbjZ…`, ML-DSA-44, 67 tKOIN of
+mana): a transfer asked for with a limit of 0.01 was tried, fitted to 0.9995 and accepted by the node
+(id `0x1220d2e1…2bdb`). Harbinger's last block was five days old that morning, so it sat in the pool
+rather than in a block. Not yet done from the owner's phone against KoinDX on mainnet; by the figures
+above a single swap should need 5 to 7.5 KOIN of mana from a post-quantum account.
+
+Tests: `test/mana-limit.test.ts` (a node that refuses what does not fit its limit: the trial and the
+fitted send, both signed; too little mana; a refusal and a revert; a node that is away; mana that fell
+while the sheet was open; what is left alone; sign only; a failed send answered).

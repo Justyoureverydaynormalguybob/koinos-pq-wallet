@@ -9,6 +9,10 @@
 //   - a transaction numbered ahead of the account's next one is refused: its signature could be kept
 //     and used after later transactions have gone through;
 //   - signatures the page already has on the transaction (a payer's) are kept and the wallet's is added;
+//   - the mana limit of a transaction this account pays for is the wallet's to set: a site's own figure is
+//     often too low (KoinDX caps a swap at 1 KOIN of mana; a post-quantum signature check alone costs more),
+//     so after approval the transaction is tried on the node without being sent on, and the limit becomes
+//     what it used plus a margin. The sheet says "at most" the account's mana, which is what the trial may use;
 //   - only contract calls are accepted; uploads, system operations and any call to one of the
 //     wallet's own accounts (which could change the key that controls it) are refused outright;
 //   - a token transfer is described as a transfer only when its encoding is canonical (each field
@@ -17,7 +21,7 @@
 //   - messages are signed under their own context (koinos-pq-core), never usable as a transaction.
 import { Transaction, utils } from "koilib";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { Chain, PqSigner, bootstrapAddress, decodeFields, type Network, type PqKeys } from "koinos-pq-core";
+import { Chain, PqSigner, bootstrapAddress, decodeFields, isRefusal, type Network, type PqKeys } from "koinos-pq-core";
 import { accountKeys, detectAccounts, keysWiped, walletAccounts, type FoundAccount, type WalletAccount } from "./accounts";
 import type { AccountRecord } from "./vault";
 
@@ -182,6 +186,63 @@ export interface Plan {
   nonce?: bigint | null;
   /** how many signatures the page brought on the transaction; the wallet's is added after them */
   coSignatures?: number;
+  /**
+   * Present when the wallet sets the mana limit itself: this account pays, and the page brought no signature
+   * that a changed header would break. `site` is the limit the page asked for (null: none), `avail` the
+   * account's mana when it asked, which is the most the transaction may be given.
+   */
+  mana?: { site: bigint | null; avail: bigint };
+}
+
+/** One KOIN, or one KOIN's worth of mana, in the chain's units. */
+const ONE_KOIN = 100_000_000n;
+
+/**
+ * The limit a transaction is sent with, from what its trial on the node used: a quarter more and half a
+ * KOIN of mana on top, because prices and a pool's state move between the trial and the block. Never less
+ * than the site asked for, never more than `ceiling`. Mana that is not used is not charged.
+ */
+export function fitLimit(used: bigint, site: bigint | null, ceiling: bigint): bigint {
+  let want = used + used / 4n + ONE_KOIN / 2n;
+  if (site !== null && site > want) want = site;
+  return want < ceiling ? want : ceiling;
+}
+
+const manaText = (v: bigint) => `${v / ONE_KOIN}.${(v % ONE_KOIN).toString().padStart(8, "0").slice(0, 2)}`;
+
+/** What the node answered, out of koilib's error text (JSON with the chain's message when the chain judged it). */
+export function nodeSaid(e: unknown): { verdict: boolean; text: string } {
+  const msg = (e as Error)?.message || String(e);
+  let text = msg;
+  try {
+    const o = JSON.parse(msg) as { error?: unknown };
+    if (o && typeof o.error === "string" && o.error) text = o.error;
+  } catch {
+    /* not JSON: a transport error, shown as it is */
+  }
+  return { verdict: isRefusal(e), text: text.slice(0, 300) };
+}
+
+/**
+ * Why a transaction did not go through, in words. `limit` is the mana limit it carried; `trial` says the
+ * node was only asked what it would do (nothing was sent on).
+ */
+export function explainFailure(e: unknown, limit: bigint, trial: boolean): Failure {
+  const { verdict, text } = nodeSaid(e);
+  if (!verdict) {
+    return trial
+      ? { error: "no answer from the node", status: `The node did not answer (${text}). Nothing was sent.` }
+      : { error: "no clear answer from the node", status: `The node gave no clear answer (${text}). The transaction may still go through: look at the account's history before trying again.` };
+  }
+  let status: string;
+  if (/insufficient rc/i.test(text)) {
+    status = trial
+      ? `Not sent: it needs more mana than this account has now (${manaText(limit)}). Mana refills by itself over five days, and an account that holds more KOIN has more.`
+      : `It used more mana than its limit of ${manaText(limit)}. Nothing was paid. Try again.`;
+  } else if (/rc to cover/i.test(text)) status = "The account's mana fell while this was being signed. Nothing was sent. Try again.";
+  else if (/pending account resources/i.test(text)) status = "An earlier transaction of this account is still waiting for a block and holds its mana. Try again in a minute.";
+  else status = `${trial ? "Not sent: the chain would refuse it" : "The chain refused it"}: ${text}`;
+  return { error: text, status };
 }
 
 /** Validates the request against the network; throws with the reason to show when it is refused. */
@@ -214,6 +275,7 @@ export async function planRequest(req: DappRequest, net: Network): Promise<Plan>
       if (tx.header!.chain_id !== undefined && tx.header!.chain_id !== expected) throw new Error(`It is for a different network than ${net.name}.`);
       tx.header!.chain_id = expected;
       const pageNonce = tx.header!.nonce;
+      const pageLimit = tx.header!.rc_limit;
       // koilib fills nonce and rc_limit when missing, then recomputes the merkle root and the id
       await Transaction.prepareTransaction(tx as never, chain.provider, signerAddress);
       if (tx.header?.chain_id !== expected) throw new Error(`It is for a different network than ${net.name}.`);
@@ -228,6 +290,24 @@ export async function planRequest(req: DappRequest, net: Network): Promise<Plan>
         if (next === null) throw new Error(`The ${net.name} node did not say what the account's next transaction number is.`);
         if (p.nonce > next) throw new Error(`It is numbered ${p.nonce}, but the next transaction of that account is number ${next}. A signature for a later number could be kept and used after your next transactions have gone through, so the wallet does not give one.`);
       }
+      // The mana limit. When this account pays and the page brought no signature of its own (a changed limit
+      // would break one), the limit is the wallet's to set: it starts at all the account's mana, which is what
+      // the sheet says the transaction may use at most, and is brought down after approval to what a trial on
+      // the node used (see fitMana). A request that only wants a dry run is left as the page made it.
+      const dryRun = req.command === "signer:sendTransaction" && (a.optsSend as { broadcast?: boolean } | undefined)?.broadcast === false;
+      if (req.command !== "signer:prepareTransaction" && !dryRun && tx.header!.payer === signerAddress && !tx.signatures?.length) {
+        let avail: bigint;
+        try {
+          avail = BigInt(await chain.provider.getAccountRc(signerAddress));
+        } catch {
+          throw new Error(`The ${net.name} node did not say how much mana the account has.`);
+        }
+        if (avail <= 0n) throw new Error("This account has no mana, so it cannot pay for a transaction. Mana comes from the KOIN an account holds and refills over five days.");
+        p.mana = { site: pageLimit !== undefined ? BigInt(pageLimit) : null, avail };
+        tx.header!.rc_limit = avail.toString();
+        delete tx.id;
+        await Transaction.prepareTransaction(tx as never, undefined, signerAddress); // only the id changes
+      }
       p.coSignatures = tx.signatures?.length ?? 0;
       p.prepared = tx;
       return p;
@@ -237,12 +317,73 @@ export async function planRequest(req: DappRequest, net: Network): Promise<Plan>
   }
 }
 
+/**
+ * Sets `tx`'s mana limit from a trial: the transaction is signed with the most it may use and handed to the
+ * node with "do not send this on", which runs it against the chain's present state and says what it used.
+ * Then `tx` gets that plus a margin (fitLimit) and a new id; the caller signs and sends that one.
+ *
+ * Why a trial and not a rule: what a transaction costs depends on the contracts it calls and on the day's
+ * prices, and a site's own figure is often wrong (KoinDX caps a swap at 1 KOIN of mana, and none of the
+ * 500 swaps before 2026-11-28 fitted in that; other wallets replace it the same way). For an account behind
+ * the post-quantum contract every authority check adds 2.3 to 2.8 million compute ticks on top.
+ *
+ * The trial's signature is a real one, over the same operations the sheet showed, with the limit the sheet
+ * named as the most ("at most all the account's mana"). A node that sent it on against the instruction
+ * would have sent what the user approved.
+ *
+ * Returns the failure to answer with, or null when `tx` is ready to be signed. A request that only wants a
+ * signature falls back to the limit the site asked for when the trial fails: others may still have to sign
+ * that transaction, which the node cannot know.
+ */
+async function fitMana(mana: NonNullable<Plan["mana"]>, tx: Tx, signer: PqSigner, chain: Chain, sending: boolean, onStatus: (s: string) => void): Promise<Failure | null> {
+  const payer = tx.header!.payer!;
+  const setLimit = async (t: Tx, v: bigint) => {
+    t.header!.rc_limit = v.toString();
+    delete t.id;
+    await Transaction.prepareTransaction(t as never, undefined, payer); // every other field is there: only the id is worked out again
+  };
+  // never more than the sheet said, and never more than the account has by now
+  let ceiling = mana.avail;
+  try {
+    const now = BigInt(await chain.provider.getAccountRc(payer));
+    if (now < ceiling) ceiling = now;
+  } catch {
+    /* the trial itself will say if the node is away */
+  }
+  if (ceiling <= 0n) return { error: "insufficient rc", status: "Not sent: this account has no mana left. It refills by itself over five days." };
+  const asAsked = mana.site !== null && mana.site < ceiling ? mana.site : ceiling;
+  onStatus("Checking what it costs…");
+  let used: bigint | null = null;
+  const trial = structuredClone(tx);
+  try {
+    await setLimit(trial, ceiling);
+    await signer.signTransaction(trial as never);
+  } catch (e) {
+    return { error: "refused by the wallet", status: `Refused: ${(e as Error).message || "the transaction could not be checked"}.` };
+  }
+  try {
+    const { receipt } = await chain.provider.sendTransaction(trial as never, false);
+    const r = (receipt ?? {}) as { rc_used?: string; reverted?: boolean; logs?: string[] };
+    if (r.reverted) throw new Error(JSON.stringify({ error: `it would be reverted${r.logs?.length ? `: ${r.logs.join("; ")}` : ""}` }));
+    if (r.rc_used && /^\d+$/.test(r.rc_used)) used = BigInt(r.rc_used);
+  } catch (e) {
+    if (sending) return explainFailure(e, ceiling, true);
+    await setLimit(tx, asAsked);
+    return null;
+  }
+  // a node that gives no figure: as the site asked
+  await setLimit(tx, used === null ? asAsked : fitLimit(used, mana.site, ceiling));
+  return null;
+}
+
 /** Only the transaction fields a dapp needs back. */
 export function plainTx(tx: Tx): Record<string, unknown> {
   return { id: tx.id, header: tx.header, operations: tx.operations, signatures: tx.signatures ?? [] };
 }
 
-export type Outcome = { result: unknown } | { error: string; status?: string };
+/** What went wrong: `error` goes to the site that asked, `status` to the user. */
+export type Failure = { error: string; status?: string };
+export type Outcome = { result: unknown } | Failure;
 
 /**
  * Carries out an approved plan with the wallet's keys. `accounts` are the stored ones (watch-only
@@ -296,6 +437,13 @@ export async function executePlan(p: Plan, keys: PqKeys, stored: AccountRecord[]
     case "signer:signTransaction":
     case "signer:sendTransaction": {
       const tx = structuredClone(p.prepared!);
+      const sending = p.req.command === "signer:sendTransaction";
+      if (p.mana) {
+        const failed = await fitMana(p.mana, tx, signer, chain, sending, onStatus);
+        if (failed) return failed;
+        if (keysWiped(keys)) return { error: "request failed in the wallet", status: "The wallet locked." };
+        onStatus("Signing…");
+      }
       // signTransaction works the id out again from the header and operations (never signs a number it was
       // handed), checks the chain id, and adds this account's signature after any the page brought
       try {
@@ -303,11 +451,16 @@ export async function executePlan(p: Plan, keys: PqKeys, stored: AccountRecord[]
       } catch (e) {
         return { error: "refused by the wallet", status: `Refused: ${(e as Error).message || "the transaction could not be checked"}.` };
       }
-      if (p.req.command === "signer:signTransaction") return { result: plainTx(tx) };
+      if (!sending) return { result: plainTx(tx) };
       onStatus("Sending…");
       const broadcast = (p.req.args?.optsSend as { broadcast?: boolean } | undefined)?.broadcast !== false;
-      const { receipt } = await chain.provider.sendTransaction(tx as never, broadcast);
-      return { result: { receipt, transaction: plainTx(tx) } };
+      try {
+        const { receipt } = await chain.provider.sendTransaction(tx as never, broadcast);
+        return { result: { receipt, transaction: plainTx(tx) } };
+      } catch (e) {
+        // the site is told too: it is waiting for an answer, and a failed send used to leave it waiting
+        return explainFailure(e, BigInt(tx.header?.rc_limit ?? "0"), !broadcast);
+      }
     }
     default:
       return { error: "unsupported request" };

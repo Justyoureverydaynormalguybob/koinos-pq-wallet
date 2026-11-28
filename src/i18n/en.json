@@ -435,5 +435,8 @@
   "a year": "a year",
   "a keyboard pattern": "a keyboard pattern",
   "a repeat": "a repeat",
-  "a run like abc or 123": "a run like abc or 123"
+  "a run like abc or 123": "a run like abc or 123",
+  "at most {mana}": "at most {mana}",
+  "(the site asked for {mana}; the wallet tries the transaction first and sets what it needs)": "(the site asked for {mana}; the wallet tries the transaction first and sets what it needs)",
+  "(the wallet tries the transaction first and sets what it needs)": "(the wallet tries the transaction first and sets what it needs)"
 }

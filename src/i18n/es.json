@@ -435,5 +435,8 @@
   "a year": "un año",
   "a keyboard pattern": "un patrón de teclado",
   "a repeat": "una repetición",
-  "a run like abc or 123": "una serie como abc o 123"
+  "a run like abc or 123": "una serie como abc o 123",
+  "at most {mana}": "como máximo {mana}",
+  "(the site asked for {mana}; the wallet tries the transaction first and sets what it needs)": "(el sitio pidió {mana}; la cartera prueba primero la transacción y fija lo que necesita)",
+  "(the wallet tries the transaction first and sets what it needs)": "(la cartera prueba primero la transacción y fija lo que necesita)"
 }
